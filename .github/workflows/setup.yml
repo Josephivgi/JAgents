@@ -27,6 +27,8 @@ jobs:
         with:
           node-version: 22
       - run: npm ci --no-audit --no-fund
+      # Electron 44 fetches its runtime on demand, not on install.
+      - run: node node_modules/electron/install.js
       - name: NSIS
         shell: pwsh
         run: |
