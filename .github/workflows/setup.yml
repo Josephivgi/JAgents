@@ -1,0 +1,42 @@
+# Builds JAgents-Setup.exe for every published release and attaches it, so
+# releases/latest/download/JAgents-Setup.exe (and jsystems.app/download/jagents)
+# always serve the newest installer. Run it by hand to add the setup to an
+# existing release.
+name: Windows setup
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (for example v0.3.0)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  setup:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --no-audit --no-fund
+      - name: NSIS
+        shell: pwsh
+        run: |
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue) -and -not (Test-Path "${env:ProgramFiles(x86)}\NSIS\makensis.exe")) { choco install nsis -y --no-progress }
+      - name: Build and attach
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          node scripts/pack-setup.cjs $env:TAG
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          gh release upload $env:TAG dist/JAgents-Setup.exe --clobber

@@ -21,6 +21,9 @@ Requires Node.js 22.5 or newer (for `node:sqlite`) and Windows, macOS or Linux.
 
 ## Updates
 
+Windows users can install from **JAgents-Setup.exe** on the latest release (also at https://jsystems.app/jagents). It installs per user to `%LOCALAPPDATA%\Programs\JAgents`, no admin. `.github/workflows/setup.yml` builds it for every published release; `node scripts/pack-setup.cjs [tag]` builds it locally (needs NSIS).
+
+
 JAgents checks the latest release of this repo at startup and every 6 hours. When it runs from a git checkout, **Install** fast-forwards to the release tag (and runs `npm install` if packages changed); **Restart JAgents** starts the new version. The repo is private, so the check uses `GITHUB_TOKEN` or your `gh auth login` session.
 
 ## Data
