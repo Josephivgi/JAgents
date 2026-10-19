@@ -57,7 +57,28 @@ function paintTopbar() {
   dot.hidden = !(update && (update.available || update.applied));
   dot.className = "status-dot " + (update && update.applied ? "ok" : "busy");
   app.querySelector("[data-updates]").title = update && update.applied ? "Update installed. Restart to run " + update.applied : update && update.available ? update.latest + " is available" : "Version and updates";
+  paintUpdateCard();
   app.querySelector("[data-theme-toggle]").innerHTML = icon(store.info.theme === "dark" ? "sun" : "moon", 16);
+}
+
+// The Updates card above Plugins: running version, latest release, and the
+// next step (check, install, restart). Details opens the full Updates panel.
+function paintUpdateCard() {
+  const sum = app.querySelector("[data-update-summary]");
+  if (!sum) return;
+  const u = update || { current: store.info.version };
+  const busy = u.checking || u.applying;
+  sum.textContent = "v" + (u.current || "") + " · " + (u.applying ? "Installing " + u.latest + "…" : u.checking ? "Checking…" : u.applied ? u.applied + " installed, restart to run it" : u.available ? u.latest + " available" : u.error ? "Check failed" : u.latest ? "Up to date" : "Not checked yet");
+  sum.title = u.error || sum.textContent;
+  const dot = app.querySelector("[data-update-card-dot]");
+  dot.hidden = !(u.available || u.applied || u.error);
+  dot.className = "status-dot " + (u.error && !u.available ? "error" : u.applied ? "ok" : "busy");
+  const primary = u.applied
+    ? '<button type="button" class="btn sm primary" data-update-act="restart">' + icon("restart", 14) + "Restart</button>"
+    : u.available
+      ? '<button type="button" class="btn sm primary" data-update-act="apply"' + (busy ? " disabled" : "") + ">" + (u.applying ? '<span class="spinner"></span>' : icon("update", 14)) + "Install</button>"
+      : '<button type="button" class="btn sm secondary" data-update-act="check"' + (busy ? " disabled" : "") + ">" + (u.checking ? '<span class="spinner"></span>' : icon("restart", 14)) + "Check now</button>";
+  app.querySelector("[data-update-actions]").innerHTML = primary + '<button type="button" class="btn sm ghost" data-update-act="details">Details</button>';
 }
 
 function setMode(next) {
@@ -198,6 +219,10 @@ async function boot() {
     '<div data-code-side class="side-pane"><p class="nav-label">Agents</p><div class="agent-list" data-agents></div><div class="plugin-side" data-plugin-side hidden></div><p class="nav-label">Activity</p><div class="side-activity" data-side-activity></div></div>' +
     '<div data-thread-side class="side-pane" hidden></div>' +
     '<div data-help-side class="side-pane" hidden></div>' +
+    '<section class="sidebar-plugins sidebar-updates" aria-labelledby="updates-title">' +
+    '<div class="plugins-card-head">' + icon("update", 16) + '<div class="grow"><h2 id="updates-title">Updates</h2><p class="muted small" data-update-summary>Loading</p></div><span class="status-dot" data-update-card-dot hidden></span></div>' +
+    '<div class="update-card-actions" data-update-actions></div>' +
+    "</section>" +
     '<section class="sidebar-plugins" aria-labelledby="plugins-title" data-plugin-card>' +
     '<div class="plugins-card-head">' + icon("puzzle", 16) + '<div class="grow"><h2 id="plugins-title">Plugins</h2><p class="muted small" data-plugin-summary>Loading</p></div></div>' +
     '<button type="button" class="btn sm secondary block" data-plugins>Manage plugins</button>' +
@@ -248,6 +273,19 @@ async function boot() {
     if (t.closest("[data-add-pane]")) return addMenu(t.closest("[data-add-pane]"));
     if (t.closest("[data-hub]")) return openHubPanel();
     if (t.closest("[data-updates]")) return openUpdatesPanel(false).catch((error) => toast(errorText(error)));
+    const ua = t.closest("[data-update-act]");
+    if (ua) {
+      const act = ua.dataset.updateAct;
+      try {
+        if (act === "details") await openUpdatesPanel(false);
+        else if (act === "check") await window.jagents.updates.check();
+        else if (act === "apply") await window.jagents.updates.apply();
+        else if (act === "restart") await window.jagents.updates.restart();
+      } catch (error) {
+        toast(errorText(error));
+      }
+      return;
+    }
     if (t.closest("[data-plugins]")) return openPluginsPanel();
     if (t.closest("[data-theme-toggle]")) {
       const next = store.info.theme === "dark" ? "light" : "dark";

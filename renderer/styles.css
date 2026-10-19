@@ -431,3 +431,9 @@ details.tool[open] { align-self: stretch; }
 .help-faq dd { margin: 0; color: var(--muted); }
 .help-examples li { font-style: italic; }
 @media (max-width: 1100px) { .help-scroll { padding: 20px 16px 60px; } .help-table td:nth-child(2), .help-table th:nth-child(2) { display: none; } }
+
+/* Updates card, stacked above the Plugins card */
+.sidebar-updates + .sidebar-plugins { margin-top: 0; }
+.sidebar-updates { margin-bottom: 8px; }
+.update-card-actions { display: flex; gap: 6px; }
+.update-card-actions .btn:first-child { flex: 1; }
