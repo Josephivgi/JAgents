@@ -6,13 +6,6 @@
     </linearGradient>
   </defs>
   <rect width="1024" height="1024" rx="228" fill="url(#tile)"/>
-  <rect x="168" y="232" width="320" height="560" rx="60" fill="#F4F3FA"/>
-  <path d="M244 330l60 46-60 46" fill="none" stroke="#2E2850" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M244 512h168M244 592h128M244 672h152" fill="none" stroke="#2E2850" stroke-opacity="0.32" stroke-width="28" stroke-linecap="round"/>
-  <rect x="536" y="232" width="320" height="560" rx="60" fill="#8B7CFF"/>
-  <rect x="612" y="312" width="180" height="88" rx="36" fill="#FFFFFF" fill-opacity="0.92"/>
-  <rect x="644" y="438" width="148" height="88" rx="36" fill="#2E2850" fill-opacity="0.35"/>
-  <rect x="612" y="564" width="180" height="88" rx="36" fill="#FFFFFF" fill-opacity="0.92"/>
-  <circle cx="512" cy="512" r="104" fill="#FFC857" stroke="#1E1A33" stroke-width="32"/>
-  <circle cx="512" cy="512" r="34" fill="#1E1A33"/>
+  <path d="M296 300H452M412 300V610A100 100 0 0 1 212 610" fill="none" stroke="#F4F3FA" stroke-width="96" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M548 724L688 300L828 724M598 574H778" fill="none" stroke="#8B7CFF" stroke-width="96" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

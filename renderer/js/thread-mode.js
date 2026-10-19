@@ -6,7 +6,7 @@
 import { esc, toast, errorText } from "./util.js";
 import { icon, harnessIcon } from "./icons.js";
 import { store, on, refreshChats, agentName } from "./store.js";
-import { ChatView, statusLabel } from "./chat-view.js";
+import { ChatView } from "./chat-view.js";
 
 let side = null;
 let main = null;
@@ -56,11 +56,9 @@ function paintHead(snap) {
     head.innerHTML = "<h2>New thread</h2>";
     return;
   }
-  const st = statusLabel(snap);
   head.innerHTML =
     harnessIcon(snap.harnessId, 18) +
     '<div class="th-text"><h2>' + esc(snap.title) + '</h2><span class="muted small">' + esc(snap.handle || "") + " · " + esc(snap.agentName || agentName(snap.harnessId)) + " · " + esc(snap.cwd || "") + "</span></div>" +
-    '<span class="status-dot ' + st.tone + '"></span><span class="pane-status">' + esc(st.text) + "</span>" +
     '<span class="spacer"></span>' +
     '<button class="btn sm secondary" data-th="split" title="Open this thread in Code mode next to your terminals">' + icon("columns", 15) + "Split into Code</button>" +
     '<button class="icon-btn danger" data-th="delete" title="Delete thread">' + icon("trash", 15) + "</button>";
