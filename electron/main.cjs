@@ -1,5 +1,13 @@
 "use strict";
 
+// --data-root= and --jagents-home= do what JAGENTS_DATA_ROOT and JAGENTS_HOME
+// do, for shortcuts that cannot set environment variables. Read before the
+// modules below, which pick up JAGENTS_HOME when they load.
+for (const arg of process.argv) {
+  const m = /^--(data-root|jagents-home)=(.+)$/.exec(arg);
+  if (m) process.env[m[1] === "data-root" ? "JAGENTS_DATA_ROOT" : "JAGENTS_HOME"] = m[2];
+}
+
 const fs = require("node:fs");
 const path = require("node:path");
 const { app, BrowserWindow, ipcMain, protocol, shell, dialog, Notification } = require("electron");
@@ -13,6 +21,7 @@ const { createPluginManager } = require("./plugins.cjs");
 const mcpInstall = require("./mcp-install.cjs");
 const { findLegacyRoots, importLegacy } = require("../lib/migrate");
 const { createUpdater } = require("../lib/updater");
+const { setupTaskbarIcon } = require("./win-taskbar.cjs");
 
 const APP_ROOT = path.join(__dirname, "..");
 const RENDERER = path.join(APP_ROOT, "renderer");
@@ -62,6 +71,7 @@ const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; cha
 
 let db = null;
 let ptyHost = null;
+let taskbar = null;
 let acp = null;
 let workspace = null;
 let hub = null;
@@ -127,6 +137,7 @@ function createWindow() {
     webPreferences: { preload: path.join(__dirname, "preload.cjs"), contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
   mainWindow.setMenuBarVisibility(false);
+  if (taskbar && taskbar.details) mainWindow.setAppDetails(taskbar.details);
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/i.test(url)) shell.openExternal(url);
     return { action: "deny" };
@@ -351,6 +362,11 @@ app.whenReady().then(async () => {
   plugins.start({ hubCall: (name, args) => hub.call(name, args, null), onToolsChanged: () => hub.toolsChanged() });
   workspace.launchRestored();
   registerIpc();
+  try {
+    taskbar = setupTaskbarIcon({ app, shell, appRoot: APP_ROOT, icoPath: path.join(APP_ROOT, "build", "icon.ico"), customRoot: process.env.JAGENTS_DATA_ROOT ? DATA_ROOT : "", jagentsHome: process.env.JAGENTS_HOME ? HOME_DIR : "", log: (t) => console.log(t) });
+  } catch (error) {
+    console.error("Taskbar icon: " + error.message);
+  }
   createWindow();
   runAutoMcp(false);
   setInterval(() => runAutoMcp(false), 10 * 60 * 1000);
