@@ -1,6 +1,7 @@
 {
   "name": "jagents",
   "version": "0.3.4",
+  "license": "MIT",
   "private": true,
   "description": "JAgents: an ADE that splits terminals and chats running coding agents, with an MCP hub that lets them see and message each other and spawn ACP subagents.",
   "repository": {
