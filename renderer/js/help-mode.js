@@ -110,9 +110,10 @@ function article() {
     "<p>An agent outside the app has no handle, so <code>whoami</code> says so, but it can still list, read, and message JAgents agents. JAgents has to be open for the tools to answer.</p></section>" +
 
     '<section id="help-auto"><h2>Auto MCP</h2><p>Auto MCP runs when JAgents starts and every 10 minutes:</p><ul>' +
-    "<li><b>Keep installs up to date</b> (on by default): fixes global installs that point at an old script or Node, and removes the old <code>relay</code> entries from before the rename.</li>" +
+    "<li><b>Keep installs up to date</b> (on by default): fixes global installs that point at an old script or Node.</li>" +
     "<li><b>Install in every supported agent</b> (off by default): also adds the server to each supported agent that is on this computer but does not have it yet.</li>" +
-    "</ul><p>Both switches are in <b>MCP hub</b>, which also shows what the last run changed.</p></section>" +
+    "</ul><p>Both switches are in <b>MCP hub</b>, which also shows what the last run changed.</p>" +
+    "<p>To bring over your Relay threads, layout, plugins, and MCP setup, press <b>Import from legacy Relay</b> in <b>MCP hub > Legacy (development)</b>, then restart.</p></section>" +
 
     '<section id="help-plugins"><h2>Plugins and the MCP</h2><p>A plugin can add MCP servers that every agent gets, or turn tools off with <code>disableTools</code> in its plugin.json. Use <code>jagents.spawn_subagent</code> to turn off a JAgents tool. Plugins written before the rename that say <code>relay.spawn_subagent</code> still work.</p></section>' +
 

@@ -25,5 +25,6 @@ JAgents checks the latest release of this repo at startup and every 6 hours. Whe
 
 ## Data
 
-- App data: `%APPDATA%\JAgents` (Windows). On first start it copies data from the old `Relay ADE` folder, which is left as it was.
+- App data: `%APPDATA%\JAgents` (Windows).
+- Coming from Relay: **MCP hub > Legacy (development) > Import from legacy Relay**, then restart. It copies your threads, layout, plugins, and MCP setup. Relay's own files are only read.
 - Hub files: `~/.jagents` (`hub.json`, `jagents-mcp.cjs`).

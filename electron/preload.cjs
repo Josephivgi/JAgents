@@ -67,6 +67,10 @@ contextBridge.exposeInMainWorld("jagents", {
     autoRun: call("mcp-auto-run"),
     tools: call("hub-tools"),
   },
+  legacy: {
+    state: call("legacy-state"),
+    importData: call("legacy-import"),
+  },
   updates: {
     state: call("update-state"),
     check: call("update-check"),

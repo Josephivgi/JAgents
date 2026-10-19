@@ -6,9 +6,10 @@
 // file, which is merged (other servers are left alone).
 //
 // Auto MCP (autoUpdate) runs at startup and every few minutes: it repairs
-// installs that point at an old script or node, removes the pre-rebrand
-// "relay" entries, and, when the user turned it on, installs into every
-// supported agent that is on this computer.
+// installs that point at an old script or node and, when the user turned it
+// on, installs into every supported agent that is on this computer. Old
+// "relay" entries are left alone; importLegacyMcp adds jagents next to them
+// when the user imports from legacy Relay.
 
 const fs = require("node:fs");
 const os = require("node:os");
@@ -231,10 +232,6 @@ function autoUpdate(script, opts) {
     for (const t of TARGETS) {
       try {
         if (!t.available()) continue;
-        if (t.legacy()) {
-          await t.uninstall(LEGACY);
-          changes.push({ id: t.id, action: "removed the old relay entry" });
-        }
         if (t.installed()) {
           if (!t.current(script)) {
             await t.install(script);
@@ -278,4 +275,24 @@ function support() {
   return rows;
 }
 
-module.exports = { status, install, uninstall, autoUpdate, support, NAME };
+// Part of "Import from legacy Relay": every agent whose config has the old
+// relay server gets the jagents server too. The relay entry stays until the
+// user removes it.
+async function importLegacyMcp(script) {
+  const out = [];
+  for (const t of TARGETS) {
+    try {
+      if (!t.legacy()) continue;
+      if (t.installed() && t.current(script)) out.push({ id: t.id, action: "already had jagents" });
+      else {
+        await t.install(script);
+        out.push({ id: t.id, action: "added jagents" });
+      }
+    } catch (error) {
+      out.push({ id: t.id, action: "failed", error: String(error.message || error) });
+    }
+  }
+  return out;
+}
+
+module.exports = { status, install, uninstall, autoUpdate, support, importLegacyMcp, NAME };

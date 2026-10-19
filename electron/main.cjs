@@ -11,7 +11,7 @@ const { createWorkspace } = require("./workspace.cjs");
 const { createHub, HOME_DIR } = require("./hub.cjs");
 const { createPluginManager } = require("./plugins.cjs");
 const mcpInstall = require("./mcp-install.cjs");
-const { migrateLegacyData } = require("../lib/migrate");
+const { findLegacyRoots, importLegacy } = require("../lib/migrate");
 const { createUpdater } = require("../lib/updater");
 
 const APP_ROOT = path.join(__dirname, "..");
@@ -37,7 +37,18 @@ app.setName("JAgents");
 if (process.env.JAGENTS_DISABLE_GPU === "1") app.disableHardwareAcceleration();
 const DATA_ROOT = process.env.JAGENTS_DATA_ROOT ? path.resolve(process.env.JAGENTS_DATA_ROOT) : path.join(app.getPath("appData"), "JAgents");
 // Before the rebrand the data folder was "Relay ADE"; copy it once.
-const LEGACY_ROOT = process.env.JAGENTS_LEGACY_ROOT || (process.env.JAGENTS_DATA_ROOT ? "" : path.join(app.getPath("appData"), "Relay ADE"));
+// Relay ADE data comes in only when the user presses "Get data from legacy
+// Relay" in MCP hub (lib/migrate.js). That leaves a flag file and restarts, so
+// the import runs before the database opens. A test data root only sees Relay
+// data when JAGENTS_LEGACY_ROOT names the folder.
+const LEGACY_ROOT = process.env.JAGENTS_LEGACY_ROOT || "";
+const LEGACY_ON = Boolean(LEGACY_ROOT || !process.env.JAGENTS_DATA_ROOT);
+const IMPORT_FLAG = path.join(DATA_ROOT, "import-relay-data");
+
+function legacyRoot() {
+  if (!LEGACY_ON) return "";
+  return LEGACY_ROOT || findLegacyRoots(app.getPath("appData"))[0] || "";
+}
 app.setPath("userData", DATA_ROOT);
 
 protocol.registerSchemesAsPrivileged([{ scheme: "app", privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
@@ -58,6 +69,7 @@ let plugins = null;
 let mainWindow = null;
 let updater = null;
 let autoMcp = { at: 0, changes: [], running: false };
+let legacyData = { status: "off" };
 
 function broadcast(type, payload) {
   for (const win of BrowserWindow.getAllWindows()) if (!win.isDestroyed()) win.webContents.send("app-event", { type, payload });
@@ -242,6 +254,15 @@ function registerIpc() {
   handle("mcp-auto-state", () => autoMcp);
   handle("mcp-auto-run", () => runAutoMcp(true));
   handle("hub-tools", () => ({ server: mcpInstall.NAME, tools: hub.tools() }));
+  handle("legacy-state", () => legacyState());
+  // Get data from legacy Relay: agent configs that had the relay server get
+  // the jagents one now; threads, layout and plugins come in on restart.
+  handle("legacy-import", async () => {
+    if (!legacyRoot()) throw new Error("No Relay data was found on this computer.");
+    const mcps = await mcpInstall.importLegacyMcp(hub.files.script);
+    fs.writeFileSync(IMPORT_FLAG, new Date().toISOString());
+    return { mcps };
+  });
 
   handle("update-state", () => updater.state());
   handle("update-check", () => updater.check());
@@ -253,8 +274,13 @@ function registerIpc() {
   });
 }
 
-// Auto MCP: keep global installs pointing at this build's script, drop the
-// old relay entries, and (when turned on) install into every supported agent.
+// The Legacy (development) button's state for the MCP hub panel.
+function legacyState() {
+  return { data: legacyData, root: legacyRoot(), pending: fs.existsSync(IMPORT_FLAG), imported: db.getSetting("legacy.imported", null) };
+}
+
+// Auto MCP: keep global installs pointing at this build's script and (when
+// turned on) install into every supported agent.
 async function runAutoMcp(force) {
   if (!force && !db.getSetting("mcp.autoUpdate", true)) return autoMcp;
   autoMcp = Object.assign({}, autoMcp, { running: true });
@@ -272,12 +298,16 @@ async function runAutoMcp(force) {
 }
 
 app.whenReady().then(async () => {
-  if (LEGACY_ROOT) {
+  if (fs.existsSync(IMPORT_FLAG)) {
     try {
-      if (migrateLegacyData(LEGACY_ROOT, DATA_ROOT)) console.log("Copied Relay ADE data into " + DATA_ROOT);
+      const root = legacyRoot();
+      legacyData = root ? Object.assign({ status: "imported" }, importLegacy(root, DATA_ROOT)) : { status: "none" };
+      if (root) console.log("Imported Relay ADE data from " + root);
     } catch (error) {
-      console.error("Could not copy Relay ADE data: " + error.message);
+      legacyData = { status: "error", error: String(error.message || error) };
+      console.error("Could not import Relay ADE data: " + error.message);
     }
+    fs.rmSync(IMPORT_FLAG, { force: true });
   }
   db = openDb(DATA_ROOT);
   updater = createUpdater({ appRoot: APP_ROOT, emit: broadcast });

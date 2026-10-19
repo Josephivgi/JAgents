@@ -437,3 +437,6 @@ details.tool[open] { align-self: stretch; }
 .sidebar-updates { margin-bottom: 8px; }
 .update-card-actions { display: flex; gap: 6px; }
 .update-card-actions .btn:first-child { flex: 1; }
+
+/* MCP hub: Legacy (development) */
+.legacy-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }

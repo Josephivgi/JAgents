@@ -157,6 +157,17 @@ function autoMarkup(auto) {
   return '<div><p class="muted small">Last run ' + esc(when) + ':</p><ul class="auto-changes">' + auto.changes.map((c) => "<li" + (c.error ? ' class="bad"' : "") + "><b>" + esc(c.id) + "</b> " + esc(c.action) + (c.error ? ": " + esc(c.error) : "") + "</li>").join("") + "</ul></div>";
 }
 
+// Legacy (development): one button that brings Relay's threads, layout,
+// plugins, and MCP setup into JAgents. The data comes in on restart.
+function legacyMarkup(l) {
+  const d = l.data || {};
+  const note = d.status === "error" ? "Import failed: " + d.error : l.imported ? "Imported " + new Date(l.imported.at).toLocaleString() : "";
+  const button = l.pending
+    ? '<button class="btn sm primary" data-legacy-restart>' + icon("restart", 14) + "Restart to finish import</button>"
+    : '<button class="btn sm secondary" data-legacy-import' + (l.root ? "" : ' disabled title="No Relay data on this computer"') + ">" + icon("update", 14) + "Import from legacy Relay</button>";
+  return '<h3 class="section-h">Legacy (development)</h3><div class="legacy-row">' + button + (note ? '<span class="muted small">' + esc(note) + "</span>" : "") + "</div>";
+}
+
 function supportRows(rows) {
   return rows
     .map(
@@ -175,7 +186,7 @@ export async function openHubPanel() {
     '<div class="setting-row"><div><h3>Connect terminals launched in JAgents</h3><p class="muted small">Adds the <code>jagents</code> MCP server to each Claude Code, Codex, and Devin CLI terminal you start here, for that session only. Their global config is not touched. Terminals pick it up when they start or restart. Chats always get it.</p></div>' +
     '<button class="switch' + (store.info.hubAttach ? " on" : "") + '" role="switch" aria-checked="' + Boolean(store.info.hubAttach) + '" data-attach aria-label="Connect terminals launched in JAgents"></button></div>' +
     '<h3 class="section-h">Auto MCP</h3>' +
-    '<div class="setting-row"><div><h3>Keep installs up to date</h3><p class="muted small">At startup and every 10 minutes, fixes global installs that point at an old script, and removes old <code>relay</code> entries.</p></div>' +
+    '<div class="setting-row"><div><h3>Keep installs up to date</h3><p class="muted small">At startup and every 10 minutes, fixes global installs that point at an old script.</p></div>' +
     '<button class="switch' + (info.mcpAutoUpdate ? " on" : "") + '" role="switch" aria-checked="' + Boolean(info.mcpAutoUpdate) + '" data-auto="mcp.autoUpdate" aria-label="Keep installs up to date"></button></div>' +
     '<div class="setting-row"><div><h3>Install in every supported agent</h3><p class="muted small">Also adds the server to Claude Code, Codex, Cursor, and Gemini CLI when they are on this computer, so sessions outside JAgents get it too.</p></div>' +
     '<button class="switch' + (info.mcpAutoInstall ? " on" : "") + '" role="switch" aria-checked="' + Boolean(info.mcpAutoInstall) + '" data-auto="mcp.autoInstall" aria-label="Install in every supported agent"></button></div>' +
@@ -196,11 +207,12 @@ export async function openHubPanel() {
     d.tools.tools.map((t) => '<code class="chip" title="' + esc(t.description) + '">' + esc(t.name) + "</code>").join("") +
     "</div>" +
     '<h3 class="section-h">Activity</h3><div class="activity" data-activity>' + activityMarkup(d.activity) + "</div>" +
+    legacyMarkup(d.legacy) +
     '<p class="muted small">Hub files: <span class="mono">' + esc(info.hubDir) + "</span></p>" +
     "</div>";
   const load = async () => {
-    const [status, activity, support, auto, tools] = await Promise.all([window.jagents.hub.mcpStatus(), window.jagents.hub.activity(), window.jagents.hub.support(), window.jagents.hub.autoState(), window.jagents.hub.tools()]);
-    return { status, activity, support, auto, tools };
+    const [status, activity, support, auto, tools, legacy] = await Promise.all([window.jagents.hub.mcpStatus(), window.jagents.hub.activity(), window.jagents.hub.support(), window.jagents.hub.autoState(), window.jagents.hub.tools(), window.jagents.legacy.state()]);
+    return { status, activity, support, auto, tools, legacy };
   };
   let offAuto = () => {};
   const m = modal(render(await load()), { wide: true, onClose: () => offAuto() });
@@ -216,6 +228,19 @@ export async function openHubPanel() {
       m.close();
       return fire("open-help", "who");
     }
+    const getData = e.target.closest("[data-legacy-import]");
+    if (getData) {
+      getData.disabled = true;
+      getData.innerHTML = '<span class="spinner"></span>Importing…';
+      try {
+        await window.jagents.legacy.importData();
+        toast("MCP setup imported. Restart to bring in your threads, layout, and plugins.");
+      } catch (error) {
+        toast(errorText(error));
+      }
+      return repaint();
+    }
+    if (e.target.closest("[data-legacy-restart]")) return window.jagents.updates.restart();
     const attach = e.target.closest("[data-attach]");
     if (attach) {
       store.info.hubAttach = !store.info.hubAttach;
