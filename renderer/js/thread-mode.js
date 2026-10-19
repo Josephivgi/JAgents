@@ -1,12 +1,12 @@
 // Thread mode: every ACP chat thread in a list, one open at full width with
 // the Plugin App composer. A thread can be split into Code mode next to the
-// terminals, handed off, or deleted. Subagent threads show who spawned them.
+// terminals or deleted. Picking another agent in the composer hands the thread
+// over with its context automatically. Subagent threads show who spawned them.
 
 import { esc, toast, errorText } from "./util.js";
 import { icon, harnessIcon } from "./icons.js";
 import { store, on, refreshChats, agentName } from "./store.js";
 import { ChatView, statusLabel } from "./chat-view.js";
-import { openHandoff } from "./dialogs.js";
 
 let side = null;
 let main = null;
@@ -63,7 +63,6 @@ function paintHead(snap) {
     '<span class="status-dot ' + st.tone + '"></span><span class="pane-status">' + esc(st.text) + "</span>" +
     '<span class="spacer"></span>' +
     '<button class="btn sm secondary" data-th="split" title="Open this thread in Code mode next to your terminals">' + icon("columns", 15) + "Split into Code</button>" +
-    '<button class="btn sm secondary" data-th="handoff">' + icon("handoff", 15) + "Hand off</button>" +
     '<button class="icon-btn danger" data-th="delete" title="Delete thread">' + icon("trash", 15) + "</button>";
 }
 
@@ -111,7 +110,6 @@ export function renderThreadMode(sideEl, mainEl, actions) {
     if (!btn || !view || !view.snap) return;
     const snap = view.snap;
     if (btn.dataset.th === "split") return actions.splitThread(snap.chatId);
-    if (btn.dataset.th === "handoff") return openHandoff({ id: snap.chatId, handle: snap.handle, kind: "chat", provider: snap.harnessId, name: snap.agentName });
     if (btn.dataset.th === "delete") {
       try {
         if (await window.jagents.chats.remove(snap.chatId)) {
