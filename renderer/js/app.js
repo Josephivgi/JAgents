@@ -68,7 +68,7 @@ function paintUpdateCard() {
   if (!sum) return;
   const u = update || { current: store.info.version };
   const busy = u.checking || u.applying;
-  sum.textContent = "v" + (u.current || "") + " · " + (u.applying ? "Installing " + u.latest + "…" : u.checking ? "Checking…" : u.applied ? u.applied + " installed, restart to run it" : u.available ? u.latest + " available" : u.error ? "Check failed" : u.latest ? "Up to date" : "Not checked yet");
+  sum.textContent = "v" + (u.current || "") + " · " + (u.applying ? (u.step || "Installing " + u.latest) + "…" : u.checking ? "Checking…" : u.applied ? u.applied + " installed, restart to run it" : u.available ? u.latest + " available" : u.error ? "Check failed" : u.latest ? "Up to date" : "Not checked yet");
   sum.title = u.error || sum.textContent;
   const dot = app.querySelector("[data-update-card-dot]");
   dot.hidden = !(u.available || u.applied || u.error);
