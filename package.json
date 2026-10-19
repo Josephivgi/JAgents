@@ -1,0 +1,23 @@
+{
+  "name": "relay-ade",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Relay: an ADE that splits terminals and chats running coding agents, with an MCP hub that lets them see and message each other and spawn ACP subagents.",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test --test-concurrency=1 \"test/*.test.js\"",
+    "mcp": "node mcp/relay-mcp.cjs"
+  },
+  "devDependencies": {
+    "electron": "^44.4.3"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.290",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-serialize": "^0.14.0",
+    "@xterm/headless": "^6.0.0",
+    "@xterm/xterm": "^6.0.0",
+    "node-pty": "^1.1.0"
+  }
+}

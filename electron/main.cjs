@@ -1,0 +1,295 @@
+"use strict";
+
+const fs = require("node:fs");
+const path = require("node:path");
+const { app, BrowserWindow, ipcMain, protocol, shell, dialog, Notification } = require("electron");
+const { openDb } = require("../lib/db");
+const { listAcpAgents, listTerminalAgents } = require("../lib/agents");
+const { createPtyHost } = require("./pty-host.cjs");
+const { createAcpHost } = require("./acp-host.cjs");
+const { createWorkspace } = require("./workspace.cjs");
+const { createHub, HOME_DIR } = require("./hub.cjs");
+const { createPluginManager } = require("./plugins.cjs");
+const mcpInstall = require("./mcp-install.cjs");
+
+const APP_ROOT = path.join(__dirname, "..");
+const RENDERER = path.join(APP_ROOT, "renderer");
+const VENDOR = {
+  "xterm.js": path.join(APP_ROOT, "node_modules", "@xterm", "xterm", "lib", "xterm.js"),
+  "xterm.css": path.join(APP_ROOT, "node_modules", "@xterm", "xterm", "css", "xterm.css"),
+  "addon-fit.js": path.join(APP_ROOT, "node_modules", "@xterm", "addon-fit", "lib", "addon-fit.js"),
+};
+const SHELL_URL = "app://shell/index.html";
+
+// Relay started from inside a Claude Code session (a terminal or the desktop
+// app) inherits that session's markers; agents launched here would think they
+// are its children (no transcript saving, the host's proxy and socket). Drop them.
+if (process.env.CLAUDECODE || process.env.CLAUDE_CODE_ENTRYPOINT) {
+  for (const key of Object.keys(process.env)) {
+    if (/^(CLAUDECODE|CLAUDE_CODE_.+|CLAUDE_AGENT_SDK_.+|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_PREVIEW_.+|MCP_CONNECTION_NONBLOCKING|MCP_SERVER_CONNECTION_BATCH_SIZE|ANTHROPIC_BASE_URL)$/.test(key)) delete process.env[key];
+  }
+}
+
+app.setName("Relay");
+// Some sandboxed or remote sessions crash the GPU process; this falls back to software rendering.
+if (process.env.RELAY_DISABLE_GPU === "1") app.disableHardwareAcceleration();
+const DATA_ROOT = process.env.RELAY_DATA_ROOT ? path.resolve(process.env.RELAY_DATA_ROOT) : path.join(app.getPath("appData"), "Relay ADE");
+app.setPath("userData", DATA_ROOT);
+
+protocol.registerSchemesAsPrivileged([{ scheme: "app", privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
+
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+  process.exit(0);
+}
+
+const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".woff2": "font/woff2", ".json": "application/json" };
+
+let db = null;
+let ptyHost = null;
+let acp = null;
+let workspace = null;
+let hub = null;
+let plugins = null;
+let mainWindow = null;
+
+function broadcast(type, payload) {
+  for (const win of BrowserWindow.getAllWindows()) if (!win.isDestroyed()) win.webContents.send("app-event", { type, payload });
+}
+
+function insideDir(root, rel) {
+  const abs = path.resolve(root, "." + path.sep + rel);
+  return abs === path.resolve(root) || abs.startsWith(path.resolve(root) + path.sep) ? abs : null;
+}
+
+async function serveFile(file) {
+  try {
+    const body = await fs.promises.readFile(file);
+    return new Response(body, { headers: { "Content-Type": MIME[path.extname(file).toLowerCase()] || "application/octet-stream", "Cache-Control": "no-store" } });
+  } catch {
+    return new Response("Not found", { status: 404 });
+  }
+}
+
+function registerProtocol() {
+  protocol.handle("app", (request) => {
+    const url = new URL(request.url);
+    if (url.host !== "shell") return new Response("Not found", { status: 404 });
+    const rel = decodeURIComponent(url.pathname).replace(/^\/+/, "");
+    // Plugin files: plugins/<id>@<stamp>/<file>. The stamp changes on every
+    // edit so the window re-imports a changed renderer.js.
+    const plug = /^plugins\/([a-z0-9][a-z0-9-]{0,39})@\d+\/(.+)$/.exec(rel);
+    if (plug && plugins) {
+      const file = insideDir(path.join(plugins.dir, plug[1]), plug[2]);
+      return file ? serveFile(file) : new Response("Not found", { status: 404 });
+    }
+    if (rel.startsWith("vendor/")) {
+      const file = VENDOR[rel.slice("vendor/".length)];
+      return file ? serveFile(file) : new Response("Not found", { status: 404 });
+    }
+    const file = insideDir(RENDERER, rel);
+    return file ? serveFile(file) : new Response("Not found", { status: 404 });
+  });
+}
+
+function theme() {
+  return db.getSetting("theme", "dark") === "light" ? "light" : "dark";
+}
+
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1440,
+    height: 900,
+    minWidth: 960,
+    minHeight: 600,
+    title: "Relay",
+    icon: path.join(APP_ROOT, "build", process.platform === "win32" ? "icon.ico" : "icon.png"),
+    backgroundColor: theme() === "dark" ? "#16181d" : "#f5f6f8",
+    autoHideMenuBar: true,
+    webPreferences: { preload: path.join(__dirname, "preload.cjs"), contextIsolation: true, sandbox: true, nodeIntegration: false },
+  });
+  mainWindow.setMenuBarVisibility(false);
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/i.test(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    if (!url.startsWith("app://shell/")) event.preventDefault();
+  });
+  // Safe mode: if a plugin breaks the window, Ctrl+Shift+F12 turns every plugin off and reloads.
+  mainWindow.webContents.on("before-input-event", (event, input) => {
+    if (input.type === "keyDown" && input.key === "F12" && input.control && input.shift) {
+      event.preventDefault();
+      if (plugins) plugins.setSafeMode(true);
+      mainWindow.webContents.reload();
+    }
+  });
+  mainWindow.loadURL(SHELL_URL);
+  mainWindow.on("closed", () => (mainWindow = null));
+}
+
+function handle(channel, fn) {
+  ipcMain.handle(channel, async (_event, ...args) => fn(...args));
+}
+
+function notify(text) {
+  broadcast("toast", { text });
+  if (mainWindow && !mainWindow.isFocused() && Notification.isSupported()) new Notification({ title: "Relay", body: text }).show();
+}
+
+function registerIpc() {
+  handle("app-info", () => ({ dataRoot: DATA_ROOT, hubDir: HOME_DIR, theme: theme(), cwd: workspace.cwdDefault(), hubAttach: workspace.hubOn(), hubChosen: db.getSetting("hub.chosen", false), mode: db.getSetting("mode", "code"), layout: db.getSetting("layout", "grid"), threadCurrent: db.getSetting("thread.current", ""), platform: process.platform }));
+  handle("set-setting", (key, value) => {
+    const allowed = ["theme", "mode", "layout", "hub.attach", "hub.chosen", "thread.current", "ui.sidebar"];
+    if (!allowed.includes(key)) throw new Error("Unknown setting " + key);
+    db.setSetting(key, value);
+    return true;
+  });
+  handle("pick-folder", async () => {
+    const res = await dialog.showOpenDialog(mainWindow, { properties: ["openDirectory", "createDirectory"], defaultPath: workspace.cwdDefault() });
+    if (res.canceled || !res.filePaths[0]) return null;
+    db.setSetting("cwd", res.filePaths[0]);
+    return res.filePaths[0];
+  });
+  handle("open-path", (p) => shell.openPath(String(p)));
+
+  handle("agents-list", () => ({ acp: listAcpAgents(), terminal: listTerminalAgents() }));
+
+  handle("panes-list", () => workspace.list());
+  handle("pane-add-terminal", (opts) => workspace.addTerminal(opts));
+  handle("pane-add-chat", (opts) => workspace.addChatPane(opts));
+  handle("pane-remove", async (id, opts) => {
+    const pane = workspace.list().find((p) => p.id === id);
+    if (pane && pane.kind === "terminal" && pane.status !== "exited" && !(opts && opts.confirmed)) {
+      const res = await dialog.showMessageBox(mainWindow, { type: "warning", buttons: ["Close terminal", "Cancel"], defaultId: 1, cancelId: 1, message: "Close " + pane.handle + "?", detail: "The " + pane.name + " process in this terminal will be stopped.", noLink: true });
+      if (res.response !== 0) return false;
+    }
+    return workspace.removePane(id, opts);
+  });
+  handle("pane-reorder", (ids) => workspace.reorder(ids));
+  handle("hub-agents", () => workspace.agents());
+  handle("hub-activity", () => hub.activity());
+
+  handle("pty-attach", (id, size) => workspace.ensureTerminal(id, size));
+  handle("pty-restart", (id, size) => workspace.restartTerminal(id, size));
+  ipcMain.on("pty-write", (_e, id, data) => ptyHost.write(id, data));
+  ipcMain.on("pty-resize", (_e, id, cols, rows) => ptyHost.resize(id, cols, rows));
+
+  handle("chats-list", () => acp.listChats());
+  handle("chat-get", (id) => acp.snapshot(id));
+  handle("chat-create", (opts) => workspace.newChat(opts));
+  handle("chat-prompt", (id, text) => acp.prompt(id, text));
+  handle("chat-cancel", (id) => acp.cancel(id));
+  handle("chat-set-model", (id, modelId) => acp.setModel(id, modelId));
+  handle("chat-handoff", (id, harnessId) => acp.handoff(id, harnessId));
+  handle("chat-delete", async (id) => {
+    const res = await dialog.showMessageBox(mainWindow, { type: "warning", buttons: ["Delete thread", "Cancel"], defaultId: 1, cancelId: 1, message: "Delete this thread?", detail: "Its transcript is removed from Relay. This cannot be undone.", noLink: true });
+    if (res.response !== 0) return false;
+    const pane = workspace.paneForChat(id);
+    if (pane) workspace.removePane(pane.id);
+    return acp.deleteChat(id);
+  });
+  handle("agent-model-info", (id) => acp.modelInfo(id));
+  handle("agent-set-model", (id, modelId) => acp.setModelPref(id, modelId));
+  handle("agent-probe", (id) => acp.probe(id));
+
+  // Context handoff from the pane header.
+  handle("handoff", async (sourceId, opts) => {
+    const source = workspace.findAgent(sourceId);
+    if (!source) throw new Error("That agent is not running.");
+    return hub.handoff(source, opts);
+  });
+
+  handle("plugins-list", () => plugins.list());
+  handle("plugins-read", (id) => plugins.read(id));
+  handle("plugins-write", (id, input) => plugins.write(id, input, "you"));
+  handle("plugins-enable", (id, on) => plugins.setEnabled(id, on, "you"));
+  handle("plugins-undo", (id) => plugins.undo(id, "you"));
+  handle("plugins-remove", async (id) => {
+    const p = plugins.info(id);
+    const res = await dialog.showMessageBox(mainWindow, { type: "warning", buttons: ["Remove plugin", "Cancel"], defaultId: 1, cancelId: 1, message: "Remove " + p.name + "?", detail: "Its folder moves to the plugins trash (" + path.join(plugins.dir, ".trash") + "), so it can be put back by hand.", noLink: true });
+    if (res.response !== 0) return false;
+    return plugins.remove(id, "you");
+  });
+  handle("plugins-scaffold", () => plugins.scaffold());
+  handle("plugins-report", (id, result) => plugins.report(id, result));
+  handle("plugins-invoke", (id, channel, payload) => plugins.invoke(id, channel, payload));
+  handle("plugins-safe", (on) => plugins.setSafeMode(on));
+  handle("plugins-open-folder", (id) => shell.openPath(id ? path.join(plugins.dir, String(id).replace(/[^a-z0-9-]/g, "")) : plugins.dir));
+  // Plugin storage lives in relay.db, one settings row per plugin.
+  handle("plugins-storage-get", (id) => db.getSetting("plugin-store:" + String(id), {}) || {});
+  handle("plugins-storage-set", (id, key, value) => {
+    const k = "plugin-store:" + String(id);
+    const cur = db.getSetting(k, {}) || {};
+    if (value === undefined || value === null) delete cur[String(key)];
+    else cur[String(key)] = value;
+    db.setSetting(k, cur);
+    return true;
+  });
+  handle("pane-add-plugin", (opts) => workspace.addPluginPane(opts));
+  handle("pane-plugin-update", (id, patch) => workspace.updatePluginPane(id, patch));
+
+  handle("mcp-status", () => mcpInstall.status());
+  handle("mcp-install", (id) => mcpInstall.install(id, hub.files.script));
+  handle("mcp-uninstall", (id) => mcpInstall.uninstall(id));
+}
+
+app.whenReady().then(async () => {
+  db = openDb(DATA_ROOT);
+  registerProtocol();
+  ptyHost = createPtyHost({ emit: broadcast });
+  const hubFiles = { hub: path.join(HOME_DIR, "hub.json"), script: path.join(HOME_DIR, "relay-mcp.cjs"), pluginScript: path.join(HOME_DIR, "relay-plugin-mcp.cjs") };
+  plugins = createPluginManager({ dataRoot: DATA_ROOT, db, emit: broadcast, notify, log: (t) => console.log(t), bundledDir: path.join(APP_ROOT, "plugins"), getWindow: () => mainWindow });
+  let ws = null;
+  acp = createAcpHost({
+    dataRoot: DATA_ROOT,
+    db,
+    emit: broadcast,
+    defaultCwd: () => (ws ? ws.cwdDefault() : require("node:os").homedir()),
+    // Chats always get the relay server when the hub is on; subagents need it
+    // to report back, and a chat whose parent spawned it implies the hub is on.
+    // Plugin MCP servers go to every chat.
+    mcpEntryFor: (chatId) => {
+      const chat = db.getChat(chatId);
+      return ws ? ws.mcpEntries(chatId, ws.hubOn() || Boolean(chat && chat.parentId)) : [];
+    },
+    disallowedFor: () => (ws ? ws.claudeDisallowed() : []),
+    contextFor: (chatId) => {
+      const chat = db.getChat(chatId);
+      const handleName = chat ? chat.handle : "this agent";
+      const base = "You are " + handleName + ", running in the Relay ADE next to other coding agents. Your working folder is " + ((chat && chat.cwd) || "") + ".";
+      const parent = chat && chat.parentId ? ws.findAgent(chat.parentId) : null;
+      const sub = parent ? " You are a subagent started by " + parent.handle + "; finish the task, then reply with a short, complete summary of what you did and found. Your final message is returned to " + parent.handle + "." : "";
+      const tools = ws && (ws.hubOn() || (chat && chat.parentId)) ? " The relay MCP tools (list_agents, send_message, read_agent, spawn_subagent, wait_for_agent, handoff_context) let you work with the other agents." : "";
+      return base + sub + tools;
+    },
+  });
+  ws = createWorkspace({ db, dataRoot: DATA_ROOT, ptyHost, acpHost: acp, emit: broadcast, hubFiles, pluginMcp: () => plugins.agentMcp() });
+  workspace = ws;
+  hub = createHub({ workspace, ptyHost, acpHost: acp, plugins, dataRoot: DATA_ROOT, emit: broadcast, notify });
+  await hub.start();
+  plugins.start({ hubCall: (name, args) => hub.call(name, args, null), onToolsChanged: () => hub.toolsChanged() });
+  workspace.launchRestored();
+  registerIpc();
+  createWindow();
+});
+
+app.on("second-instance", () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  }
+});
+
+app.on("before-quit", () => {
+  try {
+    if (acp) acp.stopAll();
+    if (ptyHost) ptyHost.killAll();
+    if (plugins) plugins.stop();
+    if (hub) hub.stop();
+  } catch {
+    /* quitting */
+  }
+});
+
+app.on("window-all-closed", () => app.quit());

@@ -1,0 +1,5 @@
+{
+  "name": "Built-in browser",
+  "description": "A web browser pane (+ > Browser). Agents drive it with the browser MCP tools: open, read, screenshot, click, type.",
+  "version": "1.0.0"
+}
