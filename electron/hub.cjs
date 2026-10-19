@@ -1,10 +1,10 @@
 "use strict";
 
-// The Relay hub: a loopback HTTP server inside the app that the relay MCP
-// server (mcp/relay-mcp.cjs) forwards tool calls to. It knows every running
+// The JAgents hub: a loopback HTTP server inside the app that the jagents MCP
+// server (mcp/jagents-mcp.cjs) forwards tool calls to. It knows every running
 // agent (terminal panes, chat panes, subagents), so an agent can list the
 // others, message them, read them, spawn ACP subagents, and hand off context.
-// Auth is a random bearer token in ~/.relay-ade/hub.json (user-only file).
+// Auth is a random bearer token in ~/.jagents/hub.json (user-only file).
 
 const fs = require("node:fs");
 const os = require("node:os");
@@ -16,15 +16,15 @@ const { listAcpAgents, listTerminalAgents, acpAgent, terminalAgent } = require("
 const { readChatRows } = require("../lib/acp-handoff");
 const { buildHandoff, writeHandoffFile, handoffInstruction } = require("../lib/handoff");
 
-const HOME_DIR = process.env.RELAY_HOME ? path.resolve(process.env.RELAY_HOME) : path.join(os.homedir(), ".relay-ade");
+const HOME_DIR = process.env.JAGENTS_HOME ? path.resolve(process.env.JAGENTS_HOME) : path.join(os.homedir(), ".jagents");
 const WAIT_DEFAULT_S = 50;
 const WAIT_MAX_S = 900;
 
 const TOOLS = [
-  { name: "whoami", description: "Your own Relay identity: handle, kind (terminal or chat), provider, and working folder.", inputSchema: { type: "object", properties: {} } },
+  { name: "whoami", description: "Your own JAgents identity: handle, kind (terminal or chat), provider, and working folder.", inputSchema: { type: "object", properties: {} } },
   {
     name: "list_agents",
-    description: "List every coding agent running in Relay right now: terminal agents (Claude Code, Codex, shells) and chat/ACP agents (Devin, Cursor, subagents). Each has a handle you can pass to the other tools.",
+    description: "List every coding agent running in JAgents right now: terminal agents (Claude Code, Codex, shells) and chat/ACP agents (Devin, Cursor, subagents). Each has a handle you can pass to the other tools.",
     inputSchema: { type: "object", properties: {} },
   },
   {
@@ -55,7 +55,7 @@ const TOOLS = [
   },
   {
     name: "spawn_subagent",
-    description: "Start a subagent (Claude Code natively, or an ACP agent such as devin or cursor) on a task. It appears as a chat pane in Relay, can use the relay tools itself, and reports to you. With wait (default true) this returns its reply when it finishes or when timeout_seconds pass; otherwise call wait_for_agent later.",
+    description: "Start a subagent (Claude Code natively, or an ACP agent such as devin or cursor) on a task. It appears as a chat pane in JAgents, can use the jagents tools itself, and reports to you. With wait (default true) this returns its reply when it finishes or when timeout_seconds pass; otherwise call wait_for_agent later.",
     inputSchema: {
       type: "object",
       properties: {
@@ -86,25 +86,25 @@ const TOOLS = [
       properties: { to: { type: "string", description: "Handle of a running agent" }, provider: { type: "string", description: "Start a new agent instead: claude, codex, devin, cursor, ..." }, note: { type: "string" } },
     },
   },
-  // Plugins: agents change the Relay app itself (plugins.cjs).
+  // Plugins: agents change the JAgents app itself (plugins.cjs).
   {
     name: "plugin_docs",
-    description: "How Relay plugins work. Plugins change the Relay app: its UI (top bar buttons, sidebar sections, new pane types, CSS), the MCP servers every agent gets (outside servers, or new ones that run inside Relay), and which tools agents may use. Read this before write_plugin.",
+    description: "How JAgents plugins work. Plugins change the JAgents app: its UI (top bar buttons, sidebar sections, new pane types, CSS), the MCP servers every agent gets (outside servers, or new ones that run inside JAgents), and which tools agents may use. Read this before write_plugin.",
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "list_plugins",
-    description: "List the Relay app's plugins: id, name, on/off, who changed each last, load errors, the MCP servers each gives agents, and the tools each turns off.",
+    description: "List the JAgents app's plugins: id, name, on/off, who changed each last, load errors, the MCP servers each gives agents, and the tools each turns off.",
     inputSchema: { type: "object", properties: {} },
   },
   {
     name: "read_plugin",
-    description: "Read every file of a Relay plugin.",
+    description: "Read every file of a JAgents plugin.",
     inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
   },
   {
     name: "write_plugin",
-    description: "Create or change a Relay plugin; the app reloads it live and the user sees it in the Plugins panel. files maps paths in the plugin folder (renderer.js, style.css, main.cjs, plugin.json, others) to their full new content, or null to delete a file; files you leave out are kept. Returns the plugin's state including load errors, so fix and write again if errors.renderer, errors.main or errors.mcp is set. Call plugin_docs first.",
+    description: "Create or change a JAgents plugin; the app reloads it live and the user sees it in the Plugins panel. files maps paths in the plugin folder (renderer.js, style.css, main.cjs, plugin.json, others) to their full new content, or null to delete a file; files you leave out are kept. Returns the plugin's state including load errors, so fix and write again if errors.renderer, errors.main or errors.mcp is set. Call plugin_docs first.",
     inputSchema: {
       type: "object",
       properties: {
@@ -118,17 +118,17 @@ const TOOLS = [
   },
   {
     name: "set_plugin_enabled",
-    description: "Turn a Relay plugin on or off.",
+    description: "Turn a JAgents plugin on or off.",
     inputSchema: { type: "object", properties: { id: { type: "string" }, enabled: { type: "boolean" } }, required: ["id", "enabled"] },
   },
   {
     name: "undo_plugin",
-    description: "Put a Relay plugin back to the version before its last change.",
+    description: "Put a JAgents plugin back to the version before its last change.",
     inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
   },
   {
     name: "delete_plugin",
-    description: "Remove a Relay plugin. Its folder moves to the plugins trash, so it can be recovered by hand.",
+    description: "Remove a JAgents plugin. Its folder moves to the plugins trash, so it can be recovered by hand.",
     inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
   },
 ];
@@ -170,7 +170,7 @@ function processTable() {
 
 function createHub({ workspace, ptyHost, acpHost, plugins, dataRoot, emit, notify }) {
   const token = randomBytes(24).toString("hex");
-  const files = { dir: HOME_DIR, hub: path.join(HOME_DIR, "hub.json"), script: path.join(HOME_DIR, "relay-mcp.cjs"), pluginScript: path.join(HOME_DIR, "relay-plugin-mcp.cjs"), tools: path.join(HOME_DIR, "tools.json") };
+  const files = { dir: HOME_DIR, hub: path.join(HOME_DIR, "hub.json"), script: path.join(HOME_DIR, "jagents-mcp.cjs"), pluginScript: path.join(HOME_DIR, "jagents-plugin-mcp.cjs"), tools: path.join(HOME_DIR, "tools.json") };
   const callerCache = new Map();
   const log = [];
   let server = null;
@@ -181,14 +181,15 @@ function createHub({ workspace, ptyHost, acpHost, plugins, dataRoot, emit, notif
     emit("hub-activity", log.slice(-60));
   }
 
-  // Plugins can turn relay tools off ("relay.spawn_subagent" in disableTools).
-  function disabledRelay() {
+  // Plugins can turn jagents tools off ("jagents.spawn_subagent" in disableTools).
+  // "relay." is the name plugins written before the rebrand use.
+  function disabledOwn() {
     if (!plugins) return new Set();
-    return new Set(plugins.agentMcp().disabled.filter((t) => t.startsWith("relay.")).map((t) => t.slice(6)));
+    return new Set(plugins.agentMcp().disabled.map((t) => /^(?:jagents|relay)\.(.+)$/.exec(t)).filter(Boolean).map((m) => m[1]));
   }
 
   function allTools() {
-    const off = disabledRelay();
+    const off = disabledOwn();
     return TOOLS.filter((t) => !off.has(t.name));
   }
 
@@ -202,8 +203,10 @@ function createHub({ workspace, ptyHost, acpHost, plugins, dataRoot, emit, notif
 
   function writeFiles(port) {
     fs.mkdirSync(HOME_DIR, { recursive: true });
-    fs.copyFileSync(path.join(__dirname, "..", "mcp", "relay-mcp.cjs"), files.script);
-    fs.copyFileSync(path.join(__dirname, "..", "mcp", "relay-plugin-mcp.cjs"), files.pluginScript);
+    // The server reports this build's version to agents.
+    const version = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version;
+    fs.writeFileSync(files.script, fs.readFileSync(path.join(__dirname, "..", "mcp", "jagents-mcp.cjs"), "utf8").replaceAll("__JAGENTS_VERSION__", version));
+    fs.copyFileSync(path.join(__dirname, "..", "mcp", "jagents-plugin-mcp.cjs"), files.pluginScript);
     writeToolsFile();
     fs.writeFileSync(files.hub, JSON.stringify({ port, token, pid: process.pid, startedAt: new Date().toISOString() }), { mode: 0o600 });
   }
@@ -253,7 +256,7 @@ function createHub({ workspace, ptyHost, acpHost, plugins, dataRoot, emit, notif
       parent: parent ? parent.handle : agent.parentId ? "(closed)" : undefined,
       queued: agent.queued || undefined,
       you: me && me.id === agent.id ? true : undefined,
-      relay_tools: agent.mcp,
+      jagents_tools: agent.mcp,
     };
   }
 
@@ -270,9 +273,9 @@ function createHub({ workspace, ptyHost, acpHost, plugins, dataRoot, emit, notif
   async function sendMessage(from, to, message) {
     const text = String(message || "").trim();
     if (!text) throw new Error("message is empty.");
-    const sender = from ? from.handle : "someone outside Relay";
+    const sender = from ? from.handle : "someone outside JAgents";
     if (to.kind === "terminal") {
-      await ptyHost.sendInput(to.id, "[Relay message from " + sender + "] " + text.replace(/\s*\n\s*/g, " "));
+      await ptyHost.sendInput(to.id, "[JAgents message from " + sender + "] " + text.replace(/\s*\n\s*/g, " "));
       return { delivered: true, to: to.handle, note: "Typed into " + to.handle + "'s prompt. Use read_agent or wait_for_agent to see the reply." };
     }
     const out = acpHost.deliver(to.id, text, sender);
@@ -312,7 +315,7 @@ function createHub({ workspace, ptyHost, acpHost, plugins, dataRoot, emit, notif
       () => onSubagentDone(me, sub, args.wait === false),
       () => onSubagentDone(me, sub, args.wait === false),
     );
-    if (args.wait === false) return { handle: sub.handle, status: "started", note: "Call wait_for_agent with agent " + sub.handle + " for its reply." + (me && me.kind === "terminal" ? " Relay will also tell you when it finishes." : "") };
+    if (args.wait === false) return { handle: sub.handle, status: "started", note: "Call wait_for_agent with agent " + sub.handle + " for its reply." + (me && me.kind === "terminal" ? " JAgents will also tell you when it finishes." : "") };
     await new Promise((r) => setTimeout(r, 50));
     const res = await waitFor(sub, clampWait(args.timeout_seconds));
     return Object.assign({ spawned: sub.handle }, res);
@@ -323,7 +326,7 @@ function createHub({ workspace, ptyHost, acpHost, plugins, dataRoot, emit, notif
   function onSubagentDone(parent, sub, detached) {
     if (!detached || !parent || parent.kind !== "terminal" || !ptyHost.has(parent.id)) return;
     const reply = acpHost.lastReply(sub.id).replace(/\s+/g, " ").slice(0, 400);
-    ptyHost.sendInput(parent.id, "[Relay] Subagent " + sub.handle + " finished: " + (reply || "(no text reply)") + (reply.length >= 400 ? " ... (read_agent " + sub.handle + " for the rest)" : "")).catch(() => {});
+    ptyHost.sendInput(parent.id, "[JAgents] Subagent " + sub.handle + " finished: " + (reply || "(no text reply)") + (reply.length >= 400 ? " ... (read_agent " + sub.handle + " for the rest)" : "")).catch(() => {});
   }
 
   // Context handoff across agents. source is an agent; target is a running
@@ -367,10 +370,10 @@ function createHub({ workspace, ptyHost, acpHost, plugins, dataRoot, emit, notif
 
   async function call(name, args, me) {
     const a = args || {};
-    if (disabledRelay().has(name)) throw new Error(name + " is turned off by a Relay plugin.");
+    if (disabledOwn().has(name)) throw new Error(name + " is turned off by a JAgents plugin.");
     switch (name) {
       case "whoami":
-        if (!me) return { handle: null, note: "This agent was not started by Relay, so it has no handle. It can still list and message Relay agents." };
+        if (!me) return { handle: null, note: "This agent was not started by JAgents, so it has no handle. It can still list and message JAgents agents." };
         return view(me, me);
       case "list_agents":
         return { you: me ? me.handle : null, agents: workspace.agents().map((x) => view(x, me)) };
@@ -402,7 +405,7 @@ function createHub({ workspace, ptyHost, acpHost, plugins, dataRoot, emit, notif
         return { stopped: target.handle, closed: Boolean(a.close) };
       }
       case "handoff_context":
-        if (!me) throw new Error("Only agents started in Relay can hand off their context.");
+        if (!me) throw new Error("Only agents started in JAgents can hand off their context.");
         return handoff(me, { to: a.to, provider: a.provider, note: a.note });
       case "plugin_docs":
         return needPlugins().docs;
@@ -436,12 +439,12 @@ function createHub({ workspace, ptyHost, acpHost, plugins, dataRoot, emit, notif
   }
 
   function needPlugins() {
-    if (!plugins) throw new Error("Plugins are not available in this Relay.");
+    if (!plugins) throw new Error("Plugins are not available in this JAgents.");
     return plugins;
   }
 
   function author(me) {
-    return me ? me.handle : "an agent outside Relay";
+    return me ? me.handle : "an agent outside JAgents";
   }
 
   function pluginChanged(me, name, verb) {
@@ -472,7 +475,7 @@ function createHub({ workspace, ptyHost, acpHost, plugins, dataRoot, emit, notif
         if (req.headers.authorization !== "Bearer " + token) return reply(401, { error: "Bad token" });
         try {
           if (req.method === "GET" && req.url === "/tools") return reply(200, { tools: allTools() });
-          // MCP servers that plugins run inside Relay (mcp/relay-plugin-mcp.cjs).
+          // MCP servers that plugins run inside JAgents (mcp/jagents-plugin-mcp.cjs).
           const srv = /^\/servers\/([^/]+)\/(tools|call)$/.exec(req.url);
           if (srv && plugins) {
             const name = decodeURIComponent(srv[1]);

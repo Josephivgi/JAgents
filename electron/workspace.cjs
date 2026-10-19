@@ -1,8 +1,8 @@
 "use strict";
 
 // The workspace: every pane (terminal or chat), its handle (claude-1, devin-2),
-// the Code-mode layout, and how terminal agents are launched with the Relay
-// MCP server attached. Panes persist in relay.db; terminals relaunch fresh on
+// the Code-mode layout, and how terminal agents are launched with the JAgents
+// MCP server attached. Panes persist in jagents.db; terminals relaunch fresh on
 // restart, chats resume through session/load when the agent supports it.
 
 const fs = require("node:fs");
@@ -47,15 +47,15 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
     return db.getSetting("cwd", "") || require("node:os").homedir();
   }
 
-  // stdio entry for the Relay MCP server, in ACP's {name, command, args, env[]} shape.
+  // stdio entry for the JAgents MCP server, in ACP's {name, command, args, env[]} shape.
   function mcpEntry(paneId) {
     const node = nodePath();
     const env = [
-      { name: "RELAY_PANE_ID", value: paneId },
-      { name: "RELAY_HUB_FILE", value: hubFiles.hub },
+      { name: "JAGENTS_PANE_ID", value: paneId },
+      { name: "JAGENTS_HUB_FILE", value: hubFiles.hub },
     ];
     if (!node) env.push({ name: "ELECTRON_RUN_AS_NODE", value: "1" });
-    return { name: "relay", command: node || process.execPath, args: [hubFiles.script], env };
+    return { name: "jagents", command: node || process.execPath, args: [hubFiles.script], env };
   }
 
   function plugged() {
@@ -66,18 +66,18 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
     }
   }
 
-  // Every MCP server an agent gets: relay (when the hub is attached), servers
-  // plugins run inside Relay (through relay-plugin-mcp.cjs), and outside
+  // Every MCP server an agent gets: jagents (when the hub is attached), servers
+  // plugins run inside JAgents (through jagents-plugin-mcp.cjs), and outside
   // servers plugins list in plugin.json. ACP's {name, command, args, env[]} shape.
-  function mcpEntries(paneId, withRelay) {
-    const out = withRelay ? [mcpEntry(paneId)] : [];
+  function mcpEntries(paneId, withHub) {
+    const out = withHub ? [mcpEntry(paneId)] : [];
     const p = plugged();
     const node = nodePath();
     for (const srv of p.inApp) {
       const env = [
-        { name: "RELAY_SERVER", value: srv.name },
-        { name: "RELAY_PANE_ID", value: paneId },
-        { name: "RELAY_HUB_FILE", value: hubFiles.hub },
+        { name: "JAGENTS_SERVER", value: srv.name },
+        { name: "JAGENTS_PANE_ID", value: paneId },
+        { name: "JAGENTS_HUB_FILE", value: hubFiles.hub },
       ];
       if (!node) env.push({ name: "ELECTRON_RUN_AS_NODE", value: "1" });
       out.push({ name: srv.name, command: node || process.execPath, args: [hubFiles.pluginScript], env });
@@ -86,7 +86,7 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
     return out;
   }
 
-  // Tools plugins turned off. relay and in-app servers drop them in the hub;
+  // Tools plugins turned off. jagents and in-app servers drop them in the hub;
   // these lists cover outside servers and Claude Code's own tools.
   function disabledTools() {
     return plugged().disabled;
@@ -98,8 +98,8 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
 
   function systemNote(handle) {
     return (
-      "You are " + handle + ", one of several coding agents running side by side in the Relay ADE. " +
-      "The relay MCP server lets you list the other agents (list_agents), message one (send_message), read what one is doing (read_agent), " +
+      "You are " + handle + ", one of several coding agents running side by side in JAgents. " +
+      "The jagents MCP server lets you list the other agents (list_agents), message one (send_message), read what one is doing (read_agent), " +
       "spawn subagents such as Claude Code, Devin or Cursor on a task (spawn_subagent, wait_for_agent), and hand your context to another agent (handoff_context)."
     );
   }
@@ -109,7 +109,7 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
   function launchArgs(provider, pane, attach, initialPrompt) {
     // Codex's startup update menu would swallow the first relayed message.
     const args = provider === "codex" ? ["-c", "check_for_update_on_startup=false"] : [];
-    // Handoff files live in Relay's data folder; without this Claude Code asks
+    // Handoff files live in JAgents's data folder; without this Claude Code asks
     // before reading outside its working folder.
     if (provider === "claude") {
       const handoffs = path.join(dataRoot, "handoffs");
@@ -130,6 +130,12 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
       fs.writeFileSync(file, JSON.stringify({ mcpServers: servers }, null, 2));
       args.push("--mcp-config", file);
       if (attach) args.push("--append-system-prompt", systemNote(pane.handle));
+    }
+    // The Devin CLI reads MCP servers only from its config files. The entry
+    // leaves out the pane id; the hub finds the caller from its parent process.
+    if (entries.length && provider === "devin-cli") {
+      const { writeDevinMcpConfig } = require("./acp-host.cjs");
+      writeDevinMcpConfig(pane.cwd, entries.map((e) => Object.assign({}, e, { env: e.env.filter((item) => item.name !== "JAGENTS_PANE_ID") })));
     }
     if (provider === "claude" && claudeDisallowed().length) args.push("--disallowedTools", claudeDisallowed().join(","));
     if (entries.length && provider === "codex") {
@@ -152,9 +158,10 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
   function launchTerminal(pane, size, initialPrompt) {
     const attach = pane.mcp && hubOn();
     const spec = terminalSpawnSpec(pane.provider, launchArgs(pane.provider, pane, attach, initialPrompt));
-    const env = Object.assign({}, spec.env, { RELAY_PANE_ID: pane.id, RELAY_HUB_FILE: hubFiles.hub, RELAY_HANDLE: pane.handle });
+    const env = Object.assign({}, spec.env, { JAGENTS_PANE_ID: pane.id, JAGENTS_HUB_FILE: hubFiles.hub, JAGENTS_HANDLE: pane.handle });
     if (!fs.existsSync(pane.cwd)) throw new Error("Folder not found: " + pane.cwd);
-    pane.attached = Boolean(attach);
+    // Terminals JAgents wires per launch; others only have it through a global install.
+    pane.attached = Boolean(attach) && ["claude", "codex", "devin-cli"].includes(pane.provider);
     return ptyHost.create({ id: pane.id, command: spec.command, args: spec.args, cwd: pane.cwd, env, cols: size && size.cols, rows: size && size.rows });
   }
 
@@ -242,8 +249,8 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
     return pane;
   }
 
-  // A pane whose kind a plugin registered (relay.panes.register). Its state is
-  // the plugin's to keep; Relay only stores it with the layout.
+  // A pane whose kind a plugin registered (jagents.panes.register). Its state is
+  // the plugin's to keep; JAgents only stores it with the layout.
   function addPluginPane(input) {
     const src = input || {};
     const kind = String(src.kind || "");

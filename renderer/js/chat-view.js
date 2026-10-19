@@ -103,7 +103,7 @@ export class ChatView {
   async load() {
     if (this.chatId) {
       try {
-        this.snap = await window.relay.chats.get(this.chatId);
+        this.snap = await window.jagents.chats.get(this.chatId);
       } catch (error) {
         toast(errorText(error));
       }
@@ -341,7 +341,7 @@ export class ChatView {
     if (this.snap && id !== this.snap.harnessId) {
       if (!agent.available) return toast("Install " + agent.name + " before switching this chat to it.");
       try {
-        this.snap = await window.relay.chats.handoff(this.snap.chatId, id);
+        this.snap = await window.jagents.chats.handoff(this.snap.chatId, id);
         refreshChats();
         if (bound) toast(agent.name + " has this chat now, with the messages and tool calls so far.");
       } catch (error) {
@@ -358,11 +358,11 @@ export class ChatView {
     try {
       const id = this.currentAgentId();
       if (this.snap) {
-        this.snap = await window.relay.chats.setModel(this.snap.chatId, modelId);
+        this.snap = await window.jagents.chats.setModel(this.snap.chatId, modelId);
         // Not started yet: the host saved it as this agent's model for the next start.
         const live = this.snap && this.snap.models && this.snap.models.availableModels.length;
         if (!live) store.modelCache[id] = Object.assign({}, store.modelCache[id], { preferred: modelId });
-      } else store.modelCache[id] = await window.relay.agents.setModel(id, modelId);
+      } else store.modelCache[id] = await window.jagents.agents.setModel(id, modelId);
     } catch (error) {
       toast(errorText(error));
     }
@@ -376,7 +376,7 @@ export class ChatView {
       if (!this.chatId) {
         const agent = store.acpAgents.find((a) => a.id === this.newAgent);
         if (agent && !agent.available) return toast(agent.name + " is not installed. " + (agent.install || ""));
-        this.snap = await window.relay.chats.create({ harnessId: this.newAgent });
+        this.snap = await window.jagents.chats.create({ harnessId: this.newAgent });
         this.chatId = this.snap.chatId;
         if (this.opts.onCreated) this.opts.onCreated(this.chatId);
         refreshChats();
@@ -386,11 +386,11 @@ export class ChatView {
       this.forceScroll = true;
       this.snap = Object.assign({}, this.snap, { status: this.snap.status === "ready" ? "busy" : "starting", transcript: this.snap.transcript.concat([{ role: "user", text }]) });
       this.paint();
-      const done = await window.relay.chats.prompt(this.chatId, text);
+      const done = await window.jagents.chats.prompt(this.chatId, text);
       if (done && views.has(this)) this.setSnap(done);
     } catch (error) {
       toast(errorText(error));
-      if (this.chatId && views.has(this)) this.setSnap(await window.relay.chats.get(this.chatId));
+      if (this.chatId && views.has(this)) this.setSnap(await window.jagents.chats.get(this.chatId));
     }
   }
 
@@ -415,9 +415,9 @@ export class ChatView {
         return this.pickModel(modelPick.dataset.modelPick);
       }
       const file = t.closest("[data-open-file]");
-      if (file) return window.relay.openPath(file.dataset.openFile);
+      if (file) return window.jagents.openPath(file.dataset.openFile);
       if (t.closest("[data-send]")) return this.send();
-      if (t.closest("[data-stop]") && this.chatId) return window.relay.chats.cancel(this.chatId);
+      if (t.closest("[data-stop]") && this.chatId) return window.jagents.chats.cancel(this.chatId);
       if (!t.closest(".news-menu")) this.closeMenus();
     });
     el.addEventListener(

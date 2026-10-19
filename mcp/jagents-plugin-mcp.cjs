@@ -1,21 +1,21 @@
 #!/usr/bin/env node
 "use strict";
 
-// Bridge for MCP servers that Relay plugins run inside the app (ctx.mcp.server
+// Bridge for MCP servers that JAgents plugins run inside the app (ctx.mcp.server
 // in a plugin's main.cjs). Each agent gets one copy of this stdio server per
-// plugin server; RELAY_SERVER names which one. Tool lists and calls go to the
-// Relay hub (loopback HTTP, bearer token from hub.json), which runs the
-// plugin's handlers. Self-contained like relay-mcp.cjs: Relay copies it to
-// ~/.relay-ade so agents keep working if the app folder moves.
+// plugin server; JAGENTS_SERVER names which one. Tool lists and calls go to the
+// JAgents hub (loopback HTTP, bearer token from hub.json), which runs the
+// plugin's handlers. Self-contained like jagents-mcp.cjs: JAgents copies it to
+// ~/.jagents so agents keep working if the app folder moves.
 
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const http = require("node:http");
 
-const HUB_FILE = process.env.RELAY_HUB_FILE || path.join(os.homedir(), ".relay-ade", "hub.json");
-const SERVER = process.env.RELAY_SERVER || "";
-const PANE_ID = process.env.RELAY_PANE_ID || "";
+const HUB_FILE = process.env.JAGENTS_HUB_FILE || path.join(os.homedir(), ".jagents", "hub.json");
+const SERVER = process.env.JAGENTS_SERVER || "";
+const PANE_ID = process.env.JAGENTS_PANE_ID || "";
 const PROTOCOLS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
 function readJson(file) {
@@ -28,7 +28,7 @@ function readJson(file) {
 
 function hubRequest(method, route, body, timeoutMs) {
   const hub = readJson(HUB_FILE);
-  if (!hub || !hub.port || !hub.token) return Promise.reject(new Error("Relay is not running. Open the Relay app, then try again."));
+  if (!hub || !hub.port || !hub.token) return Promise.reject(new Error("JAgents is not running. Open the JAgents app, then try again."));
   const payload = body ? JSON.stringify(body) : "";
   return new Promise((resolve, reject) => {
     const req = http.request(
@@ -51,13 +51,13 @@ function hubRequest(method, route, body, timeoutMs) {
           } catch {
             /* not json */
           }
-          if (res.statusCode >= 400) return reject(new Error((json && json.error) || "Relay hub error " + res.statusCode));
+          if (res.statusCode >= 400) return reject(new Error((json && json.error) || "JAgents hub error " + res.statusCode));
           resolve(json);
         });
       },
     );
-    req.on("timeout", () => req.destroy(new Error("Relay hub timed out.")));
-    req.on("error", (e) => reject(new Error(e.code === "ECONNREFUSED" ? "Relay is not running. Open the Relay app, then try again." : e.message)));
+    req.on("timeout", () => req.destroy(new Error("JAgents hub timed out.")));
+    req.on("error", (e) => reject(new Error(e.code === "ECONNREFUSED" ? "JAgents is not running. Open the JAgents app, then try again." : e.message)));
     req.end(payload);
   });
 }
@@ -101,7 +101,7 @@ async function handle(msg) {
         const info = await hubRequest("GET", base + "/tools", null, 5000);
         instructions = (info && info.description) || "";
       } catch {
-        /* Relay not running yet */
+        /* JAgents not running yet */
       }
       return send({
         jsonrpc: "2.0",
@@ -109,8 +109,8 @@ async function handle(msg) {
         result: {
           protocolVersion: PROTOCOLS.includes(asked) ? asked : PROTOCOLS[0],
           capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: SERVER || "relay-plugin", version: "1.0.0" },
-          instructions: instructions || "Tools added by a Relay plugin.",
+          serverInfo: { name: SERVER || "jagents-plugin", version: "1.0.0" },
+          instructions: instructions || "Tools added by a JAgents plugin.",
         },
       });
     }

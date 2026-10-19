@@ -1,5 +1,5 @@
 // Plugins in the window: loads each enabled plugin's style.css and renderer.js,
-// hands renderer.js the relay API (top bar buttons, sidebar sections, pane
+// hands renderer.js the jagents API (top bar buttons, sidebar sections, pane
 // types, CSS, events, storage, its main.cjs), and removes everything a plugin
 // added when it reloads or turns off. Also the Plugins panel, where the user
 // sees what agents changed and turns plugins on, off, back, or away.
@@ -22,7 +22,7 @@ function errorStack(error) {
 }
 
 function report(id, error) {
-  window.relay.plugins.report(id, { error: error ? errorStack(error) : "" }).catch(() => {});
+  window.jagents.plugins.report(id, { error: error ? errorStack(error) : "" }).catch(() => {});
   if (error) console.error("[plugin " + id + "]", error);
 }
 
@@ -69,7 +69,7 @@ function apiFor(p, storage, cleanups) {
     icon: (name, size) => iconHtml(name, size || 16),
     esc,
     store,
-    app: window.relay,
+    app: window.jagents,
     toast: (text) => toast(String(text)),
     modal: (html, opts) => {
       const m = modal(String(html || ""), { wide: Boolean(opts && opts.wide) });
@@ -96,14 +96,14 @@ function apiFor(p, storage, cleanups) {
       later(off);
       return off;
     },
-    invoke: (channel, payload) => window.relay.plugins.invoke(id, String(channel), payload),
+    invoke: (channel, payload) => window.jagents.plugins.invoke(id, String(channel), payload),
     dispose: (fn) => later(fn),
     storage: {
       get: (key, fallback) => (Object.prototype.hasOwnProperty.call(storage, key) ? storage[key] : fallback),
       set(key, value) {
         if (value === undefined || value === null) delete storage[key];
         else storage[key] = value;
-        return window.relay.plugins.storageSet(id, String(key), value === undefined ? null : value);
+        return window.jagents.plugins.storageSet(id, String(key), value === undefined ? null : value);
       },
     },
     topbar: {
@@ -195,9 +195,9 @@ async function load(p) {
       cleanups.push(() => el.remove());
     }
     if (p.hasRenderer) {
-      const storage = await window.relay.plugins.storageGet(p.id);
+      const storage = await window.jagents.plugins.storageGet(p.id);
       const mod = await import("./../" + base + "renderer.js");
-      if (typeof mod.activate !== "function") throw new Error("renderer.js must export function activate(relay).");
+      if (typeof mod.activate !== "function") throw new Error("renderer.js must export function activate(jagents).");
       const out = await mod.activate(apiFor(p, storage, cleanups));
       if (typeof out === "function") cleanups.push(out);
       if (typeof mod.deactivate === "function") cleanups.push(() => mod.deactivate());
@@ -212,7 +212,7 @@ async function load(p) {
 // plugins, unload ones that were turned off or removed.
 function sync(force) {
   syncing = syncing.then(async () => {
-    const state = await window.relay.plugins.list();
+    const state = await window.jagents.plugins.list();
     store.plugins = state;
     const want = new Map(state.plugins.filter((p) => !state.safeMode && p.enabled && (p.hasRenderer || p.hasCss)).map((p) => [p.id, p]));
     for (const id of Array.from(loaded.keys())) {
@@ -261,7 +261,7 @@ export async function openPluginPane(key, opts) {
   const k = kinds.get(key);
   const o = opts || {};
   try {
-    return await window.relay.panes.addPlugin({ kind: key, title: o.title || (k && k.def.title) || key, state: o.state || {} });
+    return await window.jagents.panes.addPlugin({ kind: key, title: o.title || (k && k.def.title) || key, state: o.state || {} });
   } catch (error) {
     toast(errorText(error));
     return null;
@@ -301,10 +301,10 @@ export class PluginPaneView {
       },
       setState(patch) {
         view.pane.state = Object.assign({}, view.pane.state, patch);
-        window.relay.panes.updatePlugin(view.pane.id, { state: view.pane.state }).catch(() => {});
+        window.jagents.panes.updatePlugin(view.pane.id, { state: view.pane.state }).catch(() => {});
       },
       setTitle(text) {
-        window.relay.panes.updatePlugin(view.pane.id, { title: String(text || "") }).catch(() => {});
+        window.jagents.panes.updatePlugin(view.pane.id, { title: String(text || "") }).catch(() => {});
       },
       visible: () => host.isConnected && !host.closest(".parked,[hidden]") && host.offsetWidth > 0 && host.offsetHeight > 0,
       el: host,
@@ -354,7 +354,7 @@ function ago(ms) {
 function pluginRow(p, safe) {
   const chips = [];
   if (p.hasRenderer || p.hasCss) chips.push('<span class="chip">' + icon("grid", 11) + "UI</span>");
-  for (const s of p.appServers) chips.push('<span class="chip hub" title="Runs inside Relay: ' + esc(s.tools.join(", ")) + '">' + icon("hub", 11) + esc(s.name) + " · " + s.tools.length + " tools</span>");
+  for (const s of p.appServers) chips.push('<span class="chip hub" title="Runs inside JAgents: ' + esc(s.tools.join(", ")) + '">' + icon("hub", 11) + esc(s.name) + " · " + s.tools.length + " tools</span>");
   for (const s of p.mcpServers) chips.push('<span class="chip hub" title="Outside MCP server every agent gets">' + icon("hub", 11) + esc(s) + "</span>");
   if (p.disableTools.length) chips.push('<span class="chip warn" title="' + esc(p.disableTools.join(", ")) + '">Blocks ' + p.disableTools.length + " tool" + (p.disableTools.length === 1 ? "" : "s") + "</span>");
   const errs = [p.errors.main && "main.cjs: " + p.errors.main, p.errors.renderer && "renderer: " + p.errors.renderer, p.errors.mcp && "MCP: " + p.errors.mcp].filter(Boolean);
@@ -394,12 +394,12 @@ function panelMarkup() {
 }
 
 async function showCode(id) {
-  const p = await window.relay.plugins.read(id);
+  const p = await window.jagents.plugins.read(id);
   const files = Object.keys(p.content);
   const m = modal(
     '<header class="modal-head">' + icon("code", 18) + "<h2>" + esc(p.name) + '</h2><span class="spacer"></span><button class="icon-btn" data-close aria-label="Close">' + icon("close", 16) + "</button></header>" +
       '<div class="modal-body"><div class="seg file-tabs">' + files.map((f, i) => '<button data-file="' + esc(f) + '"' + (i ? "" : ' class="on"') + ">" + esc(f) + "</button>").join("") + "</div>" +
-      '<pre class="code-view" data-code></pre><p class="muted small">Edit the files in the plugin folder with any editor; Relay reloads on save.</p></div>',
+      '<pre class="code-view" data-code></pre><p class="muted small">Edit the files in the plugin folder with any editor; JAgents reloads on save.</p></div>',
     { wide: true },
   );
   const show = (f) => {
@@ -414,7 +414,7 @@ async function showCode(id) {
 }
 
 export async function openPluginsPanel() {
-  store.plugins = await window.relay.plugins.list();
+  store.plugins = await window.jagents.plugins.list();
   const m = modal(panelMarkup(), { wide: true });
   m.el.classList.add("plugins-panel");
   const repaint = () => {
@@ -445,23 +445,23 @@ export async function openPluginsPanel() {
       const id = b("[data-p-toggle]").dataset.pToggle;
       const p = store.plugins.plugins.find((x) => x.id === id);
       return run(b("[data-p-toggle]"), async () => {
-        await window.relay.plugins.setEnabled(id, !p.enabled);
+        await window.jagents.plugins.setEnabled(id, !p.enabled);
         if (p.mcpServers.length || p.appServers.length || p.disableTools.length) toast("Restart open terminals so agents get the change.");
       });
     }
     if (b("[data-p-code]")) return run(null, () => showCode(b("[data-p-code]").dataset.pCode));
     if (b("[data-p-undo]")) return run(b("[data-p-undo]"), async () => {
-      await window.relay.plugins.undo(b("[data-p-undo]").dataset.pUndo);
+      await window.jagents.plugins.undo(b("[data-p-undo]").dataset.pUndo);
       toast("Put back the previous version.");
     });
-    if (b("[data-p-folder]")) return run(null, () => window.relay.plugins.openFolder(b("[data-p-folder]").dataset.pFolder));
-    if (b("[data-p-remove]")) return run(b("[data-p-remove]"), () => window.relay.plugins.remove(b("[data-p-remove]").dataset.pRemove));
+    if (b("[data-p-folder]")) return run(null, () => window.jagents.plugins.openFolder(b("[data-p-folder]").dataset.pFolder));
+    if (b("[data-p-remove]")) return run(b("[data-p-remove]"), () => window.jagents.plugins.remove(b("[data-p-remove]").dataset.pRemove));
     if (b("[data-p-new]")) return run(b("[data-p-new]"), async () => {
-      const p = await window.relay.plugins.scaffold();
-      toast("Created " + p.id + ". Edit it in its folder; Relay reloads on save.");
-      window.relay.plugins.openFolder(p.id);
+      const p = await window.jagents.plugins.scaffold();
+      toast("Created " + p.id + ". Edit it in its folder; JAgents reloads on save.");
+      window.jagents.plugins.openFolder(p.id);
     });
-    if (b("[data-p-safe-off]")) return run(b("[data-p-safe-off]"), () => window.relay.plugins.setSafeMode(false));
+    if (b("[data-p-safe-off]")) return run(b("[data-p-safe-off]"), () => window.jagents.plugins.setSafeMode(false));
   });
 }
 

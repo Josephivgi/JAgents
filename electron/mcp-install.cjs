@@ -1,19 +1,24 @@
 "use strict";
 
-// Optional global installs of the Relay MCP server into each agent's own
-// config, so agents started outside Relay can reach it too. Nothing here runs
-// unless the user presses Install in the MCP hub panel. Claude Code and Codex
-// go through their own `mcp add/remove` commands; Cursor and Gemini keep a
-// JSON file, which is merged (other servers are left alone).
+// Global installs of the JAgents MCP server into each agent's own config, so
+// agents started outside JAgents can reach it too. Claude Code and Codex go
+// through their own `mcp add/remove` commands; Cursor and Gemini keep a JSON
+// file, which is merged (other servers are left alone).
+//
+// Auto MCP (autoUpdate) runs at startup and every few minutes: it repairs
+// installs that point at an old script or node, removes the pre-rebrand
+// "relay" entries, and, when the user turned it on, installs into every
+// supported agent that is on this computer.
 
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { execFile } = require("node:child_process");
-const { findProgram, nodePath } = require("../lib/agents");
+const { findProgram, nodePath, listAcpAgents, listTerminalAgents } = require("../lib/agents");
 const { spawnArgv } = require("../lib/win-command");
 
-const NAME = "relay";
+const NAME = "jagents";
+const LEGACY = "relay";
 
 function home() {
   return os.homedir();
@@ -27,6 +32,10 @@ function codexConfigFile() {
   return path.join(process.env.CODEX_HOME || path.join(home(), ".codex"), "config.toml");
 }
 
+function claudeProgram() {
+  return findProgram("claude", [path.join(home(), ".local", "bin")]);
+}
+
 function readJson(file) {
   try {
     return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -36,9 +45,17 @@ function readJson(file) {
   }
 }
 
+function readText(file) {
+  try {
+    return fs.readFileSync(file, "utf8");
+  } catch {
+    return "";
+  }
+}
+
 function writeJsonAtomic(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = file + ".relay-" + process.pid + ".tmp";
+  const tmp = file + ".jagents-" + process.pid + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(value, null, 2));
   fs.renameSync(tmp, file);
 }
@@ -58,16 +75,41 @@ function serverCommand(scriptPath) {
   return node ? { command: node, args: [scriptPath], env: {} } : { command: process.execPath, args: [scriptPath], env: { ELECTRON_RUN_AS_NODE: "1" } };
 }
 
+// An install is current when it runs this script with the node we would pick now.
+function sameEntry(entry, script) {
+  if (!entry) return false;
+  const want = serverCommand(script);
+  const args = Array.isArray(entry.args) ? entry.args : [];
+  return path.resolve(String(entry.command || "")) === path.resolve(want.command) && args.length === 1 && path.resolve(String(args[0])) === path.resolve(script);
+}
+
+// TOML table [mcp_servers.<name>] as text, up to the next table.
+function tomlTable(text, name) {
+  const m = new RegExp("^\\s*\\[mcp_servers\\." + name + "\\]\\s*$", "m").exec(text);
+  if (!m) return null;
+  const rest = text.slice(m.index + m[0].length);
+  const next = /^\s*\[/m.exec(rest);
+  return next ? rest.slice(0, next.index) : rest;
+}
+
+function tomlMentions(table, file) {
+  const unescaped = table.replace(/\\\\/g, "\\");
+  return unescaped.includes(file);
+}
+
 function jsonTarget(id, name, fileFn, programs) {
+  const servers = () => {
+    const cfg = readJson(fileFn());
+    return (cfg && cfg.mcpServers) || {};
+  };
   return {
     id,
     name,
     available: () => Boolean(findProgram(programs)) || fs.existsSync(path.dirname(fileFn())),
     where: fileFn,
-    installed() {
-      const cfg = readJson(fileFn());
-      return Boolean(cfg && cfg.mcpServers && cfg.mcpServers[NAME]);
-    },
+    installed: () => Boolean(servers()[NAME]),
+    current: (script) => sameEntry(servers()[NAME], script),
+    legacy: () => Boolean(servers()[LEGACY]),
     async install(script) {
       const file = fileFn();
       const cfg = readJson(file) || {};
@@ -76,11 +118,12 @@ function jsonTarget(id, name, fileFn, programs) {
       cfg.mcpServers = Object.assign({}, cfg.mcpServers, { [NAME]: { command: s.command, args: s.args, env: s.env } });
       writeJsonAtomic(file, cfg);
     },
-    async uninstall() {
+    async uninstall(which) {
+      const key = which || NAME;
       const file = fileFn();
       const cfg = readJson(file);
-      if (!cfg || !cfg.mcpServers || !cfg.mcpServers[NAME]) return;
-      delete cfg.mcpServers[NAME];
+      if (!cfg || !cfg.mcpServers || !cfg.mcpServers[key]) return;
+      delete cfg.mcpServers[key];
       writeJsonAtomic(file, cfg);
     },
   };
@@ -90,26 +133,33 @@ const TARGETS = [
   {
     id: "claude",
     name: "Claude Code",
-    available: () => Boolean(findProgram("claude", [path.join(home(), ".local", "bin")])),
+    available: () => Boolean(claudeProgram()),
     where: claudeConfigFile,
     installed() {
       const cfg = readJson(claudeConfigFile());
       return Boolean(cfg && cfg.mcpServers && cfg.mcpServers[NAME]);
     },
+    current(script) {
+      const cfg = readJson(claudeConfigFile());
+      return sameEntry(cfg && cfg.mcpServers && cfg.mcpServers[NAME], script);
+    },
+    legacy() {
+      const cfg = readJson(claudeConfigFile());
+      return Boolean(cfg && cfg.mcpServers && cfg.mcpServers[LEGACY]);
+    },
     async install(script) {
       const s = serverCommand(script);
-      const claude = findProgram("claude", [path.join(home(), ".local", "bin")]);
       const envArgs = [];
       for (const [k, v] of Object.entries(s.env)) envArgs.push("-e", k + "=" + v);
       try {
-        await run(claude, ["mcp", "remove", NAME, "-s", "user"]);
+        await run(claudeProgram(), ["mcp", "remove", NAME, "-s", "user"]);
       } catch {
         /* not there yet */
       }
-      await run(claude, ["mcp", "add", NAME, "-s", "user"].concat(envArgs, ["--", s.command], s.args));
+      await run(claudeProgram(), ["mcp", "add", NAME, "-s", "user"].concat(envArgs, ["--", s.command], s.args));
     },
-    async uninstall() {
-      await run(findProgram("claude", [path.join(home(), ".local", "bin")]), ["mcp", "remove", NAME, "-s", "user"]);
+    async uninstall(which) {
+      await run(claudeProgram(), ["mcp", "remove", which || NAME, "-s", "user"]);
     },
   },
   {
@@ -117,13 +167,12 @@ const TARGETS = [
     name: "Codex",
     available: () => Boolean(findProgram("codex")),
     where: codexConfigFile,
-    installed() {
-      try {
-        return /^\s*\[mcp_servers\.relay\]\s*$/m.test(fs.readFileSync(codexConfigFile(), "utf8"));
-      } catch {
-        return false;
-      }
+    installed: () => tomlTable(readText(codexConfigFile()), NAME) !== null,
+    current(script) {
+      const table = tomlTable(readText(codexConfigFile()), NAME);
+      return table !== null && tomlMentions(table, script) && tomlMentions(table, serverCommand(script).command);
     },
+    legacy: () => tomlTable(readText(codexConfigFile()), LEGACY) !== null,
     async install(script) {
       const s = serverCommand(script);
       const envArgs = [];
@@ -135,24 +184,26 @@ const TARGETS = [
       }
       await run("codex", ["mcp", "add", NAME].concat(envArgs, ["--", s.command], s.args));
     },
-    async uninstall() {
-      await run("codex", ["mcp", "remove", NAME]);
+    async uninstall(which) {
+      await run("codex", ["mcp", "remove", which || NAME]);
     },
   },
   jsonTarget("cursor", "Cursor", () => path.join(home(), ".cursor", "mcp.json"), ["cursor-agent", "cursor"]),
   jsonTarget("gemini", "Gemini CLI", () => path.join(home(), ".gemini", "settings.json"), ["gemini"]),
 ];
 
-function status() {
+function status(script) {
   return TARGETS.map((t) => {
     let installed = false;
+    let current = false;
     let error = "";
     try {
       installed = t.installed();
+      current = installed && Boolean(script) && t.current(script);
     } catch (e) {
       error = e.message;
     }
-    return { id: t.id, name: t.name, available: t.available(), installed, where: t.where(), error };
+    return { id: t.id, name: t.name, available: t.available(), installed, current, where: t.where(), error };
   });
 }
 
@@ -160,14 +211,71 @@ async function install(id, script) {
   const t = TARGETS.find((x) => x.id === id);
   if (!t) throw new Error("Unknown agent " + id);
   await t.install(script);
-  return status();
+  return status(script);
 }
 
-async function uninstall(id) {
+async function uninstall(id, script) {
   const t = TARGETS.find((x) => x.id === id);
   if (!t) throw new Error("Unknown agent " + id);
   await t.uninstall();
-  return status();
+  return status(script);
 }
 
-module.exports = { status, install, uninstall };
+// One Auto MCP pass. Returns what it changed, for the hub panel and the log.
+let running = null;
+function autoUpdate(script, opts) {
+  if (running) return running;
+  const installMissing = Boolean(opts && opts.installMissing);
+  running = (async () => {
+    const changes = [];
+    for (const t of TARGETS) {
+      try {
+        if (!t.available()) continue;
+        if (t.legacy()) {
+          await t.uninstall(LEGACY);
+          changes.push({ id: t.id, action: "removed the old relay entry" });
+        }
+        if (t.installed()) {
+          if (!t.current(script)) {
+            await t.install(script);
+            changes.push({ id: t.id, action: "updated" });
+          }
+        } else if (installMissing) {
+          await t.install(script);
+          changes.push({ id: t.id, action: "installed" });
+        }
+      } catch (error) {
+        changes.push({ id: t.id, action: "failed", error: String(error.message || error) });
+      }
+    }
+    return { at: Date.now(), changes };
+  })().finally(() => (running = null));
+  return running;
+}
+
+// How each kind of agent gets the JAgents MCP server, for the hub panel and
+// the Help guide. "auto" means JAgents wires it up at launch with no install.
+function support() {
+  const acp = listAcpAgents();
+  const term = listTerminalAgents();
+  const t = (id) => term.find((x) => x.id === id) || { available: false };
+  const rows = [
+    { id: "claude", where: "Terminal", name: "Claude Code", how: "Per launch with --mcp-config", mode: "auto", available: t("claude").available },
+    { id: "codex", where: "Terminal", name: "Codex", how: "Per launch with -c mcp_servers overrides", mode: "auto", available: t("codex").available },
+    { id: "devin", where: "Terminal", name: "Devin CLI", how: "Per launch through .devin/mcp_config.local.json in the working folder", mode: "auto", available: t("devin-cli").available },
+    { id: "cursor", where: "Terminal", name: "Cursor Agent", how: "Through the global install in ~/.cursor/mcp.json", mode: "global", available: t("cursor-agent").available },
+  ];
+  for (const a of acp) {
+    rows.push({
+      id: a.id,
+      where: "Chat",
+      name: a.name,
+      how: a.native ? "Claude Agent SDK mcpServers, every session" : a.id === "devin" ? "ACP session plus .devin/mcp_config.local.json" : "ACP session/new mcpServers, every session",
+      mode: "auto",
+      available: a.available,
+    });
+  }
+  return rows;
+}
+
+module.exports = { status, install, uninstall, autoUpdate, support, NAME };

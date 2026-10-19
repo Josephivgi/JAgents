@@ -1,21 +1,21 @@
 #!/usr/bin/env node
 "use strict";
 
-// Drives the running Relay window over the Chrome DevTools Protocol for
+// Drives the running JAgents window over the Chrome DevTools Protocol for
 // verification: evaluate JS in the page or save a screenshot of the window.
-//   node scripts/cdp.cjs eval "<js>"        (port from RELAY_CDP_PORT, default 9333)
+//   node scripts/cdp.cjs eval "<js>"        (port from JAGENTS_CDP_PORT, default 9333)
 //   node scripts/cdp.cjs shot out.png
-// Start Relay with: npx electron . --remote-debugging-port=9333
+// Start JAgents with: npx electron . --remote-debugging-port=9333
 
 const fs = require("node:fs");
 
-const port = Number(process.env.RELAY_CDP_PORT || 9333);
+const port = Number(process.env.JAGENTS_CDP_PORT || 9333);
 
 async function target() {
   const res = await fetch("http://127.0.0.1:" + port + "/json/list");
   const list = await res.json();
   const page = list.find((t) => t.type === "page" && t.url.startsWith("app://shell"));
-  if (!page) throw new Error("Relay window not found on port " + port);
+  if (!page) throw new Error("JAgents window not found on port " + port);
   return page.webSocketDebuggerUrl;
 }
 

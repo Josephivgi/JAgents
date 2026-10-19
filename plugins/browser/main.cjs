@@ -39,7 +39,7 @@ exports.activate = (ctx) => {
   function ensure(id, url) {
     const existing = tabs.get(id);
     if (existing) return existing;
-    const view = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, partition: "persist:relay-browser" } });
+    const view = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, partition: "persist:jagents-browser" } });
     view.setBackgroundColor("#ffffff");
     view.setVisible(false);
     const t = { id, view, visible: false };
@@ -158,7 +158,7 @@ exports.activate = (ctx) => {
     const first = tabs.values().next().value;
     if (first) return first;
     const opened = new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("Relay did not open a browser pane. Is the Relay window open?")), 8000);
+      const timer = setTimeout(() => reject(new Error("JAgents did not open a browser pane. Is the JAgents window open?")), 8000);
       attachWaiters.push((id) => {
         clearTimeout(timer);
         resolve(tabs.get(id));
@@ -174,12 +174,12 @@ exports.activate = (ctx) => {
     return t.view.webContents.executeJavaScript(script, true);
   }
 
-  const srv = ctx.mcp.server("browser", { description: "Relay's built-in browser. The user sees the same page in a browser pane. Use browser_open, then browser_read or browser_screenshot, browser_click and browser_type." });
+  const srv = ctx.mcp.server("browser", { description: "JAgents's built-in browser. The user sees the same page in a browser pane. Use browser_open, then browser_read or browser_screenshot, browser_click and browser_type." });
   const paneProp = { pane: { type: "string", description: "Browser pane id from browser_tabs; default is the one used last" } };
 
   srv.tool({
     name: "browser_open",
-    description: "Open a URL (or search words) in Relay's browser pane, opening a pane if none is open. Waits for the page to load.",
+    description: "Open a URL (or search words) in JAgents's browser pane, opening a pane if none is open. Waits for the page to load.",
     inputSchema: { type: "object", properties: Object.assign({ url: { type: "string" } }, paneProp), required: ["url"] },
     handler: async (args) => {
       const url = normalizeUrl(args.url);
@@ -332,7 +332,7 @@ exports.activate = (ctx) => {
 
   srv.tool({
     name: "browser_tabs",
-    description: "List Relay's browser panes with their URL and title.",
+    description: "List JAgents's browser panes with their URL and title.",
     inputSchema: { type: "object", properties: {} },
     handler: async () => ({ active, tabs: Array.from(tabs.keys()).map(state) }),
   });

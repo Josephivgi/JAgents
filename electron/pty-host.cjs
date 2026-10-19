@@ -106,7 +106,7 @@ function createPtyHost({ emit }) {
     const t = get(id);
     if (t.exited) throw new Error("That terminal has exited.");
     const menu = blockingMenu(id);
-    if (menu) throw new Error('That terminal is showing a menu ("' + menu.slice(0, 80) + '"), so nothing was typed. Ask the user to answer it in Relay, then try again.');
+    if (menu) throw new Error('That terminal is showing a menu ("' + menu.slice(0, 80) + '"), so nothing was typed. Ask the user to answer it in JAgents, then try again.');
     const body = String(text).replace(/\r\n/g, "\n");
     t.proc.write("\x1b[200~" + body + "\x1b[201~");
     await new Promise((r) => setTimeout(r, 180));

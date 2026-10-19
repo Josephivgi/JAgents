@@ -11,6 +11,8 @@ const { createWorkspace } = require("./workspace.cjs");
 const { createHub, HOME_DIR } = require("./hub.cjs");
 const { createPluginManager } = require("./plugins.cjs");
 const mcpInstall = require("./mcp-install.cjs");
+const { migrateLegacyData } = require("../lib/migrate");
+const { createUpdater } = require("../lib/updater");
 
 const APP_ROOT = path.join(__dirname, "..");
 const RENDERER = path.join(APP_ROOT, "renderer");
@@ -21,7 +23,7 @@ const VENDOR = {
 };
 const SHELL_URL = "app://shell/index.html";
 
-// Relay started from inside a Claude Code session (a terminal or the desktop
+// JAgents started from inside a Claude Code session (a terminal or the desktop
 // app) inherits that session's markers; agents launched here would think they
 // are its children (no transcript saving, the host's proxy and socket). Drop them.
 if (process.env.CLAUDECODE || process.env.CLAUDE_CODE_ENTRYPOINT) {
@@ -30,10 +32,12 @@ if (process.env.CLAUDECODE || process.env.CLAUDE_CODE_ENTRYPOINT) {
   }
 }
 
-app.setName("Relay");
+app.setName("JAgents");
 // Some sandboxed or remote sessions crash the GPU process; this falls back to software rendering.
-if (process.env.RELAY_DISABLE_GPU === "1") app.disableHardwareAcceleration();
-const DATA_ROOT = process.env.RELAY_DATA_ROOT ? path.resolve(process.env.RELAY_DATA_ROOT) : path.join(app.getPath("appData"), "Relay ADE");
+if (process.env.JAGENTS_DISABLE_GPU === "1") app.disableHardwareAcceleration();
+const DATA_ROOT = process.env.JAGENTS_DATA_ROOT ? path.resolve(process.env.JAGENTS_DATA_ROOT) : path.join(app.getPath("appData"), "JAgents");
+// Before the rebrand the data folder was "Relay ADE"; copy it once.
+const LEGACY_ROOT = process.env.JAGENTS_DATA_ROOT ? "" : path.join(app.getPath("appData"), "Relay ADE");
 app.setPath("userData", DATA_ROOT);
 
 protocol.registerSchemesAsPrivileged([{ scheme: "app", privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
@@ -52,6 +56,8 @@ let workspace = null;
 let hub = null;
 let plugins = null;
 let mainWindow = null;
+let updater = null;
+let autoMcp = { at: 0, changes: [], running: false };
 
 function broadcast(type, payload) {
   for (const win of BrowserWindow.getAllWindows()) if (!win.isDestroyed()) win.webContents.send("app-event", { type, payload });
@@ -102,7 +108,7 @@ function createWindow() {
     height: 900,
     minWidth: 960,
     minHeight: 600,
-    title: "Relay",
+    title: "JAgents",
     icon: path.join(APP_ROOT, "build", process.platform === "win32" ? "icon.ico" : "icon.png"),
     backgroundColor: theme() === "dark" ? "#16181d" : "#f5f6f8",
     autoHideMenuBar: true,
@@ -134,13 +140,13 @@ function handle(channel, fn) {
 
 function notify(text) {
   broadcast("toast", { text });
-  if (mainWindow && !mainWindow.isFocused() && Notification.isSupported()) new Notification({ title: "Relay", body: text }).show();
+  if (mainWindow && !mainWindow.isFocused() && Notification.isSupported()) new Notification({ title: "JAgents", body: text }).show();
 }
 
 function registerIpc() {
-  handle("app-info", () => ({ dataRoot: DATA_ROOT, hubDir: HOME_DIR, theme: theme(), cwd: workspace.cwdDefault(), hubAttach: workspace.hubOn(), hubChosen: db.getSetting("hub.chosen", false), mode: db.getSetting("mode", "code"), layout: db.getSetting("layout", "grid"), threadCurrent: db.getSetting("thread.current", ""), platform: process.platform }));
+  handle("app-info", () => ({ dataRoot: DATA_ROOT, hubDir: HOME_DIR, theme: theme(), cwd: workspace.cwdDefault(), hubAttach: workspace.hubOn(), hubChosen: db.getSetting("hub.chosen", false), mode: db.getSetting("mode", "code"), version: updater.state().current, mcpAutoUpdate: db.getSetting("mcp.autoUpdate", true), mcpAutoInstall: db.getSetting("mcp.autoInstall", false), layout: db.getSetting("layout", "grid"), threadCurrent: db.getSetting("thread.current", ""), platform: process.platform }));
   handle("set-setting", (key, value) => {
-    const allowed = ["theme", "mode", "layout", "hub.attach", "hub.chosen", "thread.current", "ui.sidebar"];
+    const allowed = ["theme", "mode", "layout", "hub.attach", "hub.chosen", "thread.current", "ui.sidebar", "mcp.autoUpdate", "mcp.autoInstall", "help.section"];
     if (!allowed.includes(key)) throw new Error("Unknown setting " + key);
     db.setSetting(key, value);
     return true;
@@ -183,7 +189,7 @@ function registerIpc() {
   handle("chat-set-model", (id, modelId) => acp.setModel(id, modelId));
   handle("chat-handoff", (id, harnessId) => acp.handoff(id, harnessId));
   handle("chat-delete", async (id) => {
-    const res = await dialog.showMessageBox(mainWindow, { type: "warning", buttons: ["Delete thread", "Cancel"], defaultId: 1, cancelId: 1, message: "Delete this thread?", detail: "Its transcript is removed from Relay. This cannot be undone.", noLink: true });
+    const res = await dialog.showMessageBox(mainWindow, { type: "warning", buttons: ["Delete thread", "Cancel"], defaultId: 1, cancelId: 1, message: "Delete this thread?", detail: "Its transcript is removed from JAgents. This cannot be undone.", noLink: true });
     if (res.response !== 0) return false;
     const pane = workspace.paneForChat(id);
     if (pane) workspace.removePane(pane.id);
@@ -216,7 +222,7 @@ function registerIpc() {
   handle("plugins-invoke", (id, channel, payload) => plugins.invoke(id, channel, payload));
   handle("plugins-safe", (on) => plugins.setSafeMode(on));
   handle("plugins-open-folder", (id) => shell.openPath(id ? path.join(plugins.dir, String(id).replace(/[^a-z0-9-]/g, "")) : plugins.dir));
-  // Plugin storage lives in relay.db, one settings row per plugin.
+  // Plugin storage lives in jagents.db, one settings row per plugin.
   handle("plugins-storage-get", (id) => db.getSetting("plugin-store:" + String(id), {}) || {});
   handle("plugins-storage-set", (id, key, value) => {
     const k = "plugin-store:" + String(id);
@@ -229,16 +235,55 @@ function registerIpc() {
   handle("pane-add-plugin", (opts) => workspace.addPluginPane(opts));
   handle("pane-plugin-update", (id, patch) => workspace.updatePluginPane(id, patch));
 
-  handle("mcp-status", () => mcpInstall.status());
+  handle("mcp-status", () => mcpInstall.status(hub.files.script));
   handle("mcp-install", (id) => mcpInstall.install(id, hub.files.script));
-  handle("mcp-uninstall", (id) => mcpInstall.uninstall(id));
+  handle("mcp-uninstall", (id) => mcpInstall.uninstall(id, hub.files.script));
+  handle("mcp-support", () => mcpInstall.support());
+  handle("mcp-auto-state", () => autoMcp);
+  handle("mcp-auto-run", () => runAutoMcp(true));
+  handle("hub-tools", () => ({ server: mcpInstall.NAME, tools: hub.tools() }));
+
+  handle("update-state", () => updater.state());
+  handle("update-check", () => updater.check());
+  handle("update-apply", () => updater.apply());
+  handle("app-restart", () => {
+    app.relaunch();
+    app.quit();
+    return true;
+  });
+}
+
+// Auto MCP: keep global installs pointing at this build's script, drop the
+// old relay entries, and (when turned on) install into every supported agent.
+async function runAutoMcp(force) {
+  if (!force && !db.getSetting("mcp.autoUpdate", true)) return autoMcp;
+  autoMcp = Object.assign({}, autoMcp, { running: true });
+  broadcast("mcp-auto", autoMcp);
+  try {
+    const res = await mcpInstall.autoUpdate(hub.files.script, { installMissing: Boolean(db.getSetting("mcp.autoInstall", false)) });
+    autoMcp = { at: res.at, changes: res.changes, running: false };
+    const done = res.changes.filter((c) => c.action !== "failed");
+    if (done.length) notify("Auto MCP " + done.map((c) => c.action + " " + c.id).join(", ") + ".");
+  } catch (error) {
+    autoMcp = { at: Date.now(), changes: [{ id: "all", action: "failed", error: String(error.message || error) }], running: false };
+  }
+  broadcast("mcp-auto", autoMcp);
+  return autoMcp;
 }
 
 app.whenReady().then(async () => {
+  if (LEGACY_ROOT) {
+    try {
+      if (migrateLegacyData(LEGACY_ROOT, DATA_ROOT)) console.log("Copied Relay ADE data into " + DATA_ROOT);
+    } catch (error) {
+      console.error("Could not copy Relay ADE data: " + error.message);
+    }
+  }
   db = openDb(DATA_ROOT);
+  updater = createUpdater({ appRoot: APP_ROOT, emit: broadcast });
   registerProtocol();
   ptyHost = createPtyHost({ emit: broadcast });
-  const hubFiles = { hub: path.join(HOME_DIR, "hub.json"), script: path.join(HOME_DIR, "relay-mcp.cjs"), pluginScript: path.join(HOME_DIR, "relay-plugin-mcp.cjs") };
+  const hubFiles = { hub: path.join(HOME_DIR, "hub.json"), script: path.join(HOME_DIR, "jagents-mcp.cjs"), pluginScript: path.join(HOME_DIR, "jagents-plugin-mcp.cjs") };
   plugins = createPluginManager({ dataRoot: DATA_ROOT, db, emit: broadcast, notify, log: (t) => console.log(t), bundledDir: path.join(APP_ROOT, "plugins"), getWindow: () => mainWindow });
   let ws = null;
   acp = createAcpHost({
@@ -246,21 +291,17 @@ app.whenReady().then(async () => {
     db,
     emit: broadcast,
     defaultCwd: () => (ws ? ws.cwdDefault() : require("node:os").homedir()),
-    // Chats always get the relay server when the hub is on; subagents need it
-    // to report back, and a chat whose parent spawned it implies the hub is on.
-    // Plugin MCP servers go to every chat.
-    mcpEntryFor: (chatId) => {
-      const chat = db.getChat(chatId);
-      return ws ? ws.mcpEntries(chatId, ws.hubOn() || Boolean(chat && chat.parentId)) : [];
-    },
+    // ACP and Claude SDK chats always get the jagents server (and plugin
+    // servers); the hub switch only governs terminals.
+    mcpEntryFor: (chatId) => (ws ? ws.mcpEntries(chatId, true) : []),
     disallowedFor: () => (ws ? ws.claudeDisallowed() : []),
     contextFor: (chatId) => {
       const chat = db.getChat(chatId);
       const handleName = chat ? chat.handle : "this agent";
-      const base = "You are " + handleName + ", running in the Relay ADE next to other coding agents. Your working folder is " + ((chat && chat.cwd) || "") + ".";
+      const base = "You are " + handleName + ", running in JAgents next to other coding agents. Your working folder is " + ((chat && chat.cwd) || "") + ".";
       const parent = chat && chat.parentId ? ws.findAgent(chat.parentId) : null;
       const sub = parent ? " You are a subagent started by " + parent.handle + "; finish the task, then reply with a short, complete summary of what you did and found. Your final message is returned to " + parent.handle + "." : "";
-      const tools = ws && (ws.hubOn() || (chat && chat.parentId)) ? " The relay MCP tools (list_agents, send_message, read_agent, spawn_subagent, wait_for_agent, handoff_context) let you work with the other agents." : "";
+      const tools = ws ? " The jagents MCP tools (list_agents, send_message, read_agent, spawn_subagent, wait_for_agent, handoff_context) let you work with the other agents." : "";
       return base + sub + tools;
     },
   });
@@ -272,6 +313,10 @@ app.whenReady().then(async () => {
   workspace.launchRestored();
   registerIpc();
   createWindow();
+  runAutoMcp(false);
+  setInterval(() => runAutoMcp(false), 10 * 60 * 1000);
+  setTimeout(() => updater.check(), 8000);
+  setInterval(() => updater.check(), 6 * 60 * 60 * 1000);
 });
 
 app.on("second-instance", () => {

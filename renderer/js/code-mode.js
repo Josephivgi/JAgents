@@ -25,7 +25,7 @@ export function notePtyData(id) {
 
 export function setLayout(next) {
   layout = next;
-  window.relay.setSetting("layout", next);
+  window.jagents.setSetting("layout", next);
   arrange();
 }
 
@@ -99,7 +99,7 @@ function headMarkup(entry) {
     '<span class="pane-handle">' + esc(p.handle || "") + "</span>" +
     '<span class="pane-title" title="' + esc(p.title) + '">' + esc(p.kind === "terminal" ? p.name : p.title || p.name) + "</span>" +
     (parent ? '<span class="chip sub" title="Subagent of ' + esc(parent.handle) + '">' + icon("subagent", 11) + esc(parent.handle) + "</span>" : "") +
-    (p.kind === "terminal" && p.attached ? '<span class="chip hub" title="Connected to the Relay MCP hub">' + icon("hub", 11) + "MCP</span>" : "") +
+    (p.kind === "terminal" && p.attached ? '<span class="chip hub" title="Connected to the JAgents MCP hub">' + icon("hub", 11) + "MCP</span>" : "") +
     '<span class="status-dot ' + st.tone + '" title="' + esc(st.text) + '"></span><span class="pane-status">' + esc(st.text) + "</span>" +
     '<span class="spacer"></span>' +
     '<button class="icon-btn" data-act="handoff" title="Hand off context">' + icon("handoff", 15) + "</button>" +
@@ -190,7 +190,7 @@ function mount(pane) {
     const b = ids.indexOf(pane.id);
     [ids[a], ids[b]] = [ids[b], ids[a]];
     store.panes.sort((x, y) => ids.indexOf(x.id) - ids.indexOf(y.id));
-    window.relay.panes.reorder(ids);
+    window.jagents.panes.reorder(ids);
     arrange();
   });
   return entry;
@@ -207,7 +207,7 @@ function setActive(id) {
 
 async function closePane(id) {
   try {
-    const ok = await window.relay.panes.remove(id);
+    const ok = await window.jagents.panes.remove(id);
     if (ok === false) return;
   } catch (error) {
     toast(errorText(error));
@@ -259,7 +259,7 @@ export function focusAgent(ref) {
 
 export async function addTerminal(provider) {
   try {
-    const pane = await window.relay.panes.addTerminal({ provider });
+    const pane = await window.jagents.panes.addTerminal({ provider });
     setTimeout(() => focusAgent(pane.id), 200);
   } catch (error) {
     toast(errorText(error));
@@ -268,7 +268,7 @@ export async function addTerminal(provider) {
 
 export async function addChat(harnessId, chatId) {
   try {
-    const pane = await window.relay.panes.addChat(chatId ? { chatId } : { harnessId });
+    const pane = await window.jagents.panes.addChat(chatId ? { chatId } : { harnessId });
     setTimeout(() => focusAgent(pane.id), 200);
     return pane;
   } catch (error) {

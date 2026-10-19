@@ -1,16 +1,16 @@
 "use strict";
 
-// Relay plugins: folders under <dataRoot>/plugins/<id> that change the app.
+// JAgents plugins: folders under <dataRoot>/plugins/<id> that change the app.
 //   plugin.json  name, description, version, plus what agents get:
 //                mcpServers (outside MCP servers every agent gets by default)
 //                disableTools (MCP or built-in tools agents may not use)
-//   renderer.js  ES module run in the window: export function activate(relay) {}
+//   renderer.js  ES module run in the window: export function activate(jagents) {}
 //   style.css    injected into the window
 //   main.cjs     CommonJS in the main process (full Node and Electron); it can
-//                run MCP servers inside Relay that every agent gets.
-// Agents write plugins through the relay MCP tools (hub.cjs), the user through
+//                run MCP servers inside JAgents that every agent gets.
+// Agents write plugins through the jagents MCP tools (hub.cjs), the user through
 // the Plugins panel or any editor; every change reloads live. On/off state, who
-// changed a plugin last, and load errors live in relay.db; each change first
+// changed a plugin last, and load errors live in jagents.db; each change first
 // snapshots the old files under plugins/.history so it can be undone. Plugins
 // shipped with the app (<app>/plugins) are copied in once on first run.
 
@@ -19,7 +19,7 @@ const path = require("node:path");
 
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const SERVER_RE = /^[a-zA-Z0-9_-]{1,40}$/;
-const RESERVED_SERVERS = ["relay"];
+const RESERVED_SERVERS = ["jagents", "relay"];
 const FILE_MAX = 512 * 1024;
 const HISTORY_KEEP = 20;
 
@@ -30,11 +30,11 @@ function moveDir(from, to) {
   fs.rmSync(from, { recursive: true, force: true });
 }
 
-const DOCS = `# Relay plugins
+const DOCS = `# JAgents plugins
 
-A plugin is a folder that changes the Relay app: its UI, what the agents can
+A plugin is a folder that changes the JAgents app: its UI, what the agents can
 do, and new features (a built-in browser is one). Agents create and edit
-plugins with the relay MCP tools (plugin_docs, list_plugins, read_plugin,
+plugins with the jagents MCP tools (plugin_docs, list_plugins, read_plugin,
 write_plugin, set_plugin_enabled, undo_plugin, delete_plugin). The user sees
 and controls them in the Plugins panel (bottom of the sidebar). Every
 change reloads live and keeps the previous version so it can be undone.
@@ -47,17 +47,17 @@ change reloads live and keeps the previous version so it can be undone.
       "description": "One sentence for the Plugins panel",
       "version": "1.0.0",
       "mcpServers": { "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"], "env": {} } },
-      "disableTools": ["relay.spawn_subagent", "github.delete_repository", "WebFetch"]
+      "disableTools": ["jagents.spawn_subagent", "github.delete_repository", "WebFetch"]
     }
-  mcpServers: outside MCP servers that every agent Relay starts gets by default
+  mcpServers: outside MCP servers that every agent JAgents starts gets by default
     (Claude Code and Codex terminals, Claude Code chats, ACP chats).
   disableTools: tools agents may not use. "server.tool" blocks one MCP tool
-    (relay.* tools are removed from the relay server itself); a bare name like
+    (jagents.* tools are removed from the jagents server itself); a bare name like
     "WebFetch" blocks a Claude Code built-in tool.
   Agents pick up MCP changes when they start, so running terminals need Restart.
-- renderer.js: ES module in the Relay window.
-    export function activate(relay) { ...; return () => { /* optional cleanup */ } }
-- style.css: CSS for the window. Relay's colors are CSS variables that switch with
+- renderer.js: ES module in the JAgents window.
+    export function activate(jagents) { ...; return () => { /* optional cleanup */ } }
+- style.css: CSS for the window. JAgents's colors are CSS variables that switch with
     the theme: --canvas (page), --surface (panels), --well (inputs, hover), --line,
     --ink (text), --muted, --accent, --accent-ink (text on accent), --accent-soft,
     --ok, --warn, --danger; also --font, --mono and --radius. Use them so the
@@ -66,34 +66,34 @@ change reloads live and keeps the previous version so it can be undone.
     exports.activate = (ctx) => { ...; return () => {} }
 - Any other files (images, data). Renderer code can load them by relative URL.
 
-## Renderer API (the relay argument of activate)
+## Renderer API (the jagents argument of activate)
 
 Everything you add is removed automatically when the plugin reloads or is turned off.
 
-- relay.topbar.button({ icon, label, title, onClick }): a top bar button (next to the MCP hub).
+- jagents.topbar.button({ icon, label, title, onClick }): a top bar button (next to the MCP hub).
     icon is an icon name (plus, chat, terminal, grid, hub, sun, moon, restart,
     handoff, folder, search, close, puzzle, globe, back, next, external, code, undo)
     or an <svg> string.
-- relay.sidebar.section({ title, render(el) }): a section in the Code mode sidebar.
-    relay.sidebar.refresh() renders again.
-- relay.panes.register(kind, { title, icon, mount(el, pane) }): a new pane type for
+- jagents.sidebar.section({ title, render(el) }): a section in the Code mode sidebar.
+    jagents.sidebar.refresh() renders again.
+- jagents.panes.register(kind, { title, icon, mount(el, pane) }): a new pane type for
     Code mode, listed in the + menu. mount may return a cleanup function.
     pane.id, pane.state (saved per pane), pane.setState(obj), pane.setTitle(text),
     pane.visible() (false while the pane is parked or covered by a menu).
-- relay.panes.open(kind, { title, state }): open a pane of a registered kind.
-- relay.css(text): add CSS.
-- relay.on(type, fn): app events: pty-data {id, data}, pty-exit, acp-state,
+- jagents.panes.open(kind, { title, state }): open a pane of a registered kind.
+- jagents.css(text): add CSS.
+- jagents.on(type, fn): app events: pty-data {id, data}, pty-exit, acp-state,
     panes-changed, chats-changed, hub-activity, theme, overlay {open} (a menu or
     dialog opened or closed over the panes), layout (panes moved or resized).
-- relay.toast(text), relay.modal(html, { width }) returns { el, close }.
-- relay.icon(name, size), relay.esc(text) (HTML-escape).
-- relay.storage.get(key, fallback), relay.storage.set(key, value): saved in relay.db.
-- relay.invoke(channel, payload): call ctx.handle(channel) in this plugin's main.cjs.
-- relay.onMessage(channel, fn): messages from ctx.send in main.cjs.
-- relay.app: the Relay bridge (panes, chats, agents, pty, hub), e.g.
-    relay.app.panes.addTerminal({ provider: "claude" }), relay.app.pty.write(id, text).
-- relay.store: live state (store.panes, store.chats, store.hubAgents, store.info).
-- relay.dispose(fn): run fn when the plugin unloads.
+- jagents.toast(text), jagents.modal(html, { width }) returns { el, close }.
+- jagents.icon(name, size), jagents.esc(text) (HTML-escape).
+- jagents.storage.get(key, fallback), jagents.storage.set(key, value): saved in jagents.db.
+- jagents.invoke(channel, payload): call ctx.handle(channel) in this plugin's main.cjs.
+- jagents.onMessage(channel, fn): messages from ctx.send in main.cjs.
+- jagents.app: the JAgents bridge (panes, chats, agents, pty, hub), e.g.
+    jagents.app.panes.addTerminal({ provider: "claude" }), jagents.app.pty.write(id, text).
+- jagents.store: live state (store.panes, store.chats, store.hubAgents, store.info).
+- jagents.dispose(fn): run fn when the plugin unloads.
 
 The window blocks remote scripts, frames and network requests. Show web pages
 with an Electron WebContentsView from main.cjs (see the built-in browser plugin)
@@ -101,23 +101,23 @@ and do network work in main.cjs.
 
 ## Main API (the ctx argument of activate in main.cjs)
 
-- ctx.mcp.server(name, { description }): an MCP server that runs inside Relay.
-    Every agent Relay starts gets it by default, as the MCP server "name".
+- ctx.mcp.server(name, { description }): an MCP server that runs inside JAgents.
+    Every agent JAgents starts gets it by default, as the MCP server "name".
     Returns { tool({ name, description, inputSchema, handler(args, caller) }) }.
     handler returns any JSON value or a promise; caller is the agent ({handle, kind, ...}).
-- ctx.handle(channel, fn(payload)): answer relay.invoke from the renderer.
-- ctx.send(channel, payload): reach relay.onMessage in the renderer.
-- ctx.window(): the Relay BrowserWindow. require("electron") works too.
-- ctx.hub(toolName, args): call a relay tool as the app (list_agents, send_message, ...).
-- ctx.notify(text): a toast. ctx.log(...): Relay's log.
+- ctx.handle(channel, fn(payload)): answer jagents.invoke from the renderer.
+- ctx.send(channel, payload): reach jagents.onMessage in the renderer.
+- ctx.window(): the JAgents BrowserWindow. require("electron") works too.
+- ctx.hub(toolName, args): call a jagents tool as the app (list_agents, send_message, ...).
+- ctx.notify(text): a toast. ctx.log(...): JAgents's log.
 - ctx.dir: this plugin's folder. ctx.dataDir: a folder for its own files.
 - ctx.dispose(fn): run fn when the plugin unloads.
 
 ## Example: a notes pane
 
 renderer.js:
-    export function activate(relay) {
-      relay.panes.register("notes", {
+    export function activate(jagents) {
+      jagents.panes.register("notes", {
         title: "Notes",
         icon: "chat",
         mount(el, pane) {
@@ -132,7 +132,7 @@ style.css:
     .notes-box { width: 100%; height: 100%; border: 0; resize: none; padding: 12px;
       background: var(--surface); color: var(--ink); font: 14px/1.5 var(--font); }
 
-## Example: an MCP server inside Relay (main.cjs)
+## Example: an MCP server inside JAgents (main.cjs)
 
     exports.activate = (ctx) => {
       const srv = ctx.mcp.server("clock", { description: "Time helpers" });
@@ -171,7 +171,7 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
   }
 
   function safeMode() {
-    return process.env.RELAY_SAFE_MODE === "1" || Boolean(db.getSetting("plugins.safe", false));
+    return process.env.JAGENTS_SAFE_MODE === "1" || Boolean(db.getSetting("plugins.safe", false));
   }
 
   function checkId(id) {
@@ -315,7 +315,7 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
 
   // ---- what agents get: MCP servers and blocked tools --------------------
 
-  // Every enabled plugin's outside servers, servers running inside Relay, and
+  // Every enabled plugin's outside servers, servers running inside JAgents, and
   // blocked tools. Server names are unique; the first plugin to claim one wins.
   function agentMcp() {
     const taken = new Set(RESERVED_SERVERS);
@@ -365,7 +365,7 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
 
   function appServerTools(name) {
     const srv = appServer(name);
-    if (!srv) throw new Error("No MCP server " + name + " is running in Relay. Its plugin may be off.");
+    if (!srv) throw new Error("No MCP server " + name + " is running in JAgents. Its plugin may be off.");
     const off = new Set(agentMcp().disabled);
     return {
       description: srv.description,
@@ -377,10 +377,10 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
 
   async function callAppServer(name, tool, args, caller) {
     const srv = appServer(name);
-    if (!srv) throw new Error("No MCP server " + name + " is running in Relay. Its plugin may be off.");
+    if (!srv) throw new Error("No MCP server " + name + " is running in JAgents. Its plugin may be off.");
     const t = srv.tools.get(String(tool));
     if (!t) throw new Error("MCP server " + name + " has no tool " + tool + ".");
-    if (agentMcp().disabled.includes(name + "." + t.name)) throw new Error(name + "." + t.name + " is turned off by a Relay plugin.");
+    if (agentMcp().disabled.includes(name + "." + t.name)) throw new Error(name + "." + t.name + " is turned off by a JAgents plugin.");
     return t.handler(args || {}, caller);
   }
 
@@ -423,7 +423,7 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
       mcp: {
         server(name, opts) {
           const n = String(name || "");
-          if (!SERVER_RE.test(n) || RESERVED_SERVERS.includes(n)) throw new Error("MCP server names are letters, digits, _ and - (and not relay): " + JSON.stringify(name));
+          if (!SERVER_RE.test(n) || RESERVED_SERVERS.includes(n)) throw new Error("MCP server names are letters, digits, _ and - (and not jagents): " + JSON.stringify(name));
           const srv = { name: n, description: String((opts && opts.description) || ""), tools: new Map() };
           entry.servers.set(n, srv);
           return {
@@ -590,14 +590,14 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
       id,
       {
         name: "My plugin",
-        description: "A starting point. Edit renderer.js and style.css; Relay reloads on save.",
+        description: "A starting point. Edit renderer.js and style.css; JAgents reloads on save.",
         files: {
           "renderer.js":
-            "// Runs in the Relay window. README.md in the plugins folder has the full API.\n" +
-            "export function activate(relay) {\n" +
-            '  relay.topbar.button({ icon: "puzzle", title: "My plugin", onClick: () => relay.toast("Hello from my plugin") });\n' +
+            "// Runs in the JAgents window. README.md in the plugins folder has the full API.\n" +
+            "export function activate(jagents) {\n" +
+            '  jagents.topbar.button({ icon: "puzzle", title: "My plugin", onClick: () => jagents.toast("Hello from my plugin") });\n' +
             "}\n",
-          "style.css": "/* Plugin styles. Relay's colors are CSS variables like var(--accent). */\n",
+          "style.css": "/* Plugin styles. JAgents's colors are CSS variables like var(--accent). */\n",
         },
       },
       "you",
@@ -613,7 +613,7 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
     return list();
   }
 
-  // Plugins shipped with Relay are copied in once; after that they are the
+  // Plugins shipped with JAgents are copied in once; after that they are the
   // user's to change or delete, and a deleted one does not come back.
   function seedBundled() {
     if (!bundledDir || !fs.existsSync(bundledDir)) return;
@@ -623,14 +623,14 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
       const dest = path.join(dir, e.name);
       if (!fs.existsSync(dest)) {
         fs.cpSync(path.join(bundledDir, e.name), dest, { recursive: true });
-        touch(e.name, "Relay", { enabled: true });
+        touch(e.name, "JAgents", { enabled: true });
       }
       seeded.add(e.name);
     }
     db.setSetting("plugins.seeded", Array.from(seeded));
   }
 
-  // Edits made outside Relay (an editor, an agent's own file tools) reload too.
+  // Edits made outside JAgents (an editor, an agent's own file tools) reload too.
   function watch() {
     const timers = new Map();
     try {

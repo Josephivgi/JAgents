@@ -31,14 +31,14 @@ export function fire(type, payload) {
 }
 
 export async function refreshAgents() {
-  const out = await window.relay.agents.list();
+  const out = await window.jagents.agents.list();
   store.acpAgents = out.acp;
   store.terminalAgents = out.terminal;
   fire("agents", store);
 }
 
 export async function refreshChats() {
-  store.chats = await window.relay.chats.list();
+  store.chats = await window.jagents.chats.list();
   fire("chats", store.chats);
 }
 
@@ -56,7 +56,7 @@ export async function refreshModelInfo(agentId) {
     const cached = store.modelCache[agentId];
     const hasModels = cached && cached.models && cached.models.availableModels && cached.models.availableModels.length;
     const agent = store.acpAgents.find((a) => a.id === agentId);
-    const info = agent && agent.available && !hasModels ? await window.relay.agents.probe(agentId) : await window.relay.agents.modelInfo(agentId);
+    const info = agent && agent.available && !hasModels ? await window.jagents.agents.probe(agentId) : await window.jagents.agents.modelInfo(agentId);
     mergeModelInfo(agentId, info);
     fire("models", agentId);
   } catch {

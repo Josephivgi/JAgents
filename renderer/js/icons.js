@@ -34,7 +34,7 @@ function fill(d, color) {
 }
 
 const GLYPHS = {
-  // Relay glyphs.
+  // JAgents glyphs.
   terminal: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.4" fill="none" stroke="currentColor" stroke-width="1.7"/>' + stroke("m7.6 9.6 2.7 2.4-2.7 2.4M12.4 15h4.2"),
   chat: stroke("M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8.5a1.5 1.5 0 0 1-1.5 1.5H10l-4.5 3.5V17H5a1.5 1.5 0 0 1-1.5-1.5V7A1.5 1.5 0 0 1 5 5.5Z", 1.6),
   grid: '<rect x="4" y="4" width="7" height="7" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="13" y="4" width="7" height="7" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="4" y="13" width="7" height="7" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="13" y="13" width="7" height="7" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"/>',
@@ -70,6 +70,8 @@ const GLYPHS = {
   chevronDown: stroke("m7 9.6 5 5 5-5", 1.9),
   search: stroke("M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13ZM15.3 15.3 20 20", 1.9),
   check: stroke("m5 12.6 4.4 4.4L19 7.4", 2),
+  help: '<circle cx="12" cy="12" r="8.6" fill="none" stroke="currentColor" stroke-width="1.6"/>' + stroke("M9.6 9.6a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.1-2.4 3.6") + '<circle cx="12" cy="17" r="1" fill="currentColor"/>',
+  update: stroke("M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14"),
   arrowUp: stroke("M12 19V5.5m0 0L6.4 11.1M12 5.5l5.6 5.6", 2),
   stop: '<rect x="6" y="6" width="12" height="12" rx="2.4" fill="currentColor"/>',
   // A film frame with sprocket rails and a play mark: used wherever a surface

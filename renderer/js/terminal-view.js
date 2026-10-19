@@ -52,7 +52,7 @@ export class TerminalView {
     this.fit = new window.FitAddon.FitAddon();
     this.term.loadAddon(this.fit);
     this.term.open(this.host);
-    this.term.onData((data) => window.relay.pty.write(pane.id, data));
+    this.term.onData((data) => window.jagents.pty.write(pane.id, data));
     this.term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
       const mod = e.ctrlKey || e.metaKey;
@@ -91,7 +91,7 @@ export class TerminalView {
     const s = this.size();
     if (this.lastSize && this.lastSize.cols === s.cols && this.lastSize.rows === s.rows) return;
     this.lastSize = s;
-    if (this.attached) window.relay.pty.resize(this.pane.id, s.cols, s.rows);
+    if (this.attached) window.jagents.pty.resize(this.pane.id, s.cols, s.rows);
   }
 
   async attach() {
@@ -104,7 +104,7 @@ export class TerminalView {
       /* not laid out yet */
     }
     try {
-      const snap = await window.relay.pty.attach(this.pane.id, this.size());
+      const snap = await window.jagents.pty.attach(this.pane.id, this.size());
       this.attached = true;
       this.lastSize = this.size();
       if (snap && snap.data) this.term.write(snap.data);
@@ -118,7 +118,7 @@ export class TerminalView {
     this.exitEl.hidden = true;
     this.term.reset();
     try {
-      await window.relay.pty.restart(this.pane.id, this.size());
+      await window.jagents.pty.restart(this.pane.id, this.size());
     } catch (error) {
       this.term.write("\r\n\x1b[31m" + String(error.message || error) + "\x1b[0m\r\n");
     }

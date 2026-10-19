@@ -1,13 +1,17 @@
 {
-  "name": "relay-ade",
-  "version": "0.1.0",
+  "name": "jagents",
+  "version": "0.2.0",
   "private": true,
-  "description": "Relay: an ADE that splits terminals and chats running coding agents, with an MCP hub that lets them see and message each other and spawn ACP subagents.",
+  "description": "JAgents: an ADE that splits terminals and chats running coding agents, with an MCP hub that lets them see and message each other and spawn ACP subagents.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Josephivgi/JAgents.git"
+  },
   "main": "electron/main.cjs",
   "scripts": {
     "start": "electron .",
     "test": "node --test --test-concurrency=1 \"test/*.test.js\"",
-    "mcp": "node mcp/relay-mcp.cjs"
+    "mcp": "node mcp/jagents-mcp.cjs"
   },
   "devDependencies": {
     "electron": "^44.4.3"

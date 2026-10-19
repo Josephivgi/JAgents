@@ -4,7 +4,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 const call = (channel) => (...args) => ipcRenderer.invoke(channel, ...args);
 
-contextBridge.exposeInMainWorld("relay", {
+contextBridge.exposeInMainWorld("jagents", {
   appInfo: call("app-info"),
   setSetting: call("set-setting"),
   pickFolder: call("pick-folder"),
@@ -62,6 +62,16 @@ contextBridge.exposeInMainWorld("relay", {
     mcpStatus: call("mcp-status"),
     install: call("mcp-install"),
     uninstall: call("mcp-uninstall"),
+    support: call("mcp-support"),
+    autoState: call("mcp-auto-state"),
+    autoRun: call("mcp-auto-run"),
+    tools: call("hub-tools"),
+  },
+  updates: {
+    state: call("update-state"),
+    check: call("update-check"),
+    apply: call("update-apply"),
+    restart: call("app-restart"),
   },
   onEvent(handler) {
     const listener = (_event, msg) => handler(msg);

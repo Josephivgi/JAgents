@@ -3,7 +3,7 @@
 // ACP chat sessions (chat panes, threads, and hub-spawned subagents). Adapted
 // from Plugin App's acp-host.cjs: spawn the agent, initialize, session/load when
 // the agent can and the chat has a saved session, otherwise session/new, then
-// stream session/update into a transcript the renderer draws. Relay adds a
+// stream session/update into a transcript the renderer draws. JAgents adds a
 // per-chat working folder, a parent (the agent that spawned a subagent),
 // waitTurn for the hub, a delivery queue for messages that arrive mid-turn, and
 // incoming handoffs from other panes.
@@ -41,7 +41,7 @@ function lastRow(rows, test) {
 }
 
 // Devin's ACP server ignores session/new mcpServers and reads its config files,
-// so the Relay entry also goes into the cwd's local Devin config (as Plugin App does).
+// so the JAgents entry also goes into the cwd's local Devin config (as Plugin App does).
 function writeDevinMcpConfig(cwd, entries) {
   const fs = require("node:fs");
   const path = require("node:path");
@@ -330,7 +330,7 @@ function createAcpHost(options) {
         if (chat.harnessId === "devin") writeDevinMcpConfig(cwd, mcpServers);
         const client = makeClient(chat.harnessId, { harnessId: chat.harnessId, dataRoot, cwd, mcpServers, disallowedTools: disallowedFor ? disallowedFor(chatId) : [], onUpdate: (p) => onUpdate(s, p) });
         s.client = client;
-        const env = Object.assign({ RELAY_PANE_ID: chatId }, spec.env);
+        const env = Object.assign({ JAGENTS_PANE_ID: chatId }, spec.env);
         client.start({ command: spec.command, args: spec.args, cwd, env });
         watchClient(client, (t) => (stderr = (stderr + t).slice(-2000)), (code, signal) => {
           if (s.disposed || sessions.get(chatId) !== s) return;
@@ -434,7 +434,7 @@ function createAcpHost(options) {
     if (!s.contextSent) parts.push(contextFor(chatId));
     if (s.prefix) parts.push(s.prefix);
     if (handoffIn) parts.push(handoffIn);
-    const said = from ? "Message from " + from + " (another agent, via Relay):\n" + userText : userText;
+    const said = from ? "Message from " + from + " (another agent, via JAgents):\n" + userText : userText;
     parts.push(parts.length ? (from ? said : "User request:\n" + userText) : said);
     s.contextSent = true;
     s.prefix = "";
@@ -675,4 +675,4 @@ function createAcpHost(options) {
   };
 }
 
-module.exports = { createAcpHost };
+module.exports = { createAcpHost, writeDevinMcpConfig };

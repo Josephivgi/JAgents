@@ -3,19 +3,19 @@
 
 const KIND = "browser:tab";
 
-export function activate(relay) {
-  relay.panes.register("tab", {
+export function activate(jagents) {
+  jagents.panes.register("tab", {
     title: "Browser",
     icon: "globe",
     description: "A web page in a pane. Agents can drive it with the browser tools.",
     mount(el, pane) {
       el.innerHTML =
         '<div class="rb-bar">' +
-        '<button class="icon-btn" data-nav="back" title="Back">' + relay.icon("back", 15) + "</button>" +
-        '<button class="icon-btn" data-nav="forward" title="Forward">' + relay.icon("next", 15) + "</button>" +
-        '<button class="icon-btn" data-nav="reload" title="Reload">' + relay.icon("restart", 15) + "</button>" +
+        '<button class="icon-btn" data-nav="back" title="Back">' + jagents.icon("back", 15) + "</button>" +
+        '<button class="icon-btn" data-nav="forward" title="Forward">' + jagents.icon("next", 15) + "</button>" +
+        '<button class="icon-btn" data-nav="reload" title="Reload">' + jagents.icon("restart", 15) + "</button>" +
         '<form class="rb-form"><input class="rb-url" spellcheck="false" placeholder="Search or type a URL" aria-label="Address"></form>' +
-        '<button class="icon-btn" data-nav="external" title="Open in your browser">' + relay.icon("external", 15) + "</button>" +
+        '<button class="icon-btn" data-nav="external" title="Open in your browser">' + jagents.icon("external", 15) + "</button>" +
         "</div>" +
         '<div class="rb-view"><div class="rb-msg" hidden></div></div>';
       const view = el.querySelector(".rb-view");
@@ -33,7 +33,7 @@ export function activate(relay) {
         const key = [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height), visible].join(",");
         if (key === last) return;
         last = key;
-        relay.invoke("bounds", { pane: pane.id, rect: { x: r.left, y: r.top, width: r.width, height: r.height }, visible }).catch(() => {});
+        jagents.invoke("bounds", { pane: pane.id, rect: { x: r.left, y: r.top, width: r.width, height: r.height }, visible }).catch(() => {});
       };
 
       const apply = (s) => {
@@ -54,20 +54,20 @@ export function activate(relay) {
         }
       };
 
-      relay.invoke("attach", { pane: pane.id, url: pane.state.url || "" }).then(apply).then(() => {
+      jagents.invoke("attach", { pane: pane.id, url: pane.state.url || "" }).then(apply).then(() => {
         last = "";
         send();
       });
 
       el.querySelector(".rb-form").addEventListener("submit", (e) => {
         e.preventDefault();
-        relay.invoke("navigate", { pane: pane.id, url: input.value });
+        jagents.invoke("navigate", { pane: pane.id, url: input.value });
         input.blur();
       });
       input.addEventListener("focus", () => input.select());
       el.querySelector(".rb-bar").addEventListener("click", (e) => {
         const b = e.target.closest("[data-nav]");
-        if (b) relay.invoke("nav", { pane: pane.id, action: b.dataset.nav });
+        if (b) jagents.invoke("nav", { pane: pane.id, action: b.dataset.nav });
       });
 
       const ro = new ResizeObserver(send);
@@ -75,12 +75,12 @@ export function activate(relay) {
       // Panes also move without resizing (swaps, the sidebar, maximize).
       const timer = setInterval(send, 300);
       const offs = [
-        relay.on("layout", send),
-        relay.on("overlay", (o) => {
+        jagents.on("layout", send),
+        jagents.on("overlay", (o) => {
           overlay = Boolean(o && o.open);
           send();
         }),
-        relay.onMessage("state", (s) => s && s.pane === pane.id && apply(s)),
+        jagents.onMessage("state", (s) => s && s.pane === pane.id && apply(s)),
       ];
       window.addEventListener("resize", send);
       document.addEventListener("visibilitychange", send);
@@ -92,16 +92,16 @@ export function activate(relay) {
         offs.forEach((off) => off());
         window.removeEventListener("resize", send);
         document.removeEventListener("visibilitychange", send);
-        relay.invoke("bounds", { pane: pane.id, visible: false }).catch(() => {});
+        jagents.invoke("bounds", { pane: pane.id, visible: false }).catch(() => {});
       };
     },
   });
 
   // An agent asked for the browser and none is open.
-  relay.onMessage("open", (o) => relay.panes.open("tab", { title: "Browser", state: { url: (o && o.url) || "" } }));
+  jagents.onMessage("open", (o) => jagents.panes.open("tab", { title: "Browser", state: { url: (o && o.url) || "" } }));
 
   // Views for closed panes go away in main.cjs.
-  const sync = (list) => relay.invoke("sync", { panes: (list || []).filter((p) => p.kind === "plugin" && p.pluginKind === KIND).map((p) => p.id) }).catch(() => {});
-  relay.on("panes-changed", sync);
-  sync(relay.store.panes);
+  const sync = (list) => jagents.invoke("sync", { panes: (list || []).filter((p) => p.kind === "plugin" && p.pluginKind === KIND).map((p) => p.id) }).catch(() => {});
+  jagents.on("panes-changed", sync);
+  sync(jagents.store.panes);
 }

@@ -69,7 +69,7 @@ function paintHead(snap) {
 
 export function openThread(chatId) {
   current = chatId || "";
-  window.relay.setSetting("thread.current", current);
+  window.jagents.setSetting("thread.current", current);
   if (view) view.destroy();
   const body = main.querySelector("[data-thread-body]");
   body.className = "thread-body";
@@ -79,7 +79,7 @@ export function openThread(chatId) {
     introText: current ? "" : "Pick an agent below (Claude Code runs natively; Devin and Cursor over ACP) and send your first message. Threads keep their transcript, and switching the agent hands the thread over with its context.",
     onCreated: (id) => {
       current = id;
-      window.relay.setSetting("thread.current", id);
+      window.jagents.setSetting("thread.current", id);
       refreshChats();
     },
     onChange: (snap) => paintHead(snap),
@@ -114,7 +114,7 @@ export function renderThreadMode(sideEl, mainEl, actions) {
     if (btn.dataset.th === "handoff") return openHandoff({ id: snap.chatId, handle: snap.handle, kind: "chat", provider: snap.harnessId, name: snap.agentName });
     if (btn.dataset.th === "delete") {
       try {
-        if (await window.relay.chats.remove(snap.chatId)) {
+        if (await window.jagents.chats.remove(snap.chatId)) {
           await refreshChats();
           openThread("");
         }
