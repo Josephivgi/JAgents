@@ -37,7 +37,7 @@ app.setName("JAgents");
 if (process.env.JAGENTS_DISABLE_GPU === "1") app.disableHardwareAcceleration();
 const DATA_ROOT = process.env.JAGENTS_DATA_ROOT ? path.resolve(process.env.JAGENTS_DATA_ROOT) : path.join(app.getPath("appData"), "JAgents");
 // Before the rebrand the data folder was "Relay ADE"; copy it once.
-const LEGACY_ROOT = process.env.JAGENTS_DATA_ROOT ? "" : path.join(app.getPath("appData"), "Relay ADE");
+const LEGACY_ROOT = process.env.JAGENTS_LEGACY_ROOT || (process.env.JAGENTS_DATA_ROOT ? "" : path.join(app.getPath("appData"), "Relay ADE"));
 app.setPath("userData", DATA_ROOT);
 
 protocol.registerSchemesAsPrivileged([{ scheme: "app", privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
