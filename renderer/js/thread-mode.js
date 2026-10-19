@@ -13,11 +13,7 @@ let main = null;
 let view = null;
 let current = "";
 let filter = "";
-const live = new Map(); // chatId -> status from acp-state
-
 export function noteThreadState(snap) {
-  live.set(snap.chatId, snap.status);
-  if (side) paintList();
   if (snap.chatId === current) paintHead(snap);
 }
 
@@ -37,11 +33,10 @@ function paintList() {
   box.innerHTML = list.length
     ? list
         .map((c) => {
-          const st = live.get(c.id) || "idle";
           const parent = c.parentId ? byId.get(c.parentId) || store.hubAgents.find((a) => a.id === c.parentId) : null;
           return (
             '<button class="thread-item' + (c.id === current ? " active" : "") + '" data-thread="' + esc(c.id) + '">' +
-            '<span class="thread-ic">' + harnessIcon(c.harnessId, 16) + '<span class="status-dot ' + (st === "busy" || st === "starting" ? "busy" : st === "error" ? "error" : st === "ready" ? "ok" : "") + '"></span></span>' +
+            '<span class="thread-ic">' + harnessIcon(c.harnessId, 16) + "</span>" +
             '<span class="grow"><span class="t">' + esc(c.title) + '</span><span class="s">' + esc(c.handle || agentName(c.harnessId)) + (parent ? " · sub of " + esc(parent.handle || "") : "") + "</span></span>" +
             '<span class="when">' + timeAgo(c.updatedAt) + "</span></button>"
           );

@@ -86,6 +86,11 @@ const TOOLS = [
       properties: { to: { type: "string", description: "Handle of a running agent" }, provider: { type: "string", description: "Start a new agent instead: claude, codex, devin, cursor, ..." }, note: { type: "string" } },
     },
   },
+  {
+    name: "restart_jagents",
+    description: "Restart the JAgents app, for example after installing an update or changing its code. Terminal agents (you, if you run in a JAgents terminal) keep running through the restart and keep working; the jagents tools answer again once the app is back, a few seconds later. Chat agents restart their sessions and keep their transcripts. The user sees a notice first.",
+    inputSchema: { type: "object", properties: { reason: { type: "string", description: "Shown to the user, e.g. Installing v0.3.3" } } },
+  },
   // Plugins: agents change the JAgents app itself (plugins.cjs).
   {
     name: "plugin_docs",
@@ -168,7 +173,7 @@ function processTable() {
   });
 }
 
-function createHub({ workspace, ptyHost, acpHost, plugins, dataRoot, emit, notify }) {
+function createHub({ workspace, ptyHost, acpHost, plugins, dataRoot, emit, notify, restartApp }) {
   const token = randomBytes(24).toString("hex");
   const files = { dir: HOME_DIR, hub: path.join(HOME_DIR, "hub.json"), script: path.join(HOME_DIR, "jagents-mcp.cjs"), pluginScript: path.join(HOME_DIR, "jagents-plugin-mcp.cjs"), tools: path.join(HOME_DIR, "tools.json") };
   const callerCache = new Map();
@@ -407,6 +412,15 @@ function createHub({ workspace, ptyHost, acpHost, plugins, dataRoot, emit, notif
       case "handoff_context":
         if (!me) throw new Error("Only agents started in JAgents can hand off their context.");
         return handoff(me, { to: a.to, provider: a.provider, note: a.note });
+      case "restart_jagents": {
+        if (!restartApp) throw new Error("This JAgents cannot restart itself.");
+        const why = String(a.reason || "").trim();
+        record({ type: "restart", from: author(me), to: "JAgents", text: why });
+        if (notify) notify(author(me) + " is restarting JAgents" + (why ? ": " + why : "") + ". Terminals stay open.");
+        // Answer first; the restart starts once the reply is on its way.
+        setTimeout(restartApp, 1500);
+        return { restarting: true, terminals_kept: workspace.agents().filter((x) => x.kind === "terminal").map((x) => x.handle), note: "JAgents is back in a few seconds. Call whoami to check before using other jagents tools." };
+      }
       case "plugin_docs":
         return needPlugins().docs;
       case "list_plugins":

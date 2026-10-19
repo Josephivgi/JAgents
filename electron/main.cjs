@@ -5,7 +5,7 @@ const path = require("node:path");
 const { app, BrowserWindow, ipcMain, protocol, shell, dialog, Notification } = require("electron");
 const { openDb } = require("../lib/db");
 const { listAcpAgents, listTerminalAgents } = require("../lib/agents");
-const { createPtyHost } = require("./pty-host.cjs");
+const { connectPtyHost } = require("./pty-client.cjs");
 const { createAcpHost } = require("./acp-host.cjs");
 const { createWorkspace } = require("./workspace.cjs");
 const { createHub, HOME_DIR } = require("./hub.cjs");
@@ -268,10 +268,18 @@ function registerIpc() {
   handle("update-check", () => updater.check());
   handle("update-apply", () => updater.apply());
   handle("app-restart", () => {
-    app.relaunch();
-    app.quit();
+    restartApp();
     return true;
   });
+}
+
+// Terminals live in the pty daemon, so a restart leaves them running and the
+// next app adopts them; a real quit closes them.
+let restarting = false;
+function restartApp() {
+  restarting = true;
+  app.relaunch();
+  app.quit();
 }
 
 // The Legacy (development) button's state for the MCP hub panel.
@@ -312,7 +320,8 @@ app.whenReady().then(async () => {
   db = openDb(DATA_ROOT);
   updater = createUpdater({ appRoot: APP_ROOT, emit: broadcast });
   registerProtocol();
-  ptyHost = createPtyHost({ emit: broadcast });
+  ptyHost = await connectPtyHost({ emit: broadcast, dataRoot: DATA_ROOT });
+  if (ptyHost.adopted.length) console.log("Reattached " + ptyHost.adopted.length + " terminals that kept running");
   const hubFiles = { hub: path.join(HOME_DIR, "hub.json"), script: path.join(HOME_DIR, "jagents-mcp.cjs"), pluginScript: path.join(HOME_DIR, "jagents-plugin-mcp.cjs") };
   plugins = createPluginManager({ dataRoot: DATA_ROOT, db, emit: broadcast, notify, log: (t) => console.log(t), bundledDir: path.join(APP_ROOT, "plugins"), getWindow: () => mainWindow });
   let ws = null;
@@ -337,7 +346,7 @@ app.whenReady().then(async () => {
   });
   ws = createWorkspace({ db, dataRoot: DATA_ROOT, ptyHost, acpHost: acp, emit: broadcast, hubFiles, pluginMcp: () => plugins.agentMcp() });
   workspace = ws;
-  hub = createHub({ workspace, ptyHost, acpHost: acp, plugins, dataRoot: DATA_ROOT, emit: broadcast, notify });
+  hub = createHub({ workspace, ptyHost, acpHost: acp, plugins, dataRoot: DATA_ROOT, emit: broadcast, notify, restartApp });
   await hub.start();
   plugins.start({ hubCall: (name, args) => hub.call(name, args, null), onToolsChanged: () => hub.toolsChanged() });
   workspace.launchRestored();
@@ -356,15 +365,21 @@ app.on("second-instance", () => {
   }
 });
 
-app.on("before-quit", () => {
+let quitting = false;
+app.on("before-quit", (event) => {
+  if (quitting) return;
+  quitting = true;
   try {
     if (acp) acp.stopAll();
-    if (ptyHost) ptyHost.killAll();
     if (plugins) plugins.stop();
     if (hub) hub.stop();
   } catch {
     /* quitting */
   }
+  if (!ptyHost) return;
+  // Hold the quit until the daemon has the message.
+  event.preventDefault();
+  (restarting ? ptyHost.detach() : ptyHost.shutdown()).finally(() => app.quit());
 });
 
 app.on("window-all-closed", () => app.quit());

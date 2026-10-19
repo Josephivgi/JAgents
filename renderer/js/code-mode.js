@@ -7,11 +7,10 @@ import { esc, toast, errorText } from "./util.js";
 import { icon, harnessIcon } from "./icons.js";
 import { store, fire, on } from "./store.js";
 import { TerminalView } from "./terminal-view.js";
-import { ChatView, statusLabel } from "./chat-view.js";
+import { ChatView } from "./chat-view.js";
 import { openHandoff } from "./dialogs.js";
 import { PluginPaneView, pluginKindIcon, openPluginsFromPane } from "./plugins.js";
 
-const lastData = new Map(); // terminal paneId -> ms of last output
 const panes = new Map(); // paneId -> {pane, el, view, snap}
 let root = null;
 let gridEl = null;
@@ -19,9 +18,6 @@ let layout = "grid";
 let maximized = "";
 let dragId = "";
 
-export function notePtyData(id) {
-  lastData.set(id, Date.now());
-}
 
 export function setLayout(next) {
   layout = next;
@@ -93,27 +89,18 @@ function headMarkup(entry) {
       '<button class="icon-btn" data-act="max" title="' + (maximized === p.id ? "Restore split" : "Maximize") + '">' + icon(maximized === p.id ? "minimize" : "maximize", 15) + "</button>" +
       '<button class="icon-btn" data-act="close" title="Close pane">' + icon("close", 15) + "</button>"
     );
-  const st = paneStatus(entry);
   return (
     '<span class="pane-ic">' + harnessIcon(p.provider, 15) + "</span>" +
     '<span class="pane-handle">' + esc(p.handle || "") + "</span>" +
     '<span class="pane-title" title="' + esc(p.title) + '">' + esc(p.kind === "terminal" ? p.name : p.title || p.name) + "</span>" +
     (parent ? '<span class="chip sub" title="Subagent of ' + esc(parent.handle) + '">' + icon("subagent", 11) + esc(parent.handle) + "</span>" : "") +
     (p.kind === "terminal" && p.attached ? '<span class="chip hub" title="Connected to the JAgents MCP hub">' + icon("hub", 11) + "MCP</span>" : "") +
-    '<span class="status-dot ' + st.tone + '" title="' + esc(st.text) + '"></span><span class="pane-status">' + esc(st.text) + "</span>" +
     '<span class="spacer"></span>' +
     '<button class="icon-btn" data-act="handoff" title="Hand off context">' + icon("handoff", 15) + "</button>" +
     (p.kind === "terminal" ? '<button class="icon-btn" data-act="restart" title="Restart">' + icon("restart", 15) + "</button>" : "") +
     '<button class="icon-btn" data-act="max" title="' + (maximized === p.id ? "Restore split" : "Maximize") + '">' + icon(maximized === p.id ? "minimize" : "maximize", 15) + "</button>" +
     '<button class="icon-btn" data-act="close" title="Close pane">' + icon("close", 15) + "</button>"
   );
-}
-
-function paneStatus(entry) {
-  if (entry.pane.kind === "chat") return statusLabel(entry.snap);
-  if (entry.exited) return { text: "Exited", tone: "error" };
-  const t = lastData.get(entry.pane.id) || 0;
-  return Date.now() - t < 1500 ? { text: "Working", tone: "busy" } : { text: "Idle", tone: "ok" };
 }
 
 function paintHead(entry) {
@@ -316,9 +303,6 @@ export function renderCodeMode(el) {
     }
   });
   new ResizeObserver(() => arrange()).observe(gridEl);
-  setInterval(() => {
-    for (const entry of panes.values()) if (entry.pane.kind === "terminal") paintHead(entry);
-  }, 1000);
   on("hub-agents", () => {
     for (const entry of panes.values()) paintHead(entry);
   });

@@ -2,8 +2,9 @@
 
 // The workspace: every pane (terminal or chat), its handle (claude-1, devin-2),
 // the Code-mode layout, and how terminal agents are launched with the JAgents
-// MCP server attached. Panes persist in jagents.db; terminals relaunch fresh on
-// restart, chats resume through session/load when the agent supports it.
+// MCP server attached. Panes persist in jagents.db; terminals keep running in
+// the pty daemon through an app restart (and relaunch fresh after a real quit),
+// chats resume through session/load when the agent supports it.
 
 const fs = require("node:fs");
 const path = require("node:path");

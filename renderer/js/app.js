@@ -3,7 +3,7 @@ import { icon, harnessIcon } from "./icons.js";
 import { store, fire, on, refreshAgents, refreshChats } from "./store.js";
 import { routeAcpState, routeAcpModels } from "./chat-view.js";
 import { routePtyData, routePtyExit, retheme } from "./terminal-view.js";
-import { renderCodeMode, syncPanes, addTerminal, addChat, setLayout, getLayout, notePtyData, markExited, focusAgent } from "./code-mode.js";
+import { renderCodeMode, syncPanes, addTerminal, addChat, setLayout, getLayout, markExited, focusAgent } from "./code-mode.js";
 import { renderThreadMode, noteThreadState, openThread } from "./thread-mode.js";
 import { dropdown, openHubPanel, openUpdatesPanel, updateActivity } from "./dialogs.js";
 import { renderHelpMode, refreshHelp } from "./help-mode.js";
@@ -37,8 +37,8 @@ function topbarMarkup() {
     '<button data-layout="columns" title="Side by side">' + icon("columns", 15) + "</button>" +
     '<button data-layout="rows" title="Stacked">' + icon("rows", 15) + "</button></div></div>" +
     '<div class="plugin-top" data-plugin-top></div>' +
-    '<button class="hub-pill" data-hub title="MCP hub">' + icon("hub", 15) + '<span data-hub-label>MCP hub</span><span class="status-dot" data-hub-dot></span></button>' +
-    '<button class="version-pill" data-updates title="Version and updates">' + icon("update", 14) + '<span data-version></span><span class="status-dot" data-update-dot hidden></span></button>' +
+    '<button class="hub-pill" data-hub title="MCP hub">' + icon("hub", 15) + '<span data-hub-label>MCP hub</span></button>' +
+    '<button class="version-pill" data-updates title="Version and updates">' + icon("update", 14) + '<span data-version></span></button>' +
     '<button class="icon-btn" data-theme-toggle title="Toggle theme"></button>'
   );
 }
@@ -51,11 +51,7 @@ function paintTopbar() {
   app.querySelector("[data-cwd]").textContent = cwd.replace(/^.*[\\/](?=[^\\/]+[\\/]?$)/, "") || cwd;
   app.querySelector("[data-folder]").title = "Working folder for new agents: " + cwd;
   app.querySelector("[data-hub-label]").textContent = store.info.hubAttach ? "MCP hub on" : "MCP hub off";
-  app.querySelector("[data-hub-dot]").className = "status-dot " + (store.info.hubAttach ? "ok" : "");
   app.querySelector("[data-version]").textContent = "v" + (store.info.version || "");
-  const dot = app.querySelector("[data-update-dot]");
-  dot.hidden = !(update && (update.available || update.applied));
-  dot.className = "status-dot " + (update && update.applied ? "ok" : "busy");
   app.querySelector("[data-updates]").title = update && update.applied ? "Update installed. Restart to run " + update.applied : update && update.available ? update.latest + " is available" : "Version and updates";
   paintUpdateCard();
   app.querySelector("[data-theme-toggle]").innerHTML = icon(store.info.theme === "dark" ? "sun" : "moon", 16);
@@ -70,9 +66,6 @@ function paintUpdateCard() {
   const busy = u.checking || u.applying;
   sum.textContent = "v" + (u.current || "") + " · " + (u.applying ? (u.step || "Installing " + u.latest) + "…" : u.checking ? "Checking…" : u.applied ? u.applied + " installed, restart to run it" : u.available ? u.latest + " available" : u.error ? "Check failed" : u.latest ? "Up to date" : "Not checked yet");
   sum.title = u.error || sum.textContent;
-  const dot = app.querySelector("[data-update-card-dot]");
-  dot.hidden = !(u.available || u.applied || u.error);
-  dot.className = "status-dot " + (u.error && !u.available ? "error" : u.applied ? "ok" : "busy");
   const primary = u.applied
     ? '<button type="button" class="btn sm primary" data-update-act="restart">' + icon("restart", 14) + "Restart</button>"
     : u.available
@@ -96,13 +89,6 @@ function setMode(next) {
   if (next === "code") window.dispatchEvent(new Event("resize"));
 }
 
-function statusTone(a) {
-  if (a.status === "busy" || a.status === "starting") return "busy";
-  if (a.status === "error" || a.status === "exited") return "error";
-  if (a.status === "ready" || a.status === "idle") return "ok";
-  return "";
-}
-
 // Code-mode sidebar: every agent the hub knows, subagents nested under the
 // agent that spawned them, then the agent-to-agent activity feed.
 function paintAgents() {
@@ -117,7 +103,7 @@ function paintAgents() {
     harnessIcon(a.provider, 16) +
     '<span class="grow"><span class="t">' + esc(a.handle) + '</span><span class="s">' + esc(a.kind === "terminal" ? a.name : a.title || a.name) + "</span></span>" +
     (a.mcp ? '<span class="mini-hub" title="Has jagents MCP tools">' + icon("hub", 12) + "</span>" : "") +
-    '<span class="status-dot ' + statusTone(a) + '" title="' + esc(a.status) + '"></span></button>';
+    "</button>";
   const walk = (a, depth) => row(a, depth) + list.filter((c) => c.parentId === a.id).map((c) => walk(c, depth + 1)).join("");
   box.innerHTML = roots.length ? roots.map((a) => walk(a, 0)).join("") : '<p class="nav-empty">No agents running.</p>';
   const actBox = app.querySelector("[data-side-activity]");
@@ -179,7 +165,6 @@ function addMenu(anchor) {
 function onEvent({ type, payload }) {
   fire("app:" + type, payload);
   if (type === "pty-data") {
-    notePtyData(payload.id);
     routePtyData(payload);
   } else if (type === "pty-exit") {
     routePtyExit(payload);
@@ -220,7 +205,7 @@ async function boot() {
     '<div data-thread-side class="side-pane" hidden></div>' +
     '<div data-help-side class="side-pane" hidden></div>' +
     '<section class="sidebar-plugins sidebar-updates" aria-labelledby="updates-title">' +
-    '<div class="plugins-card-head">' + icon("update", 16) + '<div class="grow"><h2 id="updates-title">Updates</h2><p class="muted small" data-update-summary>Loading</p></div><span class="status-dot" data-update-card-dot hidden></span></div>' +
+    '<div class="plugins-card-head">' + icon("update", 16) + '<div class="grow"><h2 id="updates-title">Updates</h2><p class="muted small" data-update-summary>Loading</p></div></div>' +
     '<div class="update-card-actions" data-update-actions></div>' +
     "</section>" +
     '<section class="sidebar-plugins" aria-labelledby="plugins-title" data-plugin-card>' +

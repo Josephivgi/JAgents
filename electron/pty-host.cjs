@@ -1,11 +1,15 @@
 "use strict";
 
 // Real terminals for the terminal panes: node-pty (ConPTY on Windows) runs the
-// agent CLI, and a headless xterm mirrors the screen in the main process so the
-// MCP hub and context handoffs can read clean text from a TUI (Claude Code and
-// Codex redraw constantly, so the raw byte stream is not readable on its own).
+// agent CLI, and a headless xterm mirrors the screen so the MCP hub and context
+// handoffs can read clean text from a TUI (Claude Code and Codex redraw
+// constantly, so the raw byte stream is not readable on its own).
+//
+// The same host runs in two places. In the pty daemon (pty-daemon.cjs) it
+// spawns node-pty processes. In the app it gets `spawn` from pty-client.cjs,
+// whose processes are proxies for the daemon's, so terminals outlive an app
+// restart and the app keeps its own mirror for synchronous reads.
 
-const pty = require("node-pty");
 const { Terminal } = require("@xterm/headless");
 const { SerializeAddon } = require("@xterm/addon-serialize");
 
@@ -13,10 +17,24 @@ const SCROLLBACK = 8000;
 const FLUSH_MS = 12;
 const BUSY_WINDOW_MS = 1500;
 
-function createPtyHost({ emit }) {
+function nodePtySpawn(opts) {
+  const pty = require("node-pty");
+  return pty.spawn(opts.command, opts.args || [], {
+    name: "xterm-256color",
+    cols: opts.cols,
+    rows: opts.rows,
+    cwd: opts.cwd,
+    env: Object.assign({}, process.env, { TERM: "xterm-256color", COLORTERM: "truecolor" }, opts.env || {}),
+    useConpty: true,
+  });
+}
+
+function createPtyHost({ emit, spawn }) {
   const terms = new Map();
+  const spawnProc = spawn || nodePtySpawn;
 
   function flush(t) {
+    clearTimeout(t.flushTimer);
     t.flushTimer = null;
     if (!t.pending) return;
     const data = t.pending;
@@ -24,38 +42,64 @@ function createPtyHost({ emit }) {
     emit("pty-data", { id: t.id, data });
   }
 
-  function create(opts) {
-    const { id, command, args, cwd, env, cols, rows } = opts;
-    if (terms.has(id)) throw new Error("Terminal " + id + " already exists.");
-    const c = Math.max(20, cols || 100);
-    const r = Math.max(5, rows || 30);
-    const proc = pty.spawn(command, args || [], {
-      name: "xterm-256color",
-      cols: c,
-      rows: r,
-      cwd,
-      env: Object.assign({}, process.env, { TERM: "xterm-256color", COLORTERM: "truecolor" }, env || {}),
-      useConpty: true,
-    });
-    const mirror = new Terminal({ cols: c, rows: r, scrollback: SCROLLBACK, allowProposedApi: true });
+  // Output goes out only after the mirror has parsed it, so a snapshot taken
+  // at any point holds exactly what was already sent and nothing is drawn twice.
+  function track(id, proc, cols, rows, seed) {
+    const mirror = new Terminal({ cols, rows, scrollback: SCROLLBACK, allowProposedApi: true });
     const serializer = new SerializeAddon();
     mirror.loadAddon(serializer);
     const t = { id, proc, mirror, serializer, pending: "", flushTimer: null, lastOutputAt: 0, startedAt: Date.now(), exited: false, exitCode: null, listeners: new Set() };
     terms.set(id, t);
+    const ready = seed ? new Promise((r) => mirror.write(seed, r)) : Promise.resolve();
+    // A killed terminal's late output or exit must not reach a new one with the same id.
+    const live = () => terms.get(id) === t;
     proc.onData((data) => {
+      if (!live()) return;
       t.lastOutputAt = Date.now();
-      mirror.write(data);
-      t.pending += data;
-      if (!t.flushTimer) t.flushTimer = setTimeout(() => flush(t), FLUSH_MS);
-      for (const fn of t.listeners) fn(data);
+      mirror.write(data, () => {
+        if (!live()) return;
+        t.pending += data;
+        if (!t.flushTimer) t.flushTimer = setTimeout(() => flush(t), FLUSH_MS);
+        for (const fn of t.listeners) fn(data);
+      });
     });
     proc.onExit(({ exitCode }) => {
-      flush(t);
-      t.exited = true;
-      t.exitCode = exitCode;
-      emit("pty-exit", { id, exitCode });
+      if (!live()) return;
+      mirror.write("", () => {
+        flush(t);
+        t.exited = true;
+        t.exitCode = exitCode;
+        emit("pty-exit", { id, exitCode });
+      });
     });
+    return { t, ready };
+  }
+
+  function create(opts) {
+    const { id, cols, rows } = opts;
+    if (terms.has(id)) throw new Error("Terminal " + id + " already exists.");
+    const c = Math.max(20, cols || 100);
+    const r = Math.max(5, rows || 30);
+    const proc = spawnProc(Object.assign({}, opts, { cols: c, rows: r }));
+    track(id, proc, c, r);
     return { id, pid: proc.pid };
+  }
+
+  // A terminal that is already running elsewhere (the daemon, after an app
+  // restart): its serialized screen seeds the mirror. Resolves once parsed.
+  function adopt(snap, proc) {
+    if (terms.has(snap.id)) return Promise.resolve();
+    const { t, ready } = track(snap.id, proc, Math.max(20, snap.cols || 100), Math.max(5, snap.rows || 30), snap.data || "");
+    if (snap.exited) {
+      t.exited = true;
+      t.exitCode = snap.exitCode;
+    }
+    return ready;
+  }
+
+  // Sends whatever has been parsed but not sent yet.
+  function flushAll() {
+    for (const t of terms.values()) flush(t);
   }
 
   function get(id) {
@@ -142,7 +186,7 @@ function createPtyHost({ emit }) {
   function snapshot(id) {
     const t = terms.get(id);
     if (!t) return null;
-    return { id, data: t.serializer.serialize({ scrollback: 2000 }), exited: t.exited, exitCode: t.exitCode };
+    return { id, data: t.serializer.serialize({ scrollback: 2000 }), exited: t.exited, exitCode: t.exitCode, cols: t.mirror.cols, rows: t.mirror.rows, pid: t.proc.pid };
   }
 
   function status(id) {
@@ -191,7 +235,7 @@ function createPtyHost({ emit }) {
     for (const id of Array.from(terms.keys())) kill(id);
   }
 
-  return { create, write, resize, sendInput, blockingMenu, text, snapshot, status, waitIdle, pid, kill, killAll, has: (id) => terms.has(id), pids: () => Array.from(terms.values()).map((t) => ({ id: t.id, pid: t.proc.pid })) };
+  return { create, adopt, flushAll, write, resize, sendInput, blockingMenu, text, snapshot, status, waitIdle, pid, kill, killAll, has: (id) => terms.has(id), ids: () => Array.from(terms.keys()), pids: () => Array.from(terms.values()).map((t) => ({ id: t.id, pid: t.proc.pid })) };
 }
 
 module.exports = { createPtyHost };
