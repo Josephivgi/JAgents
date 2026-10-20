@@ -423,6 +423,15 @@ app.whenReady().then(async () => {
     console.error("Taskbar icon: " + error.message);
   }
   createWindow();
+  // Repairs the taskbar icon if a stray shortcut or a removed one breaks it.
+  // The window's ID is cleared and set again so Windows redraws its button.
+  if (taskbar && taskbar.check) {
+    setInterval(() => {
+      if (!taskbar.check() || !mainWindow || mainWindow.isDestroyed() || !taskbar.details) return;
+      mainWindow.setAppDetails({ appId: "" });
+      mainWindow.setAppDetails(taskbar.details);
+    }, 30 * 1000);
+  }
   runAutoMcp(false);
   setInterval(() => runAutoMcp(false), 10 * 60 * 1000);
   setTimeout(() => updater.check(), 8000);
