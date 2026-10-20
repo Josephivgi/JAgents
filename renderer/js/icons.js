@@ -71,6 +71,7 @@ const GLYPHS = {
   chevronDown: stroke("m7 9.6 5 5 5-5", 1.9),
   search: stroke("M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13ZM15.3 15.3 20 20", 1.9),
   check: stroke("m5 12.6 4.4 4.4L19 7.4", 2),
+  copy: '<rect x="8.5" y="8.5" width="11" height="11" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.6"/>' + stroke("M15.5 8.5V6.7a2.2 2.2 0 0 0-2.2-2.2H6.7a2.2 2.2 0 0 0-2.2 2.2v6.6a2.2 2.2 0 0 0 2.2 2.2h1.8", 1.6),
   help: '<circle cx="12" cy="12" r="8.6" fill="none" stroke="currentColor" stroke-width="1.6"/>' + stroke("M9.6 9.6a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.1-2.4 3.6") + '<circle cx="12" cy="17" r="1" fill="currentColor"/>',
   update: stroke("M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14"),
   arrowUp: stroke("M12 19V5.5m0 0L6.4 11.1M12 5.5l5.6 5.6", 2),

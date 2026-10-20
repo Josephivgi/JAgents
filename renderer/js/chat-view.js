@@ -60,6 +60,27 @@ function autoGrow(el) {
   el.style.height = Math.min(el.scrollHeight, 200) + "px";
 }
 
+function elapsed(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return s + "s";
+  const m = Math.floor(s / 60);
+  return m < 60 ? m + "m " + (s % 60) + "s" : Math.floor(m / 60) + "h " + (m % 60) + "m";
+}
+
+async function copyText(btn, text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (error) {
+    return toast(errorText(error));
+  }
+  btn.innerHTML = icon("check", 13);
+  btn.classList.add("done");
+  setTimeout(() => {
+    btn.innerHTML = icon("copy", 13);
+    btn.classList.remove("done");
+  }, 1200);
+}
+
 function toolIcon(st) {
   return st === "completed" ? icon("check", 14) : st === "failed" || st === "cancelled" ? icon("close", 14) : '<span class="spinner sm"></span>';
 }
@@ -97,11 +118,17 @@ export class ChatView {
       '<div class="composer-input-wrap"><textarea data-input rows="1" placeholder="' + esc(this.opts.placeholder || "Message the agent") + '"></textarea></div>' +
       '<p class="muted small composer-hint" data-hint></p>' +
       '<div class="composer-foot"><div class="composer-settings"><div class="ai-harness-picker" data-agent-picker></div><div class="agent-model-picker" data-model-picker></div></div>' +
-      '<p class="composer-keys" aria-hidden="true"><kbd>Enter</kbd> send <span>·</span> <kbd>Shift</kbd>+<kbd>Enter</kbd> new line</p><div class="composer-submit">' +
-      '<button type="button" class="send-btn stop" data-stop hidden>' + icon("stop", 12) + "<span>Stop</span></button>" +
+      '<div class="composer-submit">' +
+      '<button type="button" class="send-btn stop" data-stop aria-label="Stop" title="Stop" hidden>' + icon("stop", 12) + "</button>" +
       '<button type="button" class="send-btn" data-send aria-label="Send">' + icon("arrowUp", 16) + "</button>" +
       "</div></div></form></div></div>";
     this.input = this.el.querySelector("[data-input]");
+    this.turnStart = 0;
+    // Counts up the "working" line between repaints.
+    this.timer = setInterval(() => {
+      const span = this.turnStart && this.el.querySelector("[data-elapsed]");
+      if (span) span.textContent = elapsed(Date.now() - this.turnStart);
+    }, 1000);
     this.wire();
     views.add(this);
     this.load();
@@ -125,6 +152,7 @@ export class ChatView {
   destroy() {
     this.destroyed = true;
     views.delete(this);
+    clearInterval(this.timer);
     this.abort.abort();
     this.el.classList.remove("chatview", "compact");
     this.el.innerHTML = "";
@@ -178,11 +206,12 @@ export class ChatView {
   }
 
   rowMarkup(row, index) {
+    const actions = '<div class="msg-actions"><button type="button" class="copy-btn" data-copy-row="' + index + '" title="Copy message" aria-label="Copy message">' + icon("copy", 13) + "</button></div>";
     if (row.role === "user") {
       const from = row.from ? '<span class="from-tag">' + icon("hub", 12) + esc(row.from) + "</span>" : "";
-      return '<div class="msg user' + (row.from ? " relayed" : "") + '">' + from + '<div class="bubble">' + esc(row.text) + "</div></div>";
+      return '<div class="msg user' + (row.from ? " relayed" : "") + '">' + from + '<div class="bubble">' + esc(row.text) + "</div>" + actions + "</div>";
     }
-    if (row.role === "agent") return '<div class="msg agent"><div class="bubble">' + markdown(row.text) + "</div></div>";
+    if (row.role === "agent") return '<div class="msg agent"><div class="bubble">' + markdown(row.text) + "</div>" + actions + "</div>";
     if (row.role === "thought") return '<details class="thought"><summary>Thinking</summary><div>' + esc(row.text) + "</div></details>";
     if (row.role === "tool") {
       const st = row.status || "pending";
@@ -258,9 +287,11 @@ export class ChatView {
     const pinned = nearBottom(scroller);
     const inner = scroller.querySelector(".transcript-inner");
     const rows = this.snap ? this.snap.transcript : [];
+    if (!this.busy()) this.turnStart = 0;
+    else if (!this.turnStart) this.turnStart = Date.now();
     if (!rows.length) inner.innerHTML = this.introMarkup();
     else {
-      const working = this.snap.status === "busy" ? '<div class="working"><span class="spinner"></span>' + esc(this.snap.agentName || "Agent") + " is working…</div>" : this.snap.status === "starting" ? '<div class="working"><span class="spinner"></span>' + (this.signingIn ? "Signing in to " + esc(this.snap.agentName || "the agent") + "… If a browser window opened, finish signing in there." : "Starting " + esc(this.snap.agentName || "agent") + "…") + "</div>" : "";
+      const working = this.snap.status === "busy" ? '<div class="working"><span class="spinner"></span>' + esc(this.snap.agentName || "Agent") + ' is working… <span class="elapsed" data-elapsed>' + elapsed(Date.now() - this.turnStart) + "</span></div>" : this.snap.status === "starting" ? '<div class="working"><span class="spinner"></span>' + (this.signingIn ? "Signing in to " + esc(this.snap.agentName || "the agent") + "… If a browser window opened, finish signing in there." : "Starting " + esc(this.snap.agentName || "agent") + "…") + "</div>" : "";
       inner.innerHTML = rows.map((r, i) => this.rowMarkup(r, i)).join("") + working + (this.snap.status === "error" && this.snap.error ? this.errorMarkup() : "");
     }
     if (pinned || this.forceScroll) scroller.scrollTop = scroller.scrollHeight;
@@ -482,6 +513,13 @@ export class ChatView {
       if (auth) return this.signIn(auth.dataset.auth);
       const file = t.closest("[data-open-file]");
       if (file) return window.jagents.openPath(file.dataset.openFile);
+      const copyRow = t.closest("[data-copy-row]");
+      if (copyRow && this.snap) {
+        const row = this.snap.transcript[Number(copyRow.dataset.copyRow)];
+        return row && copyText(copyRow, row.text || "");
+      }
+      const copyCode = t.closest("[data-copy-code]");
+      if (copyCode) return copyText(copyCode, copyCode.closest(".code-block").querySelector("pre").textContent);
       if (t.closest("[data-send]")) return this.send();
       if (t.closest("[data-stop]") && this.chatId) return window.jagents.chats.cancel(this.chatId);
       if (!t.closest(".news-menu")) this.closeMenus();
