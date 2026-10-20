@@ -8,6 +8,10 @@
 // windows their own AppUserModelID and a Start Menu shortcut with that ID and
 // the JAgents icon; Windows then draws and pins the button from the shortcut.
 // Copies whose exe already has the icon are left alone.
+//
+// The ID carries a hash of the folder JAgents runs from. Windows caches what
+// it learns about an ID, and copies in different folders that shared one ID
+// left it cached as "Electron" with no JAgents icon.
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -29,39 +33,48 @@ function setupTaskbarIcon({ app, shell, appRoot, icoPath, customRoot, jagentsHom
   } catch (error) {
     log("Could not read the icon of " + process.execPath + ": " + error.message);
   }
-  const tag = customRoot ? createHash("sha1").update(customRoot.toLowerCase()).digest("hex").slice(0, 8) : "";
-  const id = tag ? BASE_ID + "." + tag : BASE_ID;
-  const name = customRoot ? "JAgents (" + path.basename(customRoot) + ")" : "JAgents";
+  const tag = createHash("sha1").update((customRoot || path.resolve(appRoot)).toLowerCase()).digest("hex").slice(0, 8);
+  const id = BASE_ID + "." + tag;
+  const base = customRoot ? "JAgents (" + path.basename(customRoot) + ")" : "JAgents";
   const args = [quote(appRoot)];
   if (customRoot) args.push(quote("--data-root=" + customRoot));
   if (jagentsHome) args.push(quote("--jagents-home=" + jagentsHome));
-  app.setAppUserModelId(id);
-  const details = { appId: id, appIconPath: icoPath, appIconIndex: 0, relaunchCommand: quote(process.execPath) + " " + args.join(" "), relaunchDisplayName: name };
-  const link = path.join(app.getPath("appData"), "Microsoft", "Windows", "Start Menu", "Programs", name + ".lnk");
   const want = { target: process.execPath, args: args.join(" "), cwd: appRoot, icon: icoPath, iconIndex: 0, appUserModelId: id, description: "JAgents" };
-  let current = null;
-  if (fs.existsSync(link)) {
-    try {
-      current = shell.readShortcutLink(link);
-    } catch {
-      current = {};
+  const dir = path.join(app.getPath("appData"), "Microsoft", "Windows", "Start Menu", "Programs");
+  // A shortcut that opens another copy (an installed one, or another checkout)
+  // stays as it is; this copy then gets one named after its folder, since a
+  // window whose ID no shortcut carries gets no icon at all.
+  for (const name of [base, base + " (" + path.basename(appRoot) + ")"]) {
+    const details = { appId: id, appIconPath: icoPath, appIconIndex: 0, relaunchCommand: quote(process.execPath) + " " + args.join(" "), relaunchDisplayName: name };
+    const link = path.join(dir, name + ".lnk");
+    let current = null;
+    if (fs.existsSync(link)) {
+      try {
+        current = shell.readShortcutLink(link);
+      } catch {
+        current = {};
+      }
+      if (current.appUserModelId !== id && current.target && path.resolve(current.target) !== path.resolve(process.execPath)) {
+        log("Left " + link + " alone: it opens " + current.target);
+        continue;
+      }
     }
-    // A JAgents shortcut from somewhere else (an installed copy) stays as it is.
-    if (current.appUserModelId !== id && current.target && path.resolve(current.target) !== path.resolve(process.execPath)) {
-      log("Left " + link + " alone: it opens " + current.target);
-      return { status: "shortcut-taken", id, details, link };
+    const same = current && Object.keys(want).every((k) => String(current[k] == null ? "" : current[k]).toLowerCase() === String(want[k]).toLowerCase());
+    if (!same) {
+      // A shortcut whose ID changes is recreated, not replaced: Windows only
+      // picks up the new ID from a new file.
+      if (current && current.appUserModelId !== id) fs.rmSync(link, { force: true });
+      const ok = shell.writeShortcutLink(link, fs.existsSync(link) ? "replace" : "create", want);
+      if (!ok) {
+        log("Could not write " + link);
+        return { status: "shortcut-failed", id, details, link };
+      }
+      log((current ? "Updated " : "Added ") + link + " so the taskbar shows the JAgents icon");
     }
+    app.setAppUserModelId(id);
+    return { status: "shortcut", id, details, link };
   }
-  const same = current && Object.keys(want).every((k) => String(current[k] == null ? "" : current[k]).toLowerCase() === String(want[k]).toLowerCase());
-  if (!same) {
-    const ok = shell.writeShortcutLink(link, current ? "replace" : "create", want);
-    if (!ok) {
-      log("Could not write " + link);
-      return { status: "shortcut-failed", id, details, link };
-    }
-    log((current ? "Updated " : "Added ") + link + " so the taskbar shows the JAgents icon");
-  }
-  return { status: "shortcut", id, details, link };
+  return { status: "shortcut-taken", id, details: null, link: "" };
 }
 
 module.exports = { setupTaskbarIcon };

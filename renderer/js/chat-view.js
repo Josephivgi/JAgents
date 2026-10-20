@@ -208,6 +208,41 @@ export class ChatView {
     return '<div class="sys">' + esc(row.text) + "</div>";
   }
 
+  // A start that needs sign-in shows the agent's own sign-in methods.
+  errorMarkup() {
+    const snap = this.snap;
+    const methods = snap.authMethods || [];
+    if (!methods.length) return '<div class="err-row">' + esc(snap.error) + "</div>";
+    if (this.signingIn) return '<div class="auth-card"><div class="auth-head">' + icon("lock", 15) + "<b>Signing in to " + esc(snap.agentName) + '…</b></div><p class="muted small">If a browser window opened, finish signing in there. Your message is sent once you are in.</p></div>';
+    return (
+      '<div class="auth-card"><div class="auth-head">' + icon("lock", 15) + "<b>" + esc(snap.error) + "</b></div>" +
+      methods
+        .map((m) =>
+          '<div class="auth-method"><div class="grow"><b>' + esc(m.name) + "</b>" + (m.description ? '<span class="muted small">' + esc(m.description) + "</span>" : "") + "</div>" +
+          (m.needsKey ? '<input type="password" data-auth-key="' + esc(m.id) + '" placeholder="' + esc(m.keyLabel) + '" aria-label="' + esc(m.keyLabel) + '" autocomplete="off">' : "") +
+          (m.terminal ? "" : '<button type="button" class="btn sm primary" data-auth="' + esc(m.id) + '">Sign in</button>') + "</div>",
+        )
+        .join("") +
+      "</div>"
+    );
+  }
+
+  async signIn(methodId) {
+    const field = this.el.querySelector('[data-auth-key="' + CSS.escape(methodId) + '"]');
+    const secret = field ? field.value : "";
+    this.signingIn = true;
+    this.paint();
+    try {
+      const snap = await window.jagents.chats.authenticate(this.chatId, methodId, secret);
+      this.signingIn = false;
+      if (snap) this.setSnap(snap);
+    } catch (error) {
+      this.signingIn = false;
+      toast(errorText(error));
+      if (this.chatId && views.has(this)) this.setSnap(await window.jagents.chats.get(this.chatId));
+    }
+  }
+
   introMarkup() {
     const agent = this.currentAgent();
     return (
@@ -225,8 +260,8 @@ export class ChatView {
     const rows = this.snap ? this.snap.transcript : [];
     if (!rows.length) inner.innerHTML = this.introMarkup();
     else {
-      const working = this.snap.status === "busy" ? '<div class="working"><span class="spinner"></span>' + esc(this.snap.agentName || "Agent") + " is working…</div>" : this.snap.status === "starting" ? '<div class="working"><span class="spinner"></span>Starting ' + esc(this.snap.agentName || "agent") + "…</div>" : "";
-      inner.innerHTML = rows.map((r, i) => this.rowMarkup(r, i)).join("") + working + (this.snap.status === "error" && this.snap.error ? '<div class="err-row">' + esc(this.snap.error) + "</div>" : "");
+      const working = this.snap.status === "busy" ? '<div class="working"><span class="spinner"></span>' + esc(this.snap.agentName || "Agent") + " is working…</div>" : this.snap.status === "starting" ? '<div class="working"><span class="spinner"></span>' + (this.signingIn ? "Signing in to " + esc(this.snap.agentName || "the agent") + "… If a browser window opened, finish signing in there." : "Starting " + esc(this.snap.agentName || "agent") + "…") + "</div>" : "";
+      inner.innerHTML = rows.map((r, i) => this.rowMarkup(r, i)).join("") + working + (this.snap.status === "error" && this.snap.error ? this.errorMarkup() : "");
     }
     if (pinned || this.forceScroll) scroller.scrollTop = scroller.scrollHeight;
     this.forceScroll = false;
@@ -443,6 +478,8 @@ export class ChatView {
         this.closeMenus();
         return this.pickModel(modelPick.dataset.modelPick);
       }
+      const auth = t.closest("[data-auth]");
+      if (auth) return this.signIn(auth.dataset.auth);
       const file = t.closest("[data-open-file]");
       if (file) return window.jagents.openPath(file.dataset.openFile);
       if (t.closest("[data-send]")) return this.send();

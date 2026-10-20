@@ -98,6 +98,34 @@ function createAcpHost(options) {
       models: s && s.client ? s.client.models : { availableModels: [], currentModelId: "" },
       queued: (queues.get(chatId) || []).length,
       transcript: s ? s.transcript : chat.transcript,
+      authMethods: s && s.status === "error" ? s.authMethods || [] : [],
+    };
+  }
+
+  // ACP sign-in. The method a user picked is remembered per agent (in memory
+  // with any key they typed; the method id alone in jagents.db), so later
+  // starts sign in the same way without asking again.
+  const authChoices = new Map();
+
+  function authChoice(harnessId) {
+    if (authChoices.has(harnessId)) return authChoices.get(harnessId);
+    const methodId = db.getSetting("agent-auth:" + harnessId, "");
+    return methodId ? { methodId, meta: null, env: {} } : null;
+  }
+
+  // What the chat shows for each sign-in method the agent offers. needsKey
+  // marks methods that take a key the user types (an API key method, or an
+  // env_var method that reads one from the environment).
+  function authMethodView(m) {
+    const meta = m._meta || {};
+    const envVar = m.type === "env_var" ? String(m.varName || (Array.isArray(m.vars) && m.vars[0] && m.vars[0].name) || "") : "";
+    return {
+      id: m.id,
+      name: String(m.name || m.id),
+      description: String(m.description || ""),
+      needsKey: Boolean(meta["api-key"] || envVar),
+      keyLabel: envVar || (meta["api-key"] && meta["api-key"].provider ? meta["api-key"].provider + " API key" : "API key"),
+      terminal: m.type === "terminal",
     };
   }
 
@@ -330,7 +358,8 @@ function createAcpHost(options) {
         if (chat.harnessId === "devin") writeDevinMcpConfig(cwd, mcpServers);
         const client = makeClient(chat.harnessId, { harnessId: chat.harnessId, dataRoot, cwd, mcpServers, disallowedTools: disallowedFor ? disallowedFor(chatId) : [], onUpdate: (p) => onUpdate(s, p) });
         s.client = client;
-        const env = Object.assign({ JAGENTS_PANE_ID: chatId }, spec.env);
+        const choice = authChoice(chat.harnessId);
+        const env = Object.assign({ JAGENTS_PANE_ID: chatId }, spec.env, choice ? choice.env : {});
         client.start({ command: spec.command, args: spec.args, cwd, env });
         watchClient(client, (t) => (stderr = (stderr + t).slice(-2000)), (code, signal) => {
           if (s.disposed || sessions.get(chatId) !== s) return;
@@ -348,6 +377,15 @@ function createAcpHost(options) {
         });
         const init = await client.initialize();
         if (s.disposed) throw new Error("Stopped.");
+        if (choice && (client.authMethods || []).some((m) => m.id === choice.methodId)) {
+          try {
+            await client.authenticate(choice.methodId, choice.meta);
+          } catch (error) {
+            const failed = new Error("Sign-in failed: " + String(error.message || error));
+            failed.code = -32000;
+            throw failed;
+          }
+        }
         s.agentName = (init && init.agentInfo && (init.agentInfo.title || init.agentInfo.name)) || agent.name;
         const canLoad = Boolean(init && init.agentCapabilities && init.agentCapabilities.loadSession);
         const params = { cwd, mcpServers };
@@ -377,9 +415,13 @@ function createAcpHost(options) {
         persist(s, true);
         return snapshot(chatId);
       } catch (error) {
-        const auth = /auth/i.test(String(error.message || ""));
+        const auth = error.code === -32000 || /auth|sign.?in|log.?in/i.test(String(error.message || ""));
+        const methods = auth && s.client && Array.isArray(s.client.authMethods) ? s.client.authMethods.map(authMethodView) : [];
         s.status = "error";
-        s.error = String(error.message || error) + (stderr && !auth ? " " + stderr.trim().split("\n").pop() : "") + (auth ? " Sign in to " + agent.name + " first (" + agent.install + ")" : "");
+        s.authMethods = methods;
+        s.error = methods.length
+          ? (/^Sign-in failed/.test(String(error.message)) ? String(error.message) + " " : "") + agent.name + " needs you to sign in."
+          : String(error.message || error) + (stderr && !auth ? " " + stderr.trim().split("\n").pop() : "") + (auth ? " Sign in to " + agent.name + " first (" + agent.install + ")" : "");
         if (s.client) s.client.stop();
         s.client = null;
         throw new Error(s.error);
@@ -390,6 +432,46 @@ function createAcpHost(options) {
       }
     })();
     return s.startPromise;
+  }
+
+  // Signs a chat's agent in with one of the methods it offered, then sends the
+  // message that was waiting on it.
+  async function authenticate(chatId, methodId, secret) {
+    const chat = chatRecord(chatId);
+    const s = sessions.get(chatId);
+    const offered = (s && s.authMethods) || [];
+    const method = offered.find((m) => m.id === methodId);
+    if (!method) throw new Error("That sign-in method is not offered.");
+    if (method.terminal) throw new Error(method.name + " signs in from a terminal: " + (method.description || "run the agent's login command") + ".");
+    const key = String(secret || "").trim();
+    if (method.needsKey && !key) throw new Error("Enter the " + method.keyLabel + " first.");
+    const isEnv = method.needsKey && /^[A-Z][A-Z0-9_]*$/.test(method.keyLabel);
+    authChoices.set(chat.harnessId, {
+      methodId,
+      meta: method.needsKey && !isEnv ? { "api-key": { apiKey: key } } : null,
+      env: isEnv ? { [method.keyLabel]: key } : {},
+    });
+    if (!method.needsKey) db.setSetting("agent-auth:" + chat.harnessId, methodId);
+    if (s) {
+      dispose(s);
+      sessions.delete(chatId);
+    }
+    try {
+      await start(chatId);
+    } catch (error) {
+      authChoices.delete(chat.harnessId);
+      db.setSetting("agent-auth:" + chat.harnessId, "");
+      throw error;
+    }
+    // The message that hit the sign-in wall is the last row; send it now.
+    const live = sessions.get(chatId);
+    const last = live && live.transcript[live.transcript.length - 1];
+    if (last && last.role === "user" && !last.from) {
+      live.transcript.pop();
+      persist(live, true);
+      prompt(chatId, last.text).catch(() => {});
+    }
+    return snapshot(chatId);
   }
 
   function titleFrom(text) {
@@ -669,6 +751,7 @@ function createAcpHost(options) {
     modelInfo,
     setModelPref,
     probe,
+    authenticate,
     stopAll,
     liveIds,
     childPid,

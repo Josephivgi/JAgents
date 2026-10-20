@@ -472,3 +472,12 @@ details.tool[open] { align-self: stretch; }
 .market-menu-row { border-top: 1px solid var(--line); margin-top: 4px; color: var(--muted); }
 .market-menu-row svg { flex: none; }
 @media (max-width: 640px) { .market-form { grid-template-columns: 1fr; } }
+
+/* ACP sign-in card in a chat */
+.auth-card { display: grid; gap: 8px; padding: 12px 14px; border: 1px solid color-mix(in oklch, var(--accent) 40%, var(--line)); border-radius: 12px; background: color-mix(in oklch, var(--accent) 6%, var(--surface)); font-size: 13px; }
+.auth-head { display: flex; align-items: center; gap: 8px; }
+.auth-head svg { color: var(--accent); flex: none; }
+.auth-method { display: flex; align-items: center; gap: 10px; padding-top: 8px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.auth-method .grow { flex: 1; min-width: 160px; display: grid; gap: 2px; }
+.auth-method input { height: var(--control); min-width: 0; flex: 1 1 180px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--canvas); color: var(--ink); }
+.auth-method input:focus { outline: none; border-color: var(--accent); }

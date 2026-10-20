@@ -264,6 +264,7 @@ function registerIpc() {
   handle("chat-cancel", (id) => acp.cancel(id));
   handle("chat-set-model", (id, modelId) => acp.setModel(id, modelId));
   handle("chat-handoff", (id, harnessId) => acp.handoff(id, harnessId));
+  handle("chat-authenticate", (id, methodId, secret) => acp.authenticate(id, methodId, secret));
   handle("chat-delete", async (id) => {
     const res = await dialog.showMessageBox(mainWindow, { type: "warning", buttons: ["Delete thread", "Cancel"], defaultId: 1, cancelId: 1, message: "Delete this thread?", detail: "Its transcript is removed from JAgents. This cannot be undone.", noLink: true });
     if (res.response !== 0) return false;
