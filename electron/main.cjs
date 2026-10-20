@@ -10,6 +10,7 @@ for (const arg of process.argv) {
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { execFileSync } = require("node:child_process");
 const { app, BrowserWindow, ipcMain, protocol, shell, dialog, Notification } = require("electron");
 const { openDb } = require("../lib/db");
 const { listAcpAgents, listTerminalAgents, setExtraAgents } = require("../lib/agents");
@@ -41,6 +42,21 @@ if (process.env.CLAUDECODE || process.env.CLAUDE_CODE_ENTRYPOINT) {
   for (const key of Object.keys(process.env)) {
     if (/^(CLAUDECODE|CLAUDE_CODE_.+|CLAUDE_AGENT_SDK_.+|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_PREVIEW_.+|MCP_CONNECTION_NONBLOCKING|MCP_SERVER_CONNECTION_BATCH_SIZE|ANTHROPIC_BASE_URL)$/.test(key)) delete process.env[key];
   }
+}
+
+// Agent shells set NO_COLOR for their own output. JAgents started from one
+// passed it to every terminal, and the terminals lost their colors. It stays
+// only when the user set it in their own Windows environment.
+if (process.platform === "win32" && "NO_COLOR" in process.env) {
+  const userSet = ["HKCU\\Environment", "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment"].some((key) => {
+    try {
+      execFileSync("reg", ["query", key, "/v", "NO_COLOR"], { stdio: "ignore", windowsHide: true });
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  if (!userSet) delete process.env.NO_COLOR;
 }
 
 app.setName("JAgents");
