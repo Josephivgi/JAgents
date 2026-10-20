@@ -4,8 +4,23 @@
 
 import { esc } from "./util.js";
 import { icon } from "./icons.js";
+import { on } from "./store.js";
 
 const views = new Map(); // paneId -> TerminalView
+
+// The ResizeObserver alone missed layout changes: when Grid changed shape
+// (2x2 to three tall columns) panes were moved, and terminals kept the old
+// cols and rows until something else resized them. So every layout change,
+// and the window coming back into view, refits each terminal directly once
+// the new arrangement has settled.
+function refitAll() {
+  for (const v of views.values()) v.queueRefit();
+}
+on("app:layout", refitAll);
+window.addEventListener("resize", refitAll);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) refitAll();
+});
 
 export function routePtyData({ id, data }) {
   const v = views.get(id);
@@ -81,6 +96,14 @@ export class TerminalView {
     return { cols: this.term.cols, rows: this.term.rows };
   }
 
+  queueRefit() {
+    clearTimeout(this.refitTimer);
+    clearTimeout(this.refitLate);
+    this.refitTimer = setTimeout(() => this.refit(), 0);
+    // Again once fonts and the rest of the layout have caught up.
+    this.refitLate = setTimeout(() => this.refit(), 150);
+  }
+
   refit() {
     if (!this.host.offsetWidth || !this.host.offsetHeight) return;
     try {
@@ -134,6 +157,8 @@ export class TerminalView {
   }
 
   destroy() {
+    clearTimeout(this.refitTimer);
+    clearTimeout(this.refitLate);
     views.delete(this.pane.id);
     this.ro.disconnect();
     this.term.dispose();
