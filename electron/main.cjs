@@ -25,6 +25,7 @@ const mcpInstall = require("./mcp-install.cjs");
 const { findLegacyRoots, importLegacy } = require("../lib/migrate");
 const { createUpdater } = require("../lib/updater");
 const { setupTaskbarIcon } = require("./win-taskbar.cjs");
+const { createLog, watchWindow } = require("./window-health.cjs");
 
 const APP_ROOT = path.join(__dirname, "..");
 const RENDERER = path.join(APP_ROOT, "renderer");
@@ -95,7 +96,10 @@ let workspace = null;
 let hub = null;
 let plugins = null;
 let mainWindow = null;
+let windowHealth = null;
+let started = false;
 let updater = null;
+const log = createLog(path.join(DATA_ROOT, "jagents.log"));
 let autoMcp = { at: 0, changes: [], running: false };
 let legacyData = { status: "off" };
 
@@ -148,6 +152,7 @@ function theme() {
 }
 
 function createWindow() {
+  started = true;
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -176,6 +181,7 @@ function createWindow() {
       mainWindow.webContents.reload();
     }
   });
+  windowHealth = watchWindow(mainWindow, { log });
   mainWindow.loadURL(SHELL_URL);
   mainWindow.on("closed", () => (mainWindow = null));
 }
@@ -190,6 +196,8 @@ function notify(text) {
 }
 
 function registerIpc() {
+  // The page reports in once it has drawn the app (or its start error).
+  ipcMain.on("app-ready", () => windowHealth && windowHealth.ready());
   handle("app-info", () => ({ dataRoot: DATA_ROOT, hubDir: HOME_DIR, theme: theme(), cwd: workspace.cwdDefault(), hubAttach: workspace.hubOn(), hubChosen: db.getSetting("hub.chosen", false), mode: db.getSetting("mode", "code"), version: updater.state().current, mcpAutoUpdate: db.getSetting("mcp.autoUpdate", true), mcpAutoInstall: db.getSetting("mcp.autoInstall", false), layout: db.getSetting("layout", "grid"), threadCurrent: db.getSetting("thread.current", ""), platform: process.platform }));
   handle("set-setting", (key, value) => {
     const allowed = ["theme", "mode", "layout", "hub.attach", "hub.chosen", "thread.current", "ui.sidebar", "mcp.autoUpdate", "mcp.autoInstall", "help.section"];
@@ -397,6 +405,7 @@ async function runAutoMcp(force) {
 }
 
 app.whenReady().then(async () => {
+  log("started v" + require("../package.json").version + ", data in " + DATA_ROOT);
   if (fs.existsSync(IMPORT_FLAG)) {
     try {
       const root = legacyRoot();
@@ -464,11 +473,24 @@ app.whenReady().then(async () => {
   setInterval(() => updater.check(), 6 * 60 * 60 * 1000);
 });
 
+// Opening JAgents again shows the running one. Before startup finishes there
+// is no window yet; it opens and comes forward on its own then.
 app.on("second-instance", () => {
-  if (mainWindow) {
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
+  log("second launch: showing the running window");
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    if (started) createWindow();
+    return;
   }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+});
+
+// A dead GPU process can leave the window blank until it repaints.
+app.on("child-process-gone", (_event, details) => {
+  if (details.type !== "GPU") return;
+  if (windowHealth && mainWindow && !mainWindow.isDestroyed()) windowHealth.recover("GPU process gone (" + details.reason + ")");
+  else log("GPU process gone (" + details.reason + ")");
 });
 
 let quitting = false;

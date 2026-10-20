@@ -323,6 +323,8 @@ async function boot() {
   paintTopbar();
 }
 
-boot().catch((error) => {
-  app.innerHTML = '<div class="fatal"><h1>JAgents could not start</h1><pre>' + esc(errorText(error)) + "</pre></div>";
-});
+boot()
+  .catch((error) => {
+    app.innerHTML = '<div class="fatal"><h1>JAgents could not start</h1><pre>' + esc(errorText(error)) + "</pre></div>";
+  })
+  .finally(() => window.jagents.ready());
