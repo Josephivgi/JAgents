@@ -7,6 +7,7 @@
 import { esc, toast, errorText, markdown } from "./util.js";
 import { harnessIcon, icon } from "./icons.js";
 import { store, on, refreshModelInfo, mergeModelInfo, refreshChats } from "./store.js";
+import { openMarketplace } from "./marketplace.js";
 
 const views = new Set();
 
@@ -81,6 +82,12 @@ export class ChatView {
     this.snap = null;
     this.forceScroll = true;
     this.openTools = new Set();
+    // Thread mode reuses one element for every thread it opens, so every
+    // listener goes through this signal and destroy() drops them. Stale
+    // listeners used to stack up and toggle the Agent and Model menus open
+    // and shut again on one click.
+    this.abort = new AbortController();
+    this.destroyed = false;
     this.el.classList.add("chatview");
     if (this.opts.compact) this.el.classList.add("compact");
     this.el.innerHTML =
@@ -108,6 +115,7 @@ export class ChatView {
         toast(errorText(error));
       }
     }
+    if (this.destroyed) return;
     this.paint();
     const id = this.currentAgentId();
     const cached = store.modelCache[id];
@@ -115,7 +123,10 @@ export class ChatView {
   }
 
   destroy() {
+    this.destroyed = true;
     views.delete(this);
+    this.abort.abort();
+    this.el.classList.remove("chatview", "compact");
     this.el.innerHTML = "";
   }
 
@@ -124,6 +135,7 @@ export class ChatView {
   }
 
   setSnap(snap) {
+    if (this.destroyed) return;
     this.snap = snap;
     this.paint();
   }
@@ -206,6 +218,7 @@ export class ChatView {
   }
 
   paint() {
+    if (this.destroyed) return;
     const scroller = this.el.querySelector(".transcript");
     const pinned = nearBottom(scroller);
     const inner = scroller.querySelector(".transcript-inner");
@@ -232,7 +245,7 @@ export class ChatView {
     const bound = Boolean(this.snap && this.snap.transcript && this.snap.transcript.length);
     return (
       '<button type="button" class="news-pill ai-harness-toggle" data-agent-toggle aria-label="Choose agent" aria-haspopup="dialog" aria-expanded="false"' +
-      (bound ? ' title="Picking another agent hands this chat to it, with the conversation so far."' : "") + (this.busy() ? " disabled" : "") + ">" +
+      (this.busy() ? ' title="Wait for this turn to finish, or press Stop, to switch agents." disabled' : bound ? ' title="Picking another agent hands this chat to it, with the conversation so far."' : "") + ">" +
       harnessIcon(agent.id, 15) + '<span class="ai-harness-name">' + esc(agent.name) + "</span>" + icon("chevronDown", 12) + "</button>"
     );
   }
@@ -253,7 +266,8 @@ export class ChatView {
     return (
       '<div class="news-menu ai-harness-menu" data-agent-menu role="dialog" aria-label="Agent">' + searchMarkup("agents") +
       (bound ? '<p class="menu-note">' + icon("handoff", 12) + "Switching hands this chat to the new agent with its recent messages and tool calls.</p>" : "") +
-      '<div role="listbox" aria-label="Agents">' + rows + '<p class="model-menu-empty" data-menu-nomatch hidden>No agents match.</p></div></div>'
+      '<div role="listbox" aria-label="Agents">' + rows + '<p class="model-menu-empty" data-menu-nomatch hidden>No agents match.</p></div>' +
+      '<button type="button" class="news-menu-row market-menu-row" data-open-market>' + icon("store", 16) + '<span class="news-menu-text"><span class="news-menu-name">Get more agents…</span><span class="news-menu-desc">Install agents from the marketplace</span></span></button></div>'
     );
   }
 
@@ -263,7 +277,7 @@ export class ChatView {
     const model = info.list.find((m) => m.modelId === info.selected);
     const agent = this.currentAgent();
     const label = model ? model.name || model.modelId : (snap && snap.status === "starting") || info.probing ? "Loading…" : info.error ? "Default" : !agent.available ? "Not installed" : info.selected || "Default";
-    return '<button type="button" class="news-pill agent-model-toggle" data-model-toggle aria-label="Choose model" aria-haspopup="dialog" aria-expanded="false"' + (this.busy() ? " disabled" : "") + '><span class="news-pill-label">' + esc(label) + "</span>" + icon("chevronDown", 12) + "</button>";
+    return '<button type="button" class="news-pill agent-model-toggle" data-model-toggle aria-label="Choose model" aria-haspopup="dialog" aria-expanded="false"' + (this.busy() ? ' title="Wait for this turn to finish, or press Stop, to change the model." disabled' : "") + '><span class="news-pill-label">' + esc(label) + "</span>" + icon("chevronDown", 12) + "</button>";
   }
 
   modelMenuMarkup() {
@@ -288,12 +302,22 @@ export class ChatView {
     ];
     for (const [sel, html, popup] of pairs) {
       const slot = this.el.querySelector(sel);
-      if (slot && slot._html !== html) {
-        const open = slot.querySelector(".news-menu");
-        slot._html = html;
+      if (!slot || slot._html === html) continue;
+      slot._html = html;
+      const toggle = slot.firstElementChild;
+      if (!toggle || !slot.querySelector("[" + popup + "]")) {
         slot.innerHTML = html + "<div " + popup + "></div>";
-        if (open) slot.querySelector("[" + popup + "]").appendChild(open);
+        continue;
       }
+      // Update the toggle in place. Swapping the button while it is pressed
+      // (a model list or status arriving mid-click) sends the click to the
+      // slot instead, and the menu never opens.
+      const tpl = document.createElement("template");
+      tpl.innerHTML = html;
+      const next = tpl.content.firstElementChild;
+      for (const a of Array.from(toggle.attributes)) if (!next.hasAttribute(a.name)) toggle.removeAttribute(a.name);
+      for (const a of Array.from(next.attributes)) if (a.name !== "aria-expanded") toggle.setAttribute(a.name, a.value);
+      toggle.innerHTML = next.innerHTML;
     }
   }
 
@@ -396,6 +420,7 @@ export class ChatView {
 
   wire() {
     const el = this.el;
+    const sig = { signal: this.abort.signal };
     el.addEventListener("click", (event) => {
       const t = event.target;
       for (const which of this.menus()) {
@@ -409,6 +434,10 @@ export class ChatView {
         this.closeMenus();
         return this.pickAgent(agentPick.dataset.agentPick);
       }
+      if (t.closest("[data-open-market]")) {
+        this.closeMenus();
+        return openMarketplace();
+      }
       const modelPick = t.closest("[data-model-pick]");
       if (modelPick) {
         this.closeMenus();
@@ -419,7 +448,7 @@ export class ChatView {
       if (t.closest("[data-send]")) return this.send();
       if (t.closest("[data-stop]") && this.chatId) return window.jagents.chats.cancel(this.chatId);
       if (!t.closest(".news-menu")) this.closeMenus();
-    });
+    }, sig);
     el.addEventListener(
       "toggle",
       (event) => {
@@ -429,12 +458,12 @@ export class ChatView {
           else this.openTools.delete(d.dataset.tool);
         }
       },
-      true,
+      { capture: true, signal: this.abort.signal },
     );
     el.addEventListener("input", (event) => {
       const search = event.target.closest("[data-menu-search]");
       if (search) applyFilter(search.closest(".news-menu"), search.value);
-    });
+    }, sig);
     el.addEventListener("keydown", (event) => {
       if (event.key === "Escape" && el.querySelector(".news-menu")) {
         event.preventDefault();
@@ -455,10 +484,10 @@ export class ChatView {
       const rows = Array.from(menu.querySelectorAll("[data-menu-search], .news-menu-row:not([hidden])"));
       const i = rows.indexOf(document.activeElement);
       rows[(i + (event.key === "ArrowDown" ? 1 : -1) + rows.length) % rows.length].focus();
-    });
+    }, sig);
     document.addEventListener("click", (event) => {
       if (!el.contains(event.target)) this.closeMenus();
-    });
+    }, sig);
     this.input.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
         event.preventDefault();

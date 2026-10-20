@@ -8,6 +8,7 @@ import { renderThreadMode, noteThreadState, openThread } from "./thread-mode.js"
 import { dropdown, openHubPanel, openUpdatesPanel, updateActivity } from "./dialogs.js";
 import { renderHelpMode, refreshHelp } from "./help-mode.js";
 import { initPlugins, openPluginsPanel, pluginKinds, openPluginPane } from "./plugins.js";
+import { openMarketplace } from "./marketplace.js";
 
 const app = document.getElementById("app");
 let mode = "code";
@@ -37,6 +38,7 @@ function topbarMarkup() {
     '<button data-layout="columns" title="Side by side">' + icon("columns", 15) + "</button>" +
     '<button data-layout="rows" title="Stacked">' + icon("rows", 15) + "</button></div></div>" +
     '<div class="plugin-top" data-plugin-top></div>' +
+    '<button class="hub-pill" data-market title="Agent marketplace: install more agents">' + icon("store", 15) + "<span>Agents</span></button>" +
     '<button class="hub-pill" data-hub title="MCP hub">' + icon("hub", 15) + '<span data-hub-label>MCP hub</span></button>' +
     '<button class="version-pill" data-updates title="Version and updates">' + icon("update", 14) + '<span data-version></span></button>' +
     '<button class="icon-btn" data-theme-toggle title="Toggle theme"></button>'
@@ -148,6 +150,7 @@ function addMenu(anchor) {
   items.push({ section: "Chat" });
   const chats = store.acpAgents.slice().sort((a, b) => byAvail(a, b) || Number(Boolean(b.native)) - Number(Boolean(a.native)));
   for (const a of chats) items.push({ label: a.name, desc: a.available ? (a.native ? "Native, through the Claude Agent SDK" : "ACP agent") : a.install, icon: harnessIcon(a.id, 18), disabled: !a.available, badge: a.available ? (a.native ? "Native" : "") : "Not installed", onPick: () => addChat(a.id) });
+  items.push({ label: "Get more agents…", desc: "Install agents from the marketplace", icon: '<span class="menu-ic">' + icon("store", 18) + "</span>", onPick: () => openMarketplace() });
   const open = new Set(store.panes.filter((p) => p.kind === "chat").map((p) => p.chatId));
   const threads = store.chats.filter((c) => !open.has(c.id)).slice(0, 5);
   if (threads.length) {
@@ -257,6 +260,7 @@ async function boot() {
     }
     if (t.closest("[data-add-pane]")) return addMenu(t.closest("[data-add-pane]"));
     if (t.closest("[data-hub]")) return openHubPanel();
+    if (t.closest("[data-market]")) return openMarketplace();
     if (t.closest("[data-updates]")) return openUpdatesPanel(false).catch((error) => toast(errorText(error)));
     const ua = t.closest("[data-update-act]");
     if (ua) {

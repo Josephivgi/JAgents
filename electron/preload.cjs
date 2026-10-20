@@ -9,11 +9,19 @@ contextBridge.exposeInMainWorld("jagents", {
   setSetting: call("set-setting"),
   pickFolder: call("pick-folder"),
   openPath: call("open-path"),
+  openUrl: call("open-url"),
   agents: {
     list: call("agents-list"),
     modelInfo: call("agent-model-info"),
     setModel: call("agent-set-model"),
     probe: call("agent-probe"),
+  },
+  marketplace: {
+    list: call("marketplace-list"),
+    add: call("marketplace-add"),
+    remove: call("marketplace-remove"),
+    install: call("marketplace-install"),
+    installs: call("marketplace-installs"),
   },
   panes: {
     list: call("panes-list"),

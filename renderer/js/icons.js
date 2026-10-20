@@ -48,6 +48,7 @@ const GLYPHS = {
   moon: stroke("M19.5 14.5A7.5 7.5 0 0 1 9.5 4.5a7.5 7.5 0 1 0 10 10Z", 1.6),
   restart: stroke("M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4", 1.7),
   more: '<circle cx="6" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="18" cy="12" r="1.5" fill="currentColor"/>',
+  store: stroke("M5 8.5h14l-1.1 10.6a1.5 1.5 0 0 1-1.5 1.4H7.6a1.5 1.5 0 0 1-1.5-1.4ZM9 8.5V7a3 3 0 0 1 6 0v1.5", 1.7),
   puzzle: stroke("M9.5 4.5a2 2 0 0 1 4 0V6H17a1 1 0 0 1 1 1v3.5h-1.5a2 2 0 0 0 0 4H18V18a1 1 0 0 1-1 1h-3.5v-1.5a2 2 0 0 0-4 0V19H6a1 1 0 0 1-1-1v-3.5h1.5a2 2 0 0 0 0-4H5V7a1 1 0 0 1 1-1h3.5Z", 1.6),
   globe: '<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/>' + stroke("M3.5 12h17M12 3.5c2.4 2.4 3.5 5.2 3.5 8.5s-1.1 6.1-3.5 8.5c-2.4-2.4-3.5-5.2-3.5-8.5s1.1-6.1 3.5-8.5Z", 1.5),
   back: stroke("M19 12H5m0 0 6-6m-6 6 6 6", 1.8),

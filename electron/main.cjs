@@ -12,7 +12,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { app, BrowserWindow, ipcMain, protocol, shell, dialog, Notification } = require("electron");
 const { openDb } = require("../lib/db");
-const { listAcpAgents, listTerminalAgents } = require("../lib/agents");
+const { listAcpAgents, listTerminalAgents, setExtraAgents } = require("../lib/agents");
+const marketplace = require("../lib/acp-marketplace");
+const { installAgent } = require("../lib/agent-install");
 const { connectPtyHost } = require("./pty-client.cjs");
 const { createAcpHost } = require("./acp-host.cjs");
 const { createWorkspace } = require("./workspace.cjs");
@@ -181,9 +183,60 @@ function registerIpc() {
     return res.filePaths[0];
   });
   handle("open-path", (p) => shell.openPath(String(p)));
+  handle("open-url", (url) => {
+    if (!/^https:\/\//.test(String(url))) throw new Error("Only https links open.");
+    return shell.openExternal(String(url));
+  });
 
   handle("agents-list", () => ({ acp: listAcpAgents(), terminal: listTerminalAgents() }));
-
+  handle("marketplace-list", (opts) => marketplace.marketplaceList(db, DATA_ROOT, opts));
+  // Installs run one per agent; their state outlives the panel so reopening
+  // it shows the progress.
+  const installs = new Map();
+  handle("marketplace-installs", () => Object.fromEntries(installs));
+  handle("marketplace-install", async (id) => {
+    const key = String(id || "");
+    if (installs.get(key) && installs.get(key).state === "running") return installs.get(key);
+    const plan = marketplace.installPlan(DATA_ROOT, key);
+    const job = { id: key, name: plan.name, state: "running", line: "Starting…", error: "" };
+    installs.set(key, job);
+    broadcast("agent-install", job);
+    // Reinstalling over a running copy would fail on locked files.
+    for (const c of acp.listChats().filter((c) => c.harnessId === key)) acp.stopChat(c.id);
+    try {
+      const spec = await installAgent(plan, (line) => {
+        job.line = line.slice(0, 300);
+        broadcast("agent-install", job);
+      });
+      if (spec) marketplace.saveInstalled(db, plan, spec);
+      const found = listAcpAgents().some((a) => a.id === key && a.available);
+      job.state = found ? "done" : "failed";
+      job.error = found ? "" : plan.name + " installed, but JAgents cannot find it yet. Restart JAgents so it picks up the new PATH.";
+      job.line = found ? plan.name + " is installed." : job.line;
+    } catch (error) {
+      job.state = "failed";
+      job.error = String((error && error.message) || error);
+    }
+    broadcast("agent-install", job);
+    broadcast("agents-changed", {});
+    return job;
+  });
+  handle("marketplace-add", (body) => {
+    const added = marketplace.addCustomAgent(db, body);
+    broadcast("agents-changed", {});
+    return added;
+  });
+  handle("marketplace-remove", async (id) => {
+    const key = String(id || "");
+    const chats = acp.listChats().filter((c) => c.harnessId === key);
+    const res = await dialog.showMessageBox(mainWindow, { type: "warning", buttons: ["Uninstall", "Cancel"], defaultId: 1, cancelId: 1, message: "Uninstall this agent?", detail: (chats.length ? "Its running chats stop. Its " + chats.length + " thread" + (chats.length === 1 ? "" : "s") + " keep their transcripts and can be handed to another agent. " : "") + "Files JAgents downloaded for it are deleted.", noLink: true });
+    if (res.response !== 0) return false;
+    // A removed agent must not keep running with no picker entry to stop it.
+    for (const c of chats) acp.stopChat(c.id);
+    const removed = marketplace.removeAgent(db, DATA_ROOT, key);
+    broadcast("agents-changed", {});
+    return removed;
+  });
   handle("panes-list", () => workspace.list());
   handle("pane-add-terminal", (opts) => workspace.addTerminal(opts));
   handle("pane-add-chat", (opts) => workspace.addChatPane(opts));
@@ -329,6 +382,7 @@ app.whenReady().then(async () => {
     fs.rmSync(IMPORT_FLAG, { force: true });
   }
   db = openDb(DATA_ROOT);
+  setExtraAgents(() => marketplace.extraAgents(db));
   updater = createUpdater({ appRoot: APP_ROOT, emit: broadcast });
   registerProtocol();
   ptyHost = await connectPtyHost({ emit: broadcast, dataRoot: DATA_ROOT });
