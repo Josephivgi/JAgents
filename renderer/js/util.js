@@ -1,5 +1,3 @@
-import { icon as svgIcon } from "./icons.js";
-
 export function esc(value) {
   return String(value == null ? "" : value).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
@@ -52,9 +50,7 @@ export function markdown(src) {
     if (i % 2 === 1) {
       const lang = (block.match(/^([a-zA-Z0-9_-]*)\n/) || ["", ""])[1];
       const body = block.replace(/^[a-zA-Z0-9_-]*\n/, "");
-      html +=
-        '<div class="code-block"><div class="code-head"><span>' + esc(lang || "Code") + '</span><button type="button" class="copy-btn" data-copy-code title="Copy code" aria-label="Copy code">' + svgIcon("copy", 13) + "</button></div>" +
-        "<pre><code>" + esc(body.replace(/\n$/, "")) + "</code></pre></div>";
+      html += "<pre" + (lang ? ' data-lang="' + esc(lang) + '"' : "") + "><code>" + esc(body.replace(/\n$/, "")) + "</code></pre>";
       return;
     }
     const lines = block.split("\n");

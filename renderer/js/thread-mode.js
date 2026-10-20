@@ -34,11 +34,10 @@ function paintList() {
     ? list
         .map((c) => {
           const parent = c.parentId ? byId.get(c.parentId) || store.hubAgents.find((a) => a.id === c.parentId) : null;
-          const sub = (c.handle || agentName(c.harnessId)) + (parent ? " · sub of " + (parent.handle || "") : "");
           return (
-            '<button class="thread-item' + (c.id === current ? " active" : "") + '" data-thread="' + esc(c.id) + '" title="' + esc(c.title + "\n" + sub) + '">' +
-            '<span class="thread-ic">' + harnessIcon(c.harnessId, 14) + "</span>" +
-            '<span class="grow"><span class="t">' + esc(c.title) + '</span><span class="s">' + esc(sub) + "</span></span>" +
+            '<button class="thread-item' + (c.id === current ? " active" : "") + '" data-thread="' + esc(c.id) + '">' +
+            '<span class="thread-ic">' + harnessIcon(c.harnessId, 16) + "</span>" +
+            '<span class="grow"><span class="t">' + esc(c.title) + '</span><span class="s">' + esc(c.handle || agentName(c.harnessId)) + (parent ? " · sub of " + esc(parent.handle || "") : "") + "</span></span>" +
             '<span class="when">' + timeAgo(c.updatedAt) + "</span></button>"
           );
         })
@@ -53,7 +52,7 @@ function paintHead(snap) {
     return;
   }
   head.innerHTML =
-    harnessIcon(snap.harnessId, 16) +
+    harnessIcon(snap.harnessId, 18) +
     '<div class="th-text"><h2>' + esc(snap.title) + '</h2><span class="muted small">' + esc(snap.handle || "") + " · " + esc(snap.agentName || agentName(snap.harnessId)) + " · " + esc(snap.cwd || "") + "</span></div>" +
     '<span class="spacer"></span>' +
     '<button class="btn sm secondary" data-th="split" title="Open this thread in Code mode next to your terminals">' + icon("columns", 15) + "Split into Code</button>" +

@@ -259,6 +259,9 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
       description: String(m.description || ""),
       version: String(m.version || ""),
       enabled: st.enabled !== false,
+      // Shipped in the app's plugins folder, and flagged as a trial by its manifest.
+      included: Boolean(bundledDir && fs.existsSync(path.join(bundledDir, id, "plugin.json"))),
+      experimental: m.experimental === true,
       author: st.author || "",
       updatedAt: st.updatedAt || 0,
       files,
@@ -275,7 +278,8 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
   }
 
   function list() {
-    return { safeMode: safeMode(), dir, plugins: ids().map(info) };
+    const all = ids().map(info);
+    return { safeMode: safeMode(), dir, plugins: all.filter((p) => p.included).concat(all.filter((p) => !p.included)) };
   }
 
   function read(id) {

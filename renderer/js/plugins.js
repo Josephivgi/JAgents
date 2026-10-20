@@ -353,6 +353,8 @@ function ago(ms) {
 
 function pluginRow(p, safe) {
   const chips = [];
+  if (p.included) chips.push('<span class="chip" title="Ships with JAgents and is turned on for everyone">Included with JAgents</span>');
+  if (p.experimental) chips.push('<span class="chip warn" title="Still being tried out. Turn it off here if something looks wrong.">Experimental</span>');
   if (p.hasRenderer || p.hasCss) chips.push('<span class="chip">' + icon("grid", 11) + "UI</span>");
   for (const s of p.appServers) chips.push('<span class="chip hub" title="Runs inside JAgents: ' + esc(s.tools.join(", ")) + '">' + icon("hub", 11) + esc(s.name) + " · " + s.tools.length + " tools</span>");
   for (const s of p.mcpServers) chips.push('<span class="chip hub" title="Outside MCP server every agent gets">' + icon("hub", 11) + esc(s) + "</span>");

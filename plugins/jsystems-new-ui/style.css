@@ -1,0 +1,186 @@
+/* JSystems New UI: a calmer chat look for Threads and Code mode chat panes.
+   Scoped under html.jsystems-ui (set by renderer.js) so it outranks the base
+   styles and disappears cleanly when the plugin is turned off. The palette is
+   set on the chat areas only; the rest of JAgents keeps its own theme. */
+
+html.jsystems-ui :is(.thread-mode, [data-thread-side], .chatview) {
+  --canvas: oklch(0.992 0 0);
+  --surface: #ffffff;
+  --ink: oklch(0.274 0.006 286);
+  --muted: oklch(0.552 0.016 286);
+  --line: oklch(0.92 0.004 286);
+  --well: oklch(0.967 0.001 286);
+  --accent: oklch(0.488 0.217 264);
+  --accent-ink: #ffffff;
+  --accent-soft: oklch(0.967 0.001 286);
+  --jui-msg: oklch(0.967 0.001 286);
+  --jui-code: oklch(0.985 0 0);
+  --jui-shadow: 0 1px 2px oklch(0 0 0 / 0.04), 0 4px 16px oklch(0 0 0 / 0.06);
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --mono: "Cascadia Code", "JetBrains Mono", ui-monospace, Consolas, monospace;
+  --jui-max: 46rem;
+  font-family: var(--font);
+}
+html.jsystems-ui[data-theme="dark"] :is(.thread-mode, [data-thread-side], .chatview) {
+  --canvas: oklch(0.145 0 0);
+  --surface: oklch(0.172 0 0);
+  --ink: oklch(0.97 0 0);
+  --muted: oklch(0.64 0 0);
+  --line: oklch(1 0 0 / 0.07);
+  --well: oklch(1 0 0 / 0.04);
+  --accent: oklch(0.571 0.21 264);
+  --accent-ink: #ffffff;
+  --accent-soft: oklch(1 0 0 / 0.05);
+  --jui-msg: oklch(1 0 0 / 0.055);
+  --jui-code: oklch(1 0 0 / 0.03);
+  --jui-shadow: none;
+}
+
+/* ---------- Threads: sidebar ---------- */
+html.jsystems-ui [data-thread-side] { background: var(--surface); }
+html.jsystems-ui .sidebar:has([data-thread-side]:not([hidden])) { background: var(--surface); }
+html.jsystems-ui [data-thread-side] .side-head { padding: 10px 10px 6px; }
+html.jsystems-ui [data-thread-side] .side-head .btn.primary {
+  height: 32px; justify-content: flex-start; padding: 0 10px; border-radius: 8px;
+  background: transparent; color: var(--ink); border: 1px solid var(--line); font-size: 13px;
+}
+html.jsystems-ui [data-thread-side] .side-head .btn.primary:hover { background: var(--well); }
+html.jsystems-ui [data-thread-side] .side-search { height: 30px; margin: 0 10px 8px; border-radius: 8px; background: var(--well); border-color: transparent; }
+html.jsystems-ui .thread-list { padding: 0 6px 10px; gap: 0; }
+html.jsystems-ui .thread-item { gap: 8px; min-height: 30px; padding: 4px 8px; border-radius: 6px; }
+html.jsystems-ui .thread-item .s { display: none; }
+html.jsystems-ui .thread-item .t { font-size: 13px; color: var(--muted); }
+html.jsystems-ui .thread-item:hover { background: var(--well); }
+html.jsystems-ui .thread-item:hover .t { color: var(--ink); }
+html.jsystems-ui .thread-item.active { background: var(--jui-msg); }
+html.jsystems-ui .thread-item.active .t { color: var(--ink); font-weight: 500; }
+html.jsystems-ui .thread-item .when { font-size: 11px; font-variant-numeric: tabular-nums; }
+html.jsystems-ui .thread-ic svg { width: 14px; height: 14px; }
+
+/* ---------- Threads: header + body ---------- */
+html.jsystems-ui .thread-mode { background: var(--canvas); color: var(--ink); }
+html.jsystems-ui .thread-head { min-height: 44px; padding: 6px 14px; gap: 8px; background: var(--canvas); border-bottom-color: var(--line); }
+html.jsystems-ui .thread-head > svg, html.jsystems-ui .thread-head > .ai-ic { width: 16px; height: 16px; }
+html.jsystems-ui .th-text { flex-direction: row; align-items: baseline; gap: 8px; }
+html.jsystems-ui .th-text h2 { font-size: 13.5px; font-weight: 500; }
+html.jsystems-ui .th-text .small { font-size: 12px; }
+html.jsystems-ui .thread-head .btn.sm { height: 28px; border-radius: 8px; font-size: 12.5px; background: transparent; }
+html.jsystems-ui .thread-head .btn.sm:hover { background: var(--well); }
+
+/* ---------- Chat transcript ---------- */
+html.jsystems-ui .chatview { background: var(--canvas); color: var(--ink); }
+html.jsystems-ui .transcript { padding: 24px 20px 12px; }
+html.jsystems-ui .transcript-inner { max-width: var(--jui-max); gap: 14px; font-size: 14px; line-height: 1.65; }
+
+html.jsystems-ui .msg { position: relative; gap: 2px; }
+html.jsystems-ui .msg.user .bubble {
+  background: var(--jui-msg); color: var(--ink); border-radius: 16px; padding: 10px 14px;
+  max-width: 80%; line-height: 1.55;
+}
+html.jsystems-ui .msg.relayed .bubble { background: var(--jui-msg); border: 1px dashed var(--line); }
+html.jsystems-ui .from-tag { color: var(--muted); font-size: 11.5px; }
+html.jsystems-ui .msg.agent .bubble { padding: 0; }
+html.jsystems-ui .bubble code { font-family: var(--mono); font-size: 0.86em; background: var(--jui-msg); border: 1px solid var(--line); padding: 0.1em 0.35em; border-radius: 5px; }
+html.jsystems-ui .bubble ul, html.jsystems-ui .bubble ol { padding-left: 22px; }
+html.jsystems-ui .bubble li + li { margin-top: 2px; }
+
+/* Copy buttons under each message show on hover */
+html.jsystems-ui .jui-msg-actions { display: flex; gap: 2px; height: 22px; opacity: 0; transition: opacity 0.15s; }
+html.jsystems-ui .msg.user .jui-msg-actions { justify-content: flex-end; }
+html.jsystems-ui .msg:hover .jui-msg-actions, html.jsystems-ui .jui-msg-actions:focus-within { opacity: 1; }
+html.jsystems-ui .jui-copy { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; color: var(--muted); }
+html.jsystems-ui .jui-copy:hover { background: var(--well); color: var(--ink); }
+html.jsystems-ui .jui-copy.done { color: var(--ok); }
+
+/* Code blocks with a header bar */
+html.jsystems-ui .jui-code { margin: 10px 0; border: 1px solid var(--line); border-radius: 10px; background: var(--jui-code); overflow: hidden; }
+html.jsystems-ui .jui-code-head { display: flex; align-items: center; justify-content: space-between; height: 30px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11.5px; }
+html.jsystems-ui .jui-code pre { margin: 0; background: transparent; border-radius: 0; padding: 10px 12px; font-size: 12.5px; line-height: 1.55; }
+html.jsystems-ui .jui-code pre code { border: 0; background: none; padding: 0; font-size: inherit; }
+html.jsystems-ui .bubble pre { font-family: var(--mono); }
+
+/* Tool calls and thinking as quiet rows, not boxes */
+html.jsystems-ui .tool { border: 0; background: transparent; border-radius: 6px; font-size: 13px; color: var(--muted); align-self: stretch; }
+html.jsystems-ui div.tool, html.jsystems-ui .tool > summary { min-height: 24px; padding: 1px 2px; gap: 6px; }
+html.jsystems-ui .tool > summary:hover { color: var(--ink); }
+html.jsystems-ui .tool svg, html.jsystems-ui .tool .spinner { width: 13px; height: 13px; }
+html.jsystems-ui .tool.completed svg { color: var(--muted); }
+html.jsystems-ui .tool-kind { background: transparent; padding: 0; font-size: 11px; opacity: 0.7; }
+html.jsystems-ui .tool-io { padding: 2px 2px 8px 21px; }
+html.jsystems-ui .tool-io span { font-size: 10.5px; }
+html.jsystems-ui .tool-io pre { background: var(--jui-code); border: 1px solid var(--line); border-radius: 8px; font-size: 11.5px; max-height: 256px; }
+html.jsystems-ui :is(.tool, .thought) + :is(.tool, .thought) { margin-top: -12px; }
+html.jsystems-ui .thought { font-size: 13px; }
+html.jsystems-ui .thought summary { min-height: 24px; display: flex; align-items: center; padding: 1px 2px; list-style: none; }
+html.jsystems-ui .thought summary::-webkit-details-marker { display: none; }
+html.jsystems-ui .thought summary::before { content: ""; width: 5px; height: 5px; margin: 0 9px 0 4px; border-radius: 50%; background: var(--muted); opacity: 0.6; }
+html.jsystems-ui .thought div { padding: 2px 0 6px 21px; line-height: 1.55; }
+
+html.jsystems-ui .plan { background: transparent; border-radius: 10px; }
+html.jsystems-ui .sys.handoff { background: transparent; border-color: var(--line); }
+html.jsystems-ui .err-row { border-radius: 10px; }
+
+/* The working line shimmers and counts up */
+html.jsystems-ui .working { gap: 8px; font-size: 13px; }
+html.jsystems-ui .working .spinner { width: 11px; height: 11px; border-width: 1.5px; border-top-color: var(--muted); }
+html.jsystems-ui .working {
+  background: linear-gradient(90deg, var(--muted) 0%, var(--muted) 40%, var(--ink) 50%, var(--muted) 60%, var(--muted) 100%);
+  background-size: 220% 100%; -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: jui-shimmer 2.2s linear infinite;
+}
+html.jsystems-ui .working .spinner { -webkit-text-fill-color: initial; }
+html.jsystems-ui .jui-elapsed { font-variant-numeric: tabular-nums; }
+html.jsystems-ui .jui-elapsed::before { content: "\00b7  "; white-space: pre; }
+@keyframes jui-shimmer { from { background-position: 100% 0; } to { background-position: -120% 0; } }
+
+html.jsystems-ui .intro h1 { font-size: 22px; font-weight: 500; letter-spacing: -0.01em; }
+
+/* ---------- Composer ---------- */
+html.jsystems-ui .composer-wrap { padding: 4px 20px 18px; background: linear-gradient(to bottom, transparent, var(--canvas) 30%); }
+html.jsystems-ui .composer-inner { max-width: var(--jui-max); }
+html.jsystems-ui .composer-card {
+  gap: 6px; padding: 12px 12px 10px 16px; border-radius: 24px; background: var(--surface);
+  border-color: var(--line); box-shadow: var(--jui-shadow);
+}
+html.jsystems-ui .composer-card:focus-within { border-color: color-mix(in oklch, var(--ink) 18%, var(--line)); box-shadow: var(--jui-shadow); }
+html.jsystems-ui .composer-input-wrap textarea { font-size: 14px; line-height: 1.55; min-height: 44px; padding: 2px 0; }
+html.jsystems-ui .composer-keys { display: none; }
+html.jsystems-ui .composer-keys + .composer-submit { margin-left: auto; }
+html.jsystems-ui .composer-settings { gap: 2px; margin-left: -6px; }
+html.jsystems-ui .news-pill { min-height: 28px; padding: 0 8px; background: transparent; color: var(--muted); font-size: 12.5px; border-radius: 8px; }
+html.jsystems-ui .news-pill:hover:not(:disabled), html.jsystems-ui .news-pill[aria-expanded="true"] { background: var(--well); color: var(--ink); border-color: transparent; }
+html.jsystems-ui .send-btn { width: 32px; height: 32px; min-width: 32px; padding: 0; border-radius: 999px; background: var(--accent); color: var(--accent-ink); }
+html.jsystems-ui .send-btn:hover:not(:disabled) { background: color-mix(in oklch, var(--accent) 90%, var(--canvas)); transform: scale(1.05); }
+html.jsystems-ui .send-btn.stop { background: oklch(0.58 0.2 25 / 0.9); color: #fff; }
+html.jsystems-ui .send-btn.stop span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+html.jsystems-ui .send-btn.stop:hover { background: oklch(0.58 0.2 25); }
+html.jsystems-ui .news-menu { border-radius: 12px; background: var(--surface); }
+html.jsystems-ui .news-menu-row { border-radius: 6px; min-height: 30px; padding: 5px 8px; }
+
+/* ---------- Code mode: the same look, scaled for panes ---------- */
+html.jsystems-ui .chatview.compact { --jui-max: 100%; }
+html.jsystems-ui .chatview.compact .transcript { padding: 12px 12px 6px; }
+html.jsystems-ui .chatview.compact .transcript-inner { gap: 10px; font-size: 13px; line-height: 1.6; }
+html.jsystems-ui .chatview.compact .msg.user .bubble { border-radius: 13px; padding: 7px 11px; max-width: 88%; }
+html.jsystems-ui .chatview.compact :is(.tool, .thought) + :is(.tool, .thought) { margin-top: -9px; }
+html.jsystems-ui .chatview.compact div.tool, html.jsystems-ui .chatview.compact .tool > summary, html.jsystems-ui .chatview.compact .thought summary { min-height: 22px; font-size: 12.5px; }
+html.jsystems-ui .chatview.compact .jui-code pre { padding: 8px 10px; font-size: 12px; }
+html.jsystems-ui .chatview.compact .composer-wrap { padding: 2px 8px 8px; }
+html.jsystems-ui .chatview.compact .composer-card { padding: 8px 8px 7px 12px; border-radius: 18px; background: var(--surface); }
+html.jsystems-ui .chatview.compact .composer-input-wrap textarea { font-size: 13px; min-height: 34px; }
+html.jsystems-ui .chatview.compact .news-pill { min-height: 26px; font-size: 12px; }
+html.jsystems-ui .chatview.compact .send-btn { width: 28px; height: 28px; min-width: 28px; }
+html.jsystems-ui .chatview.compact .intro h1 { font-size: 18px; }
+
+/* Wide Code-mode panes get the centered column back */
+@container (min-width: 760px) {
+  html.jsystems-ui .chatview.compact .transcript-inner, html.jsystems-ui .chatview.compact .composer-inner { max-width: 46rem; }
+}
+/* Narrow panes: icon-only agent pill, tighter bubbles */
+@container (max-width: 420px) {
+  html.jsystems-ui .chatview .ai-harness-name { display: none; }
+  html.jsystems-ui .chatview .composer-settings .agent-model-picker { max-width: 62%; }
+  html.jsystems-ui .chatview .msg.user .bubble { max-width: 94%; }
+  html.jsystems-ui .chatview .tool-kind { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { html.jsystems-ui .working { animation: none; background: none; color: var(--muted); } }
