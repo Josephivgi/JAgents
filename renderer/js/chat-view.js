@@ -1,8 +1,8 @@
-// A chat thread with Plugin App's composer: the docked composer card, Agent and
-// Model pills with searchable upward menus, Enter to send, Stop while a turn
-// runs, and the agent pill doing a context handoff on a bound chat. Adapted
-// from plugin-app/renderer/js/build.js into a component so Code mode can show
-// several chats at once and Thread mode can show one large.
+// A chat thread: transcript plus the docked composer card. The composer takes
+// text and attachments (paste, drop, or the paperclip), and one picker chooses
+// the agent and its model: agent logos across the top, that agent's models
+// below. Picking another agent on a bound chat hands the chat over. Code mode
+// shows several of these at once and Thread mode shows one large.
 
 import { esc, toast, errorText, markdown } from "./util.js";
 import { harnessIcon, icon } from "./icons.js";
@@ -21,11 +21,11 @@ export function routeAcpState(snap) {
 export function routeAcpModels(info) {
   if (!info || !info.harnessId) return;
   mergeModelInfo(info.harnessId, info);
-  for (const v of views) if (v.currentAgentId() === info.harnessId) v.onModels();
+  for (const v of views) if (v.currentAgentId() === info.harnessId || v.viewHarness === info.harnessId) v.onModels();
 }
 
 on("models", (id) => {
-  for (const v of views) if (v.currentAgentId() === id) v.paintToggles();
+  for (const v of views) if (v.currentAgentId() === id || v.viewHarness === id) v.onModels();
 });
 on("agents", () => {
   for (const v of views) v.paintToggles();
@@ -60,6 +60,42 @@ function autoGrow(el) {
   el.style.height = Math.min(el.scrollHeight, 200) + "px";
 }
 
+const ATTACH_MAX = 10;
+const ATTACH_BYTES = 50 * 1024 * 1024;
+const PREVIEW_BYTES = 10 * 1024 * 1024;
+const IMAGE_RE = /^image\/(png|jpeg|webp|gif)$/;
+
+function fileSize(n) {
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return Math.round(n / 1024) + " KB";
+  return (n / 1024 / 1024).toFixed(n < 10 * 1024 * 1024 ? 1 : 0) + " MB";
+}
+
+function readDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result));
+    r.onerror = () => reject(r.error || new Error("Could not read " + file.name));
+    r.readAsDataURL(file);
+  });
+}
+
+// Saved attachments are served by the app at attachments/<chatId>/<file>.
+function attachmentUrl(chatId, a) {
+  if (a.preview) return a.preview;
+  if (!chatId || !a.path) return "";
+  const base = String(a.path).split(/[\\/]/).pop();
+  return "attachments/" + encodeURIComponent(chatId) + "/" + encodeURIComponent(base);
+}
+
+function attachmentMarkup(chatId, a) {
+  const name = esc(a.name || "file");
+  const url = IMAGE_RE.test(a.mimeType || "") ? attachmentUrl(chatId, a) : "";
+  const open = a.path ? ' data-open-file="' + esc(a.path) + '"' : "";
+  if (url) return '<button type="button" class="att-thumb"' + open + ' title="' + name + '"><img src="' + esc(url) + '" alt="' + name + '" loading="lazy"></button>';
+  return '<button type="button" class="att-file"' + open + ' title="' + esc(a.path || a.name) + '">' + icon("file", 15) + '<span class="att-name">' + name + '</span><span class="att-size">' + fileSize(a.size || 0) + "</span></button>";
+}
+
 function toolIcon(st) {
   return st === "completed" ? icon("check", 14) : st === "failed" || st === "cancelled" ? icon("close", 14) : '<span class="spinner sm"></span>';
 }
@@ -82,6 +118,10 @@ export class ChatView {
     this.snap = null;
     this.forceScroll = true;
     this.openTools = new Set();
+    // Files waiting in the composer: {key, name, mimeType, size, path | data, preview}.
+    this.pending = [];
+    // The agent whose models the open picker shows (not chosen until a model is).
+    this.viewHarness = "";
     // Thread mode reuses one element for every thread it opens, so every
     // listener goes through this signal and destroy() drops them. Stale
     // listeners used to stack up and toggle the Agent and Model menus open
@@ -94,13 +134,17 @@ export class ChatView {
       '<div class="transcript"><div class="transcript-inner"></div></div>' +
       '<div class="composer-wrap"><div class="composer-inner">' +
       '<form class="composer-card" data-form>' +
+      '<div class="attach-tray" data-tray hidden></div>' +
       '<div class="composer-input-wrap"><textarea data-input rows="1" placeholder="' + esc(this.opts.placeholder || "Message the agent") + '"></textarea></div>' +
       '<p class="muted small composer-hint" data-hint></p>' +
-      '<div class="composer-foot"><div class="composer-settings"><div class="ai-harness-picker" data-agent-picker></div><div class="agent-model-picker" data-model-picker></div></div>' +
+      '<div class="composer-foot"><div class="composer-settings">' +
+      '<button type="button" class="news-pill attach-btn" data-attach aria-label="Attach files" title="Attach files. You can also paste or drop them here.">' + icon("paperclip", 16) + "</button>" +
+      '<div class="harness-picker" data-picker></div></div>' +
       '<p class="composer-keys" aria-hidden="true"><kbd>Enter</kbd> send <span>·</span> <kbd>Shift</kbd>+<kbd>Enter</kbd> new line</p><div class="composer-submit">' +
       '<button type="button" class="send-btn stop" data-stop hidden>' + icon("stop", 12) + "<span>Stop</span></button>" +
       '<button type="button" class="send-btn" data-send aria-label="Send">' + icon("arrowUp", 16) + "</button>" +
-      "</div></div></form></div></div>";
+      "</div></div></form></div></div>" +
+      '<div class="drop-overlay" data-drop hidden>' + icon("paperclip", 22) + "<span>Drop files to attach</span></div>";
     this.input = this.el.querySelector("[data-input]");
     this.wire();
     views.add(this);
@@ -142,16 +186,27 @@ export class ChatView {
 
   onModels() {
     this.paintToggles();
-    const popup = this.el.querySelector("[data-model-popup]");
-    if (popup && popup.querySelector("[data-model-menu]")) {
-      const old = popup.querySelector("[data-menu-search]");
-      const query = old ? old.value : "";
-      popup.innerHTML = this.modelMenuMarkup();
-      const inp = popup.querySelector("[data-menu-search]");
-      if (inp && query) {
-        inp.value = query;
-        applyFilter(popup.querySelector("[data-model-menu]"), query);
-      }
+    this.repaintMenu();
+  }
+
+  // Redraws the open picker in place, keeping the search text and focus.
+  repaintMenu() {
+    const popup = this.el.querySelector("[data-picker-popup]");
+    if (!popup || !popup.querySelector("[data-picker-menu]")) return;
+    const old = popup.querySelector("[data-menu-search]");
+    const query = old ? old.value : "";
+    const hadFocus = old && document.activeElement === old;
+    const focusedTab = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.harnessTab : "";
+    popup.innerHTML = this.pickerMenuMarkup();
+    const inp = popup.querySelector("[data-menu-search]");
+    if (inp && query) {
+      inp.value = query;
+      applyFilter(popup.querySelector("[data-model-list]"), query);
+    }
+    if (inp && hadFocus) inp.focus();
+    else if (focusedTab) {
+      const tab = popup.querySelector('[data-harness-tab="' + CSS.escape(focusedTab) + '"]');
+      if (tab) tab.focus();
     }
   }
 
@@ -164,10 +219,11 @@ export class ChatView {
     return store.acpAgents.find((a) => a.id === id) || { id, name: id || "Agent", available: false };
   }
 
-  modelInfo() {
+  modelInfo(harnessId) {
     const snap = this.snap;
-    if (snap && snap.models && snap.models.availableModels.length) return { list: snap.models.availableModels, selected: snap.models.currentModelId, live: true };
-    const cached = store.modelCache[this.currentAgentId()] || {};
+    const id = harnessId || this.currentAgentId();
+    if (id === this.currentAgentId() && snap && snap.models && snap.models.availableModels.length) return { list: snap.models.availableModels, selected: snap.models.currentModelId, live: true };
+    const cached = store.modelCache[id] || {};
     const models = cached.models || {};
     if (models.availableModels && models.availableModels.length) return { list: models.availableModels, selected: cached.preferred || models.currentModelId, live: false };
     return { list: [], selected: "", live: false, probing: Boolean(cached.probing), error: cached.error || "" };
@@ -180,7 +236,9 @@ export class ChatView {
   rowMarkup(row, index) {
     if (row.role === "user") {
       const from = row.from ? '<span class="from-tag">' + icon("hub", 12) + esc(row.from) + "</span>" : "";
-      return '<div class="msg user' + (row.from ? " relayed" : "") + '">' + from + '<div class="bubble">' + esc(row.text) + "</div></div>";
+      const files = Array.isArray(row.attachments) && row.attachments.length ? '<div class="msg-attachments">' + row.attachments.map((a) => attachmentMarkup(this.chatId, a)).join("") + "</div>" : "";
+      const text = row.text ? '<div class="bubble">' + esc(row.text) + "</div>" : "";
+      return '<div class="msg user' + (row.from ? " relayed" : "") + '">' + from + files + text + "</div>";
     }
     if (row.role === "agent") return '<div class="msg agent"><div class="bubble">' + markdown(row.text) + "</div></div>";
     if (row.role === "thought") return '<details class="thought"><summary>Thinking</summary><div>' + esc(row.text) + "</div></details>";
@@ -275,142 +333,167 @@ export class ChatView {
     if (this.opts.onChange) this.opts.onChange(this.snap);
   }
 
-  agentToggleMarkup() {
-    const agent = this.currentAgent();
-    const bound = Boolean(this.snap && this.snap.transcript && this.snap.transcript.length);
-    return (
-      '<button type="button" class="news-pill ai-harness-toggle" data-agent-toggle aria-label="Choose agent" aria-haspopup="dialog" aria-expanded="false"' +
-      (this.busy() ? ' title="Wait for this turn to finish, or press Stop, to switch agents." disabled' : bound ? ' title="Picking another agent hands this chat to it, with the conversation so far."' : "") + ">" +
-      harnessIcon(agent.id, 15) + '<span class="ai-harness-name">' + esc(agent.name) + "</span>" + icon("chevronDown", 12) + "</button>"
-    );
-  }
+  // ---- Agent and model picker -------------------------------------------
 
-  agentMenuMarkup() {
-    const current = this.currentAgentId();
-    const bound = Boolean(this.snap && this.snap.transcript && this.snap.transcript.length);
-    const rows = store.acpAgents
-      .map((a) => {
-        const picked = a.id === current;
-        return (
-          '<button type="button" role="option" class="news-menu-row agent-row' + (picked ? " is-selected" : "") + (a.available ? "" : " is-missing") + '" data-agent-pick="' + esc(a.id) + '" data-menu-text="' + esc((a.name + " " + a.id).toLowerCase()) + '" aria-selected="' + picked + '">' +
-          harnessIcon(a.id, 16) + '<span class="news-menu-text"><span class="news-menu-name">' + esc(a.name) + '</span><span class="news-menu-desc">' + esc(a.available ? a.description : a.install) + "</span></span>" +
-          (a.available ? "" : '<span class="agent-badge">Not installed</span>') + (picked ? CHECK : "") + "</button>"
-        );
-      })
-      .join("");
-    return (
-      '<div class="news-menu ai-harness-menu" data-agent-menu role="dialog" aria-label="Agent">' + searchMarkup("agents") +
-      (bound ? '<p class="menu-note">' + icon("handoff", 12) + "Switching hands this chat to the new agent with its recent messages and tool calls.</p>" : "") +
-      '<div role="listbox" aria-label="Agents">' + rows + '<p class="model-menu-empty" data-menu-nomatch hidden>No agents match.</p></div>' +
-      '<button type="button" class="news-menu-row market-menu-row" data-open-market>' + icon("store", 16) + '<span class="news-menu-text"><span class="news-menu-name">Get more agents…</span><span class="news-menu-desc">Install agents from the marketplace</span></span></button></div>'
-    );
-  }
-
-  modelToggleMarkup() {
+  pickerToggleMarkup() {
     const snap = this.snap;
     const info = this.modelInfo();
     const model = info.list.find((m) => m.modelId === info.selected);
     const agent = this.currentAgent();
-    const label = model ? model.name || model.modelId : (snap && snap.status === "starting") || info.probing ? "Loading…" : info.error ? "Default" : !agent.available ? "Not installed" : info.selected || "Default";
-    return '<button type="button" class="news-pill agent-model-toggle" data-model-toggle aria-label="Choose model" aria-haspopup="dialog" aria-expanded="false"' + (this.busy() ? ' title="Wait for this turn to finish, or press Stop, to change the model." disabled' : "") + '><span class="news-pill-label">' + esc(label) + "</span>" + icon("chevronDown", 12) + "</button>";
+    const label = model ? model.name || model.modelId : (snap && snap.status === "starting") || info.probing ? "Loading…" : !agent.available ? "Not installed" : info.list.length ? info.selected || "Default" : agent.name;
+    const title = this.busy() ? "Wait for this turn to finish, or press Stop, to change the agent or model." : agent.name + " · " + label;
+    return (
+      '<button type="button" class="news-pill harness-toggle" data-picker-toggle aria-label="Agent and model: ' + esc(agent.name + ", " + label) + '" aria-haspopup="dialog" aria-expanded="false" title="' + esc(title) + '"' + (this.busy() ? " disabled" : "") + ">" +
+      harnessIcon(agent.id, 15) + '<span class="news-pill-label">' + esc(label) + "</span>" + icon("chevronDown", 12) + "</button>"
+    );
   }
 
-  modelMenuMarkup() {
-    const snap = this.snap;
-    const info = this.modelInfo();
-    const agent = this.currentAgent();
-    const empty = (snap && snap.status === "starting") || info.probing ? "Loading its models…" : info.error ? info.error : !agent.available ? agent.name + " is not installed." : "This agent did not advertise selectable models. It uses its own default.";
-    const rows = info.list
-      .map(
-        (m) =>
-          '<button type="button" class="news-menu-row' + (m.modelId === info.selected ? " is-selected" : "") + '" role="option" data-model-pick="' + esc(m.modelId) + '" data-menu-text="' + esc(((m.name || "") + " " + m.modelId + " " + (m.description || "")).toLowerCase()) + '" aria-selected="' + (m.modelId === info.selected) + '">' +
-          '<span class="news-menu-text"><span class="news-menu-name">' + esc(m.name || m.modelId) + "</span>" + (m.description ? '<span class="news-menu-desc">' + esc(m.description) + "</span>" : "") + "</span>" + (m.modelId === info.selected ? CHECK : "") + "</button>",
-      )
+  // Installed agents first, in their usual order, then the ones to install.
+  pickerAgents() {
+    const list = store.acpAgents.slice();
+    return list.filter((a) => a.available).concat(list.filter((a) => !a.available));
+  }
+
+  pickerMenuMarkup() {
+    const current = this.currentAgentId();
+    const viewId = this.viewHarness || current;
+    const agents = this.pickerAgents();
+    const view = agents.find((a) => a.id === viewId) || this.currentAgent();
+    const bound = Boolean(this.snap && this.snap.transcript && this.snap.transcript.length);
+    const tabs = agents
+      .map((a) => {
+        const active = a.id === view.id;
+        const state = a.id === current ? " (in use)" : a.available ? "" : " (not installed)";
+        return (
+          '<button type="button" role="tab" class="harness-tab' + (active ? " is-active" : "") + (a.id === current ? " is-current" : "") + (a.available ? "" : " is-missing") + '" data-harness-tab="' + esc(a.id) + '" aria-selected="' + active + '" tabindex="' + (active ? "0" : "-1") + '" title="' + esc(a.name + state) + '" aria-label="' + esc(a.name + state) + '">' +
+          harnessIcon(a.id, 18) + "</button>"
+        );
+      })
       .join("");
-    return '<div class="news-menu" data-model-menu role="dialog" aria-label="Models">' + (rows ? searchMarkup("models") : '<p class="news-menu-label">Model</p>') + (rows || '<p class="model-menu-empty">' + esc(empty) + "</p>") + (rows ? '<p class="model-menu-empty" data-menu-nomatch hidden>No models match.</p>' : "") + "</div>";
+    const more = '<button type="button" class="harness-tab harness-more" data-open-market title="Get more agents" aria-label="Get more agents">' + icon("plus", 16) + "</button>";
+    const status = view.id === current ? "In use" : !view.available ? "Not installed" : bound ? "Picking a model hands this chat over" : "Pick a model to use it";
+    const head = '<div class="harness-head"><span class="harness-head-name">' + esc(view.name) + '</span><span class="harness-head-state">' + esc(status) + "</span></div>";
+    return (
+      '<div class="news-menu harness-menu" data-picker-menu role="dialog" aria-label="Agent and model">' +
+      '<div class="harness-tabs" role="tablist" aria-label="Agents">' + tabs + more + "</div>" + head +
+      (bound && view.id !== current && view.available ? '<p class="menu-note">' + icon("handoff", 12) + "The new agent gets this chat's recent messages and tool calls.</p>" : "") +
+      this.modelListMarkup(view) +
+      "</div>"
+    );
+  }
+
+  modelListMarkup(agent) {
+    if (!agent.available) {
+      return (
+        '<div class="harness-empty"><p class="muted small">' + esc(agent.install || agent.name + " is not installed.") + "</p>" +
+        '<button type="button" class="btn sm secondary" data-open-market>' + icon("store", 14) + "Get it from the marketplace</button></div>"
+      );
+    }
+    const info = this.modelInfo(agent.id);
+    const starting = agent.id === this.currentAgentId() && this.snap && this.snap.status === "starting";
+    const selected = agent.id === this.currentAgentId() ? info.selected : "";
+    if (!info.list.length) {
+      if (starting || info.probing) return '<div data-model-list><p class="model-menu-empty"><span class="spinner sm"></span> Loading its models…</p></div>';
+      const desc = info.error ? info.error : "This agent does not list models. It uses its own default.";
+      return (
+        '<div data-model-list role="listbox" aria-label="Models">' +
+        '<button type="button" role="option" class="news-menu-row' + (agent.id === this.currentAgentId() ? " is-selected" : "") + '" data-model-pick="" data-model-agent="' + esc(agent.id) + '" aria-selected="' + (agent.id === this.currentAgentId()) + '">' +
+        '<span class="news-menu-text"><span class="news-menu-name">Default model</span><span class="news-menu-desc">' + esc(desc) + "</span></span>" + (agent.id === this.currentAgentId() ? CHECK : "") + "</button></div>"
+      );
+    }
+    const rows = info.list
+      .map((m) => {
+        const picked = m.modelId === selected;
+        return (
+          '<button type="button" class="news-menu-row' + (picked ? " is-selected" : "") + '" role="option" data-model-pick="' + esc(m.modelId) + '" data-model-agent="' + esc(agent.id) + '" data-menu-text="' + esc(((m.name || "") + " " + m.modelId + " " + (m.description || "")).toLowerCase()) + '" aria-selected="' + picked + '">' +
+          '<span class="news-menu-text"><span class="news-menu-name">' + esc(m.name || m.modelId) + "</span>" + (m.description ? '<span class="news-menu-desc">' + esc(m.description) + "</span>" : "") + "</span>" + (picked ? CHECK : "") + "</button>"
+        );
+      })
+      .join("");
+    return searchMarkup("models") + '<p class="news-menu-label">Model</p><div class="harness-models" data-model-list role="listbox" aria-label="Models">' + rows + '<p class="model-menu-empty" data-menu-nomatch hidden>No models match.</p></div>';
   }
 
   paintToggles() {
-    const pairs = [
-      ["[data-agent-picker]", this.agentToggleMarkup(), "data-agent-popup"],
-      ["[data-model-picker]", this.modelToggleMarkup(), "data-model-popup"],
-    ];
-    for (const [sel, html, popup] of pairs) {
-      const slot = this.el.querySelector(sel);
-      if (!slot || slot._html === html) continue;
-      slot._html = html;
-      const toggle = slot.firstElementChild;
-      if (!toggle || !slot.querySelector("[" + popup + "]")) {
-        slot.innerHTML = html + "<div " + popup + "></div>";
-        continue;
-      }
-      // Update the toggle in place. Swapping the button while it is pressed
-      // (a model list or status arriving mid-click) sends the click to the
-      // slot instead, and the menu never opens.
-      const tpl = document.createElement("template");
-      tpl.innerHTML = html;
-      const next = tpl.content.firstElementChild;
-      for (const a of Array.from(toggle.attributes)) if (!next.hasAttribute(a.name)) toggle.removeAttribute(a.name);
-      for (const a of Array.from(next.attributes)) if (a.name !== "aria-expanded") toggle.setAttribute(a.name, a.value);
-      toggle.innerHTML = next.innerHTML;
+    const slot = this.el.querySelector("[data-picker]");
+    const html = this.pickerToggleMarkup();
+    if (!slot || slot._html === html) return;
+    slot._html = html;
+    const toggle = slot.firstElementChild;
+    if (!toggle || !slot.querySelector("[data-picker-popup]")) {
+      slot.innerHTML = html + "<div data-picker-popup></div>";
+      return;
     }
+    // Update the toggle in place. Swapping the button while it is pressed
+    // (a model list or status arriving mid-click) sends the click to the
+    // slot instead, and the menu never opens.
+    const tpl = document.createElement("template");
+    tpl.innerHTML = html;
+    const next = tpl.content.firstElementChild;
+    for (const a of Array.from(toggle.attributes)) if (!next.hasAttribute(a.name)) toggle.removeAttribute(a.name);
+    for (const a of Array.from(next.attributes)) if (a.name !== "aria-expanded") toggle.setAttribute(a.name, a.value);
+    toggle.innerHTML = next.innerHTML;
   }
 
-  menus() {
-    return [
-      { picker: "[data-agent-picker]", toggle: "[data-agent-toggle]", popup: "[data-agent-popup]", menu: "[data-agent-menu]", markup: () => this.agentMenuMarkup() },
-      { picker: "[data-model-picker]", toggle: "[data-model-toggle]", popup: "[data-model-popup]", menu: "[data-model-menu]", markup: () => this.modelMenuMarkup(), models: true },
-    ];
+  closeMenus() {
+    const menu = this.el.querySelector("[data-picker-menu]");
+    if (menu) menu.remove();
+    const toggle = this.el.querySelector("[data-picker-toggle]");
+    if (toggle) toggle.setAttribute("aria-expanded", "false");
+    this.viewHarness = "";
   }
 
-  closeMenus(except) {
-    for (const m of this.menus()) {
-      if (m.picker === except) continue;
-      const picker = this.el.querySelector(m.picker);
-      const menu = picker && picker.querySelector(m.menu);
-      if (menu) menu.remove();
-      const toggle = picker && picker.querySelector(m.toggle);
-      if (toggle) toggle.setAttribute("aria-expanded", "false");
-    }
+  // Loads an agent's model list the first time the picker shows it.
+  ensureModels(id) {
+    const agent = store.acpAgents.find((a) => a.id === id);
+    if (!agent || !agent.available) return;
+    const info = this.modelInfo(id);
+    if (!info.list.length && !info.probing && !info.error) refreshModelInfo(id);
   }
 
-  openMenu(which) {
-    const picker = this.el.querySelector(which.picker);
-    if (!picker) return;
-    if (picker.querySelector(which.menu)) return this.closeMenus();
-    this.closeMenus(which.picker);
-    if (which.models) {
-      const info = this.modelInfo();
-      if (!info.list.length && !info.probing) refreshModelInfo(this.currentAgentId());
-    }
-    const popup = picker.querySelector(which.popup);
-    popup.innerHTML = which.markup();
-    picker.querySelector(which.toggle).setAttribute("aria-expanded", "true");
-    const menu = popup.querySelector(which.menu);
-    const selected = menu.querySelector('[aria-selected="true"]');
+  openMenu() {
+    if (this.el.querySelector("[data-picker-menu]")) return this.closeMenus();
+    this.viewHarness = this.currentAgentId();
+    this.ensureModels(this.viewHarness);
+    const popup = this.el.querySelector("[data-picker-popup]");
+    popup.innerHTML = this.pickerMenuMarkup();
+    this.el.querySelector("[data-picker-toggle]").setAttribute("aria-expanded", "true");
+    const menu = popup.querySelector("[data-picker-menu]");
+    const selected = menu.querySelector('[data-model-list] [aria-selected="true"]');
     if (selected) selected.scrollIntoView({ block: "nearest" });
-    const focus = menu.querySelector("[data-menu-search]") || selected || menu.querySelector(".news-menu-row");
+    const focus = menu.querySelector("[data-menu-search]") || selected || menu.querySelector(".harness-tab.is-active");
     if (focus) focus.focus();
+  }
+
+  viewAgent(id) {
+    if (!store.acpAgents.some((a) => a.id === id)) return;
+    this.viewHarness = id;
+    this.ensureModels(id);
+    this.repaintMenu();
   }
 
   async pickAgent(id) {
     const bound = Boolean(this.snap && this.snap.transcript && this.snap.transcript.length);
     const agent = store.acpAgents.find((a) => a.id === id);
-    if (!agent) return;
+    if (!agent) return false;
     if (this.snap && id !== this.snap.harnessId) {
-      if (!agent.available) return toast("Install " + agent.name + " before switching this chat to it.");
+      if (!agent.available) {
+        toast("Install " + agent.name + " before switching this chat to it.");
+        return false;
+      }
       try {
         this.snap = await window.jagents.chats.handoff(this.snap.chatId, id);
         refreshChats();
         if (bound) toast(agent.name + " has this chat now, with the messages and tool calls so far.");
       } catch (error) {
-        return toast(errorText(error));
+        toast(errorText(error));
+        return false;
       }
     } else if (!this.snap) {
       this.newAgent = id;
     }
     refreshModelInfo(id);
     this.paint();
+    return true;
   }
 
   async pickModel(modelId) {
@@ -428,9 +511,81 @@ export class ChatView {
     this.paint();
   }
 
+  // A model row: switches agent first when it belongs to another one.
+  async choose(harnessId, modelId) {
+    this.closeMenus();
+    if (harnessId !== this.currentAgentId() && !(await this.pickAgent(harnessId))) return;
+    if (modelId) await this.pickModel(modelId);
+    this.input.focus();
+  }
+
+  // ---- Attachments --------------------------------------------------------
+
+  async addFiles(files) {
+    const list = Array.from(files || []);
+    for (const file of list) {
+      if (this.pending.length >= ATTACH_MAX) {
+        toast("Attach up to " + ATTACH_MAX + " files per message.");
+        break;
+      }
+      if (file.size > ATTACH_BYTES) {
+        toast(file.name + " is over 50 MB.");
+        continue;
+      }
+      const path = window.jagents.pathForFile(file);
+      const item = { key: Math.random().toString(36).slice(2), name: file.name || "pasted.png", mimeType: file.type || "", size: file.size, path };
+      try {
+        const image = IMAGE_RE.test(item.mimeType);
+        // Pasted screenshots have no file on disk, so their bytes go along.
+        if (!path) item.data = await readDataUrl(file);
+        if (image && file.size <= PREVIEW_BYTES) item.preview = item.data || (await readDataUrl(file));
+      } catch (error) {
+        toast(errorText(error));
+        continue;
+      }
+      if (this.destroyed) return;
+      this.pending.push(item);
+    }
+    this.paintTray();
+  }
+
+  async attachFromDialog() {
+    try {
+      const paths = await window.jagents.pickFiles();
+      if (!paths.length) return;
+      for (const p of paths) {
+        if (this.pending.length >= ATTACH_MAX) {
+          toast("Attach up to " + ATTACH_MAX + " files per message.");
+          break;
+        }
+        this.pending.push({ key: Math.random().toString(36).slice(2), name: p.split(/[\\/]/).pop(), mimeType: "", size: 0, path: p });
+      }
+      this.paintTray();
+      this.input.focus();
+    } catch (error) {
+      toast(errorText(error));
+    }
+  }
+
+  paintTray() {
+    const tray = this.el.querySelector("[data-tray]");
+    tray.hidden = !this.pending.length;
+    tray.innerHTML = this.pending
+      .map((p) => {
+        const thumb = p.preview ? '<img src="' + esc(p.preview) + '" alt="">' : icon("file", 16);
+        return (
+          '<div class="att-chip' + (p.preview ? " is-image" : "") + '" title="' + esc(p.path || p.name) + '">' + thumb +
+          '<span class="att-name">' + esc(p.name) + "</span>" +
+          '<button type="button" class="att-remove" data-unattach="' + esc(p.key) + '" aria-label="Remove ' + esc(p.name) + '">' + icon("close", 12) + "</button></div>"
+        );
+      })
+      .join("");
+  }
+
   async send() {
     const text = this.input.value.trim();
-    if (!text) return;
+    const pending = this.pending.slice();
+    if (!text && !pending.length) return;
     try {
       if (!this.chatId) {
         const agent = store.acpAgents.find((a) => a.id === this.newAgent);
@@ -442,10 +597,14 @@ export class ChatView {
       }
       this.input.value = "";
       autoGrow(this.input);
+      this.pending = [];
+      this.paintTray();
       this.forceScroll = true;
-      this.snap = Object.assign({}, this.snap, { status: this.snap.status === "ready" ? "busy" : "starting", transcript: this.snap.transcript.concat([{ role: "user", text }]) });
+      const shown = pending.map((p) => ({ name: p.name, mimeType: p.mimeType, size: p.size, path: p.path, preview: p.preview }));
+      this.snap = Object.assign({}, this.snap, { status: this.snap.status === "ready" ? "busy" : "starting", transcript: this.snap.transcript.concat([{ role: "user", text, attachments: shown }]) });
       this.paint();
-      const done = await window.jagents.chats.prompt(this.chatId, text);
+      const input = pending.length ? { text, attachments: pending.map((p) => (p.path ? { name: p.name, mimeType: p.mimeType, path: p.path } : { name: p.name, mimeType: p.mimeType, data: p.data })) } : text;
+      const done = await window.jagents.chats.prompt(this.chatId, input);
       if (done && views.has(this)) this.setSnap(done);
     } catch (error) {
       toast(errorText(error));
@@ -458,25 +617,24 @@ export class ChatView {
     const sig = { signal: this.abort.signal };
     el.addEventListener("click", (event) => {
       const t = event.target;
-      for (const which of this.menus()) {
-        if (t.closest(which.toggle)) {
-          event.stopPropagation();
-          return this.openMenu(which);
-        }
+      if (t.closest("[data-picker-toggle]")) {
+        event.stopPropagation();
+        return this.openMenu();
       }
-      const agentPick = t.closest("[data-agent-pick]");
-      if (agentPick) {
-        this.closeMenus();
-        return this.pickAgent(agentPick.dataset.agentPick);
-      }
+      const tab = t.closest("[data-harness-tab]");
+      if (tab) return this.viewAgent(tab.dataset.harnessTab);
       if (t.closest("[data-open-market]")) {
         this.closeMenus();
         return openMarketplace();
       }
       const modelPick = t.closest("[data-model-pick]");
-      if (modelPick) {
-        this.closeMenus();
-        return this.pickModel(modelPick.dataset.modelPick);
+      if (modelPick) return this.choose(modelPick.dataset.modelAgent, modelPick.dataset.modelPick);
+      if (t.closest("[data-attach]")) return this.attachFromDialog();
+      const un = t.closest("[data-unattach]");
+      if (un) {
+        this.pending = this.pending.filter((p) => p.key !== un.dataset.unattach);
+        this.paintTray();
+        return this.input.focus();
       }
       const auth = t.closest("[data-auth]");
       if (auth) return this.signIn(auth.dataset.auth);
@@ -499,7 +657,7 @@ export class ChatView {
     );
     el.addEventListener("input", (event) => {
       const search = event.target.closest("[data-menu-search]");
-      if (search) applyFilter(search.closest(".news-menu"), search.value);
+      if (search) applyFilter(search.closest(".news-menu").querySelector("[data-model-list]"), search.value);
     }, sig);
     el.addEventListener("keydown", (event) => {
       if (event.key === "Escape" && el.querySelector(".news-menu")) {
@@ -510,27 +668,74 @@ export class ChatView {
       const inSearch = event.target.matches && event.target.matches("[data-menu-search]");
       if (inSearch && event.key === "Enter") {
         event.preventDefault();
-        const first = event.target.closest(".news-menu").querySelector("[data-menu-text]:not([hidden])");
+        const first = event.target.closest(".news-menu").querySelector("[data-model-list] .news-menu-row:not([hidden])");
         if (first) first.click();
         return;
+      }
+      const tab = event.target.closest && event.target.closest("[data-harness-tab]");
+      if (tab && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+        event.preventDefault();
+        const tabs = Array.from(tab.parentElement.querySelectorAll("[data-harness-tab]"));
+        const i = tabs.indexOf(tab);
+        const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (i + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+        tabs[next].focus();
+        return this.viewAgent(tabs[next].dataset.harnessTab);
       }
       if (!["ArrowDown", "ArrowUp"].includes(event.key)) return;
       const menu = event.target.closest && event.target.closest(".news-menu");
       if (!menu) return;
       event.preventDefault();
-      const rows = Array.from(menu.querySelectorAll("[data-menu-search], .news-menu-row:not([hidden])"));
+      const rows = Array.from(menu.querySelectorAll("[data-menu-search], [data-model-list] .news-menu-row:not([hidden])"));
+      if (!rows.length) return;
       const i = rows.indexOf(document.activeElement);
       rows[(i + (event.key === "ArrowDown" ? 1 : -1) + rows.length) % rows.length].focus();
     }, sig);
+    // composedPath, not contains: a harness tab redraws the menu on click, so
+    // by now the clicked button is no longer in the page.
     document.addEventListener("click", (event) => {
-      if (!el.contains(event.target)) this.closeMenus();
+      if (!event.composedPath().includes(el)) this.closeMenus();
+    }, sig);
+    // Files dropped anywhere on the chat are attached.
+    const overlay = el.querySelector("[data-drop]");
+    let depth = 0;
+    const hasFiles = (event) => event.dataTransfer && Array.from(event.dataTransfer.types || []).includes("Files");
+    el.addEventListener("dragenter", (event) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      depth++;
+      overlay.hidden = false;
+    }, sig);
+    el.addEventListener("dragover", (event) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    }, sig);
+    el.addEventListener("dragleave", (event) => {
+      if (!hasFiles(event)) return;
+      depth = Math.max(0, depth - 1);
+      if (!depth) overlay.hidden = true;
+    }, sig);
+    el.addEventListener("drop", (event) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      depth = 0;
+      overlay.hidden = true;
+      this.addFiles(event.dataTransfer.files);
+      this.input.focus();
+    }, sig);
+    // Pasted files and screenshots are attached; pasted text still pastes.
+    this.input.addEventListener("paste", (event) => {
+      const files = event.clipboardData ? Array.from(event.clipboardData.files || []) : [];
+      if (!files.length) return;
+      if (!event.clipboardData.types.includes("text/plain")) event.preventDefault();
+      this.addFiles(files);
     }, sig);
     this.input.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
         event.preventDefault();
         this.send();
       }
-    });
-    this.input.addEventListener("input", () => autoGrow(this.input));
+    }, sig);
+    this.input.addEventListener("input", () => autoGrow(this.input), sig);
   }
 }

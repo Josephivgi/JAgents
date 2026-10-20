@@ -22,6 +22,8 @@ const SERVER_RE = /^[a-zA-Z0-9_-]{1,40}$/;
 const RESERVED_SERVERS = ["jagents", "relay"];
 const FILE_MAX = 512 * 1024;
 const HISTORY_KEEP = 20;
+// Former plugins that are built into JAgents now (the chat look, attachments).
+const RETIRED = ["jsystems-new-ui", "image-input"];
 
 // Copy then delete: renaming a folder that fs.watch is watching fails on Windows.
 function moveDir(from, to) {
@@ -634,6 +636,25 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
     db.setSetting("plugins.seeded", Array.from(seeded));
   }
 
+  // Plugins whose features are now part of JAgents itself. A copy left in the
+  // plugins folder would run on top of the built-in one, so it goes to the
+  // trash (plugins/.trash), where it can still be found.
+  function retireBuiltIn() {
+    const st = state();
+    for (const id of RETIRED) {
+      const root = pluginDir(id);
+      if (!fs.existsSync(root)) continue;
+      try {
+        moveDir(root, path.join(trashDir, id + "-" + Date.now()));
+        delete st[id];
+        log("plugin " + id + " is built into JAgents now; moved it to plugins/.trash");
+      } catch (error) {
+        log("could not retire plugin " + id + ": " + error.message);
+      }
+    }
+    saveState(st);
+  }
+
   // Edits made outside JAgents (an editor, an agent's own file tools) reload too.
   function watch() {
     const timers = new Map();
@@ -659,6 +680,7 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
 
   function start(opts) {
     hubCall = opts && opts.hubCall;
+    retireBuiltIn();
     seedBundled();
     for (const id of ids()) loadMain(id);
     agentMcp();

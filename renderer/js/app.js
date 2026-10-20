@@ -9,6 +9,7 @@ import { dropdown, openHubPanel, openUpdatesPanel, updateActivity } from "./dial
 import { renderHelpMode, refreshHelp } from "./help-mode.js";
 import { initPlugins, openPluginsPanel, pluginKinds, openPluginPane } from "./plugins.js";
 import { openMarketplace } from "./marketplace.js";
+import { initChatPolish } from "./chat-polish.js";
 
 const app = document.getElementById("app");
 let mode = "code";
@@ -243,6 +244,7 @@ async function boot() {
     paintTopbar();
   }).catch(() => {});
   window.jagents.onEvent(onEvent);
+  initChatPolish();
   initPlugins().catch((error) => toast("Plugins could not load: " + errorText(error)));
   on("hub", () => {
     paintTopbar();

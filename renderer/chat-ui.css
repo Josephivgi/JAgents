@@ -1,7 +1,7 @@
-/* JSystems New UI: a calmer chat look for Threads and Code mode chat panes.
-   Scoped under html.jsystems-ui (set by renderer.js) so it outranks the base
-   styles and disappears cleanly when the plugin is turned off. The palette is
-   set on the chat areas only; the rest of JAgents keeps its own theme. */
+/* The chat look for Threads and Code mode chat panes. Scoped under
+   html.jsystems-ui (set in index.html) so it outranks the base styles. The
+   palette is set on the chat areas only; the rest of JAgents keeps its own
+   theme. */
 
 html.jsystems-ui :is(.thread-mode, [data-thread-side], .chatview) {
   --canvas: oklch(0.992 0 0);
@@ -178,8 +178,7 @@ html.jsystems-ui .chatview.compact .intro h1 { font-size: 18px; }
 }
 /* Narrow panes: icon-only agent pill, tighter bubbles */
 @container (max-width: 420px) {
-  html.jsystems-ui .chatview .ai-harness-name { display: none; }
-  html.jsystems-ui .chatview .composer-settings .agent-model-picker { max-width: 62%; }
+  html.jsystems-ui .chatview .composer-settings .harness-picker { max-width: 75%; }
   html.jsystems-ui .chatview .msg.user .bubble { max-width: 94%; }
   html.jsystems-ui .chatview .tool-kind { display: none; }
 }

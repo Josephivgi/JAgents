@@ -264,9 +264,53 @@ details.tool[open] { align-self: stretch; }
 .news-pill { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; max-width: 100%; padding: 0 10px; border: 1px solid transparent; border-radius: 999px; background: var(--well); color: var(--ink); font-size: 12.5px; font-weight: 500; line-height: 1; white-space: nowrap; }
 .news-pill:hover:not(:disabled), .news-pill[aria-expanded="true"] { border-color: var(--line); }
 .news-pill svg:last-child { color: var(--muted); flex: none; }
-.news-pill-label, .ai-harness-name { overflow: hidden; min-width: 0; text-overflow: ellipsis; }
-.ai-harness-picker, .agent-model-picker { position: relative; min-width: 0; max-width: 100%; }
-.composer-settings .agent-model-picker { max-width: 55%; }
+.news-pill-label { overflow: hidden; min-width: 0; text-overflow: ellipsis; }
+.harness-picker { position: relative; min-width: 0; max-width: 100%; }
+.harness-toggle .ai-harness-ic { flex: none; }
+.attach-btn { padding: 0 7px; color: var(--muted); }
+
+/* Agent and model picker: agent logos across the top, that agent's models below */
+.news-menu.harness-menu { width: 300px; max-height: min(460px, 70vh); overflow: hidden; }
+.harness-menu > * { flex: none; }
+.harness-tabs { display: flex; flex-wrap: wrap; gap: 1px; padding: 0 0 6px; margin-bottom: 2px; border-bottom: 1px solid var(--line); }
+.harness-tab { position: relative; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 8px; background: none; color: var(--muted); cursor: pointer; }
+.harness-tab:hover, .harness-tab:focus-visible { background: var(--well); color: var(--ink); outline: none; }
+.harness-tab:focus-visible { box-shadow: 0 0 0 2px color-mix(in oklch, var(--accent) 50%, transparent); }
+.harness-tab.is-active { background: var(--well); color: var(--ink); }
+.harness-tab.is-active::after { content: ""; position: absolute; left: 9px; right: 9px; bottom: 2px; height: 2px; border-radius: 2px; background: currentColor; }
+.harness-tab.is-current::before { content: ""; position: absolute; top: 4px; right: 4px; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+.harness-tab.is-missing svg { opacity: 0.38; }
+.harness-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 6px 8px 2px; }
+.harness-head-name { flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 13px; }
+.harness-head-state { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11.5px; }
+.harness-menu .menu-search { position: static; margin: 4px 0; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.harness-menu > .harness-models { display: flex; flex: 1 1 auto; flex-direction: column; gap: 2px; min-height: 0; overflow-y: auto; }
+.harness-models > * { flex: none; }
+.harness-empty { display: grid; justify-items: start; gap: 8px; padding: 4px 8px 8px; }
+.harness-empty p { margin: 0; line-height: 1.45; }
+.harness-empty .btn { display: inline-flex; align-items: center; gap: 6px; }
+.model-menu-empty .spinner { vertical-align: -2px; margin-right: 4px; }
+
+/* Attachments: tray in the composer, thumbnails and file chips in messages */
+.attach-tray { display: flex; flex-wrap: wrap; gap: 6px; }
+.attach-tray[hidden] { display: none; }
+.att-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 220px; height: 32px; padding: 0 3px 0 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--well); color: var(--ink); font-size: 12px; }
+.att-chip.is-image { padding-left: 3px; }
+.att-chip img { width: 26px; height: 26px; flex: none; border-radius: 5px; object-fit: cover; }
+.att-chip > svg { flex: none; color: var(--muted); }
+.att-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-remove { display: grid; place-items: center; width: 24px; height: 24px; flex: none; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
+.att-remove:hover, .att-remove:focus-visible { background: var(--line); color: var(--ink); outline: none; }
+.msg-attachments { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: 85%; }
+.att-thumb { display: block; padding: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--well); cursor: pointer; }
+.att-thumb img { display: block; max-width: 240px; max-height: 180px; object-fit: cover; }
+.att-file { display: inline-flex; align-items: center; gap: 8px; max-width: 260px; height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink); font: inherit; font-size: 12.5px; cursor: pointer; }
+.att-file > svg { flex: none; color: var(--muted); }
+.att-file:hover, .att-thumb:hover { border-color: color-mix(in oklch, var(--accent) 45%, var(--line)); }
+.att-size { flex: none; color: var(--muted); font-size: 11.5px; }
+.chatview { position: relative; }
+.drop-overlay { position: absolute; inset: 8px; z-index: 40; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; border: 2px dashed color-mix(in oklch, var(--accent) 60%, var(--line)); border-radius: 14px; background: color-mix(in oklch, var(--canvas) 88%, transparent); color: var(--accent); font-weight: 500; pointer-events: none; }
+.drop-overlay[hidden] { display: none; }
 .news-menu { position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 30; display: flex; flex-direction: column; gap: 2px; width: 340px; max-width: calc(100vw - 48px); max-height: 340px; overflow-y: auto; padding: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); }
 .news-menu.dropdown { position: fixed; bottom: auto; z-index: 60; }
 .news-menu-label { margin: 6px 8px 2px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
@@ -282,8 +326,6 @@ details.tool[open] { align-self: stretch; }
 .news-menu-row.is-selected { background: color-mix(in oklch, var(--accent) 10%, var(--surface)); }
 .news-menu-row.is-selected .news-menu-name { color: var(--accent); }
 .news-menu-row.is-selected::before { content: ""; position: absolute; left: 0; top: 9px; bottom: 9px; width: 3px; border-radius: 0 3px 3px 0; background: var(--accent); }
-.agent-row.is-missing .news-menu-name { color: var(--muted); }
-.agent-row.is-missing .ai-ic { opacity: 0.55; }
 .agent-badge { flex: none; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 11px; white-space: nowrap; }
 .ai-harness-check { color: var(--accent); flex: none; }
 .model-menu-empty { margin: 8px; color: var(--muted); font-size: 12.5px; line-height: 1.45; }
@@ -469,8 +511,6 @@ details.tool[open] { align-self: stretch; }
 .market-form { display: grid; grid-template-columns: 1fr 1.4fr 1fr auto; gap: 8px; margin-top: 8px; }
 .market-form input { min-width: 0; height: var(--control); padding: 0 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--canvas); color: var(--ink); }
 .market-form input:focus { outline: none; border-color: var(--accent); }
-.market-menu-row { border-top: 1px solid var(--line); margin-top: 4px; color: var(--muted); }
-.market-menu-row svg { flex: none; }
 @media (max-width: 640px) { .market-form { grid-template-columns: 1fr; } }
 
 /* ACP sign-in card in a chat */

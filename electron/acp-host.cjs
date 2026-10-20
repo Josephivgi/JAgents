@@ -31,6 +31,7 @@ function watchClient(client, onStderr, onExit) {
   }
 }
 const { handoffPrompt, toolDetail } = require("../lib/acp-handoff");
+const { saveAttachments, describeAttachments, attachmentsDir } = require("../lib/attachments");
 
 const TRANSCRIPT_MAX = 800;
 const HISTORY_MAX = 8000;
@@ -73,7 +74,19 @@ function createAcpHost(options) {
   const saveTimers = new Map();
   const emitTimers = new Map();
   const turnWaiters = new Map(); // chatId -> Set<fn>
-  const queues = new Map(); // chatId -> [{text, from}]
+  const queues = new Map(); // chatId -> [{text, attachments, from}]
+  const NO_CAPS = { image: false, audio: false, embeddedContext: false };
+
+  // prompt(chatId, "text", {from}) or prompt(chatId, {text, attachments}, {from}).
+  // Attachments here are already saved (see saveAttachments).
+  function promptArg(textIn, meta) {
+    const obj = textIn && typeof textIn === "object" && !Array.isArray(textIn) ? textIn : { text: textIn };
+    return {
+      text: String(obj.text || ""),
+      attachments: Array.isArray(obj.attachments) ? obj.attachments : [],
+      from: String((meta && meta.from) || ""),
+    };
+  }
 
   function chatRecord(chatId) {
     const chat = db.getChat(chatId);
@@ -96,6 +109,7 @@ function createAcpHost(options) {
       error: s ? s.error : "",
       agentName: s ? s.agentName : (acpAgent(chat.harnessId) || {}).name || chat.harnessId,
       models: s && s.client ? s.client.models : { availableModels: [], currentModelId: "" },
+      promptCapabilities: (s && s.client && s.client.promptCapabilities) || db.getSetting("agent-caps:" + chat.harnessId, null) || NO_CAPS,
       queued: (queues.get(chatId) || []).length,
       transcript: s ? s.transcript : chat.transcript,
       authMethods: s && s.status === "error" ? s.authMethods || [] : [],
@@ -139,6 +153,17 @@ function createAcpHost(options) {
     }
   }
 
+  // What each agent's prompts can carry (images, embedded files), so chats show
+  // it before the agent starts.
+  function saveCaps(harnessId, client) {
+    if (!client || !client.promptCapabilities) return;
+    try {
+      db.setSetting("agent-caps:" + harnessId, client.promptCapabilities);
+    } catch {
+      /* best effort */
+    }
+  }
+
   function modelPref(harnessId) {
     return String(db.getSetting("agent-model:" + harnessId, "") || "");
   }
@@ -167,6 +192,7 @@ function createAcpHost(options) {
       probing: Boolean(p && p.status === "probing"),
       error: p && p.status === "error" ? p.error : "",
       models: p && p.client ? p.client.models : db.getSetting("agent-models:" + harnessId, null),
+      promptCapabilities: db.getSetting("agent-caps:" + harnessId, null) || NO_CAPS,
     };
   }
 
@@ -205,6 +231,7 @@ function createAcpHost(options) {
         await client.newSession({ cwd, mcpServers: [] });
         saveModelCatalog(id, client.models);
         p.models = client.models;
+        saveCaps(id, client);
         p.status = "done";
       } catch (error) {
         p.status = "error";
@@ -302,7 +329,8 @@ function createAcpHost(options) {
     const lines = [];
     for (const row of rows.slice(-60)) {
       const t = String(row.text || "").replace(/\s+/g, " ").trim().slice(0, 800);
-      if (row.role === "user" && t) lines.push("User: " + t);
+      const files = row.role === "user" && row.attachments ? " " + describeAttachments(row.attachments) : "";
+      if (row.role === "user" && (t || files)) lines.push("User: " + (t + files).trim());
       else if (row.role === "agent" && t) lines.push("Agent: " + t);
     }
     if (!lines.length) return "";
@@ -387,6 +415,7 @@ function createAcpHost(options) {
           }
         }
         s.agentName = (init && init.agentInfo && (init.agentInfo.title || init.agentInfo.name)) || agent.name;
+        saveCaps(chat.harnessId, client);
         const canLoad = Boolean(init && init.agentCapabilities && init.agentCapabilities.loadSession);
         const params = { cwd, mcpServers };
         let resumed = false;
@@ -467,30 +496,37 @@ function createAcpHost(options) {
     const live = sessions.get(chatId);
     const last = live && live.transcript[live.transcript.length - 1];
     if (last && last.role === "user" && !last.from) {
+      const saved = { text: last.text, attachments: last.attachments };
       live.transcript.pop();
       persist(live, true);
-      prompt(chatId, last.text).catch(() => {});
+      prompt(chatId, saved).catch(() => {});
     }
     return snapshot(chatId);
   }
 
-  function titleFrom(text) {
-    return String(text).replace(/\s+/g, " ").trim().slice(0, 60) || "New thread";
+  function titleFrom(text, attachments) {
+    const t = String(text).replace(/\s+/g, " ").trim().slice(0, 60);
+    if (t) return t;
+    if (attachments && attachments.length) return attachments.length === 1 ? attachments[0].name : attachments.length + " files";
+    return "New thread";
   }
 
   async function prompt(chatId, textIn, meta) {
-    const userText = String(textIn || "").trim();
-    if (!userText) throw new Error("Type a message first.");
-    const from = (meta && meta.from) || "";
+    const arg = promptArg(textIn, meta);
+    const userText = arg.text.trim();
+    const from = arg.from;
+    if (!userText && !arg.attachments.length) throw new Error("Type a message or attach a file first.");
     let s = sessions.get(chatId);
     if (s && (s.status === "busy" || (s.startPromise && s.status === "starting"))) throw new Error("The agent is still working on the last message.");
+    const attachments = saveAttachments(dataRoot, chatId, arg.attachments);
     const userRow = { role: "user", text: userText };
+    if (attachments.length) userRow.attachments = attachments;
     if (from) userRow.from = from;
     if (!s || s.disposed || s.status !== "ready") {
       const chat = chatRecord(chatId);
       const rows = (s && !s.disposed && s.transcript) || chat.transcript.slice();
       rows.push(Object.assign({ at: Date.now() }, userRow));
-      if (chat.title === "New thread") chat.title = titleFrom(userText);
+      if (chat.title === "New thread") chat.title = titleFrom(userText, attachments);
       db.saveChat(Object.assign(chat, { transcript: rows }));
       if (s && !s.disposed) s.transcript = rows;
       await start(chatId);
@@ -499,7 +535,7 @@ function createAcpHost(options) {
     } else {
       push(s, userRow);
       const chat = db.getChat(chatId);
-      if (chat && chat.title === "New thread") s.title = titleFrom(userText);
+      if (chat && chat.title === "New thread") s.title = titleFrom(userText, attachments);
     }
     // The cross-pane handoff note rides on the first prompt after it landed.
     let handoffIn = "";
@@ -518,6 +554,8 @@ function createAcpHost(options) {
     if (handoffIn) parts.push(handoffIn);
     const said = from ? "Message from " + from + " (another agent, via JAgents):\n" + userText : userText;
     parts.push(parts.length ? (from ? said : "User request:\n" + userText) : said);
+    // The client turns attachments into the blocks this agent can take.
+    const promptInput = attachments.length ? { text: parts.join("\n\n"), attachments } : parts.join("\n\n");
     s.contextSent = true;
     s.prefix = "";
     s.status = "busy";
@@ -526,7 +564,7 @@ function createAcpHost(options) {
     s.lastUserRow = s.transcript.length - 1;
     emitState(chatId, true);
     try {
-      const result = await s.client.promptWithRecovery(parts.join("\n\n"), s.sessionId, { signal: s.turn.signal });
+      const result = await s.client.promptWithRecovery(promptInput, s.sessionId, { signal: s.turn.signal });
       if (result && result.stopReason === "cancelled") push(s, { role: "system", text: "Stopped." });
       else if (result && result.stopReason && result.stopReason !== "end_turn") push(s, { role: "system", text: "Turn ended: " + result.stopReason + "." });
       s.status = "ready";
@@ -708,6 +746,8 @@ function createAcpHost(options) {
     stopChat(chatId);
     clearTimeout(saveTimers.get(chatId));
     const ok = db.deleteChat(chatId);
+    // The chat's attached files go with it.
+    if (ok) require("node:fs").rmSync(attachmentsDir(dataRoot, chatId), { recursive: true, force: true });
     emit("chats-changed", {});
     return ok;
   }

@@ -1,6 +1,0 @@
-{
-  "name": "JSystems New UI",
-  "description": "Experimental. A new look for chats: Threads get a centered column, rounded message bubbles, quiet tool rows, copy buttons and a work timer. Code mode chat panes get the same look, scaled down. Turn it off here for the classic look.",
-  "version": "1.0.0",
-  "experimental": true
-}

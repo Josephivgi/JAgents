@@ -71,6 +71,7 @@ export function openThread(chatId) {
     introText: current ? "" : "Pick an agent below (Claude Code runs natively; Devin and Cursor over ACP) and send your first message. Threads keep their transcript, and switching the agent hands the thread over with its context.",
     onCreated: (id) => {
       current = id;
+      view.input.placeholder = "Reply…";
       window.jagents.setSetting("thread.current", id);
       refreshChats();
     },

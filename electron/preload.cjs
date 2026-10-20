@@ -1,6 +1,6 @@
 "use strict";
 
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 const call = (channel) => (...args) => ipcRenderer.invoke(channel, ...args);
 
@@ -8,6 +8,16 @@ contextBridge.exposeInMainWorld("jagents", {
   appInfo: call("app-info"),
   setSetting: call("set-setting"),
   pickFolder: call("pick-folder"),
+  pickFiles: call("pick-files"),
+  // A dropped or pasted File's path on disk ("" for one that has none, such
+  // as a pasted screenshot).
+  pathForFile: (file) => {
+    try {
+      return webUtils.getPathForFile(file) || "";
+    } catch {
+      return "";
+    }
+  },
   openPath: call("open-path"),
   openUrl: call("open-url"),
   agents: {

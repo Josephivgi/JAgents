@@ -85,7 +85,7 @@ if (!app.requestSingleInstanceLock()) {
   process.exit(0);
 }
 
-const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".woff2": "font/woff2", ".json": "application/json" };
+const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".woff2": "font/woff2", ".json": "application/json" };
 
 let db = null;
 let ptyHost = null;
@@ -127,6 +127,11 @@ function registerProtocol() {
     const plug = /^plugins\/([a-z0-9][a-z0-9-]{0,39})@\d+\/(.+)$/.exec(rel);
     if (plug && plugins) {
       const file = insideDir(path.join(plugins.dir, plug[1]), plug[2]);
+      return file ? serveFile(file) : new Response("Not found", { status: 404 });
+    }
+    // Files attached to chats, for thumbnails in the transcript.
+    if (rel.startsWith("attachments/")) {
+      const file = insideDir(path.join(DATA_ROOT, "attachments"), rel.slice("attachments/".length));
       return file ? serveFile(file) : new Response("Not found", { status: 404 });
     }
     if (rel.startsWith("vendor/")) {
@@ -276,7 +281,12 @@ function registerIpc() {
   handle("chats-list", () => acp.listChats());
   handle("chat-get", (id) => acp.snapshot(id));
   handle("chat-create", (opts) => workspace.newChat(opts));
-  handle("chat-prompt", (id, text) => acp.prompt(id, text));
+  // input: text, or {text, attachments: [{name, mimeType, path} | {name, mimeType, data}]}.
+  handle("chat-prompt", (id, input) => acp.prompt(id, input));
+  handle("pick-files", async () => {
+    const result = await dialog.showOpenDialog(mainWindow, { title: "Attach files", properties: ["openFile", "multiSelections"] });
+    return result.canceled ? [] : result.filePaths;
+  });
   handle("chat-cancel", (id) => acp.cancel(id));
   handle("chat-set-model", (id, modelId) => acp.setModel(id, modelId));
   handle("chat-handoff", (id, harnessId) => acp.handoff(id, harnessId));

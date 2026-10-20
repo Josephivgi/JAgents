@@ -1,8 +1,9 @@
-// JSystems New UI. style.css holds the look under html.jsystems-ui; this file
-// sets that class and adds what CSS alone cannot: copy buttons on messages and
-// code blocks (with the fence language), single-line thread rows with their
-// details in a tooltip, and an elapsed timer on the "working" line. Turning the
-// plugin off removes all of it.
+// The chat look's extras. chat-ui.css holds the look under html.jsystems-ui
+// (set in index.html); this adds what CSS alone cannot: copy buttons on
+// messages and code blocks (with the fence language), single-line thread rows
+// with their details in a tooltip, and an elapsed timer on the "working" line.
+
+import { toast } from "./util.js";
 
 const COPY_ICON =
   '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="5" y="5" width="8.5" height="8.5" rx="1.8"/><path d="M10.5 5V3.8A1.3 1.3 0 0 0 9.2 2.5H3.8a1.3 1.3 0 0 0-1.3 1.3v5.4a1.3 1.3 0 0 0 1.3 1.3H5"/></svg>';
@@ -50,9 +51,7 @@ function fmt(ms) {
   return Math.floor(m / 60) + "h " + (m % 60) + "m";
 }
 
-export function activate(jagents) {
-  const root = document.documentElement;
-  const toast = (t) => jagents.toast(t);
+export function initChatPolish() {
   // When each chat view's current turn started, so the timer survives repaints.
   const started = new WeakMap();
 
@@ -121,24 +120,7 @@ export function activate(jagents) {
       decorate();
     });
   });
-  root.classList.add("jsystems-ui");
   obs.observe(document.body, { childList: true, subtree: true });
-  const timer = setInterval(tick, 1000);
+  setInterval(tick, 1000);
   decorate();
-
-  return () => {
-    obs.disconnect();
-    clearInterval(timer);
-    root.classList.remove("jsystems-ui");
-    for (const el of document.querySelectorAll(".jui-msg-actions, .jui-elapsed")) el.remove();
-    for (const wrap of document.querySelectorAll(".jui-code")) {
-      const pre = wrap.querySelector("pre");
-      if (pre) wrap.replaceWith(pre);
-      else wrap.remove();
-    }
-    for (const el of document.querySelectorAll("[data-jui]")) {
-      if (el.classList.contains("thread-item")) el.removeAttribute("title");
-      delete el.dataset.jui;
-    }
-  };
 }
