@@ -183,44 +183,75 @@ function createAcpHost(options) {
 
   // ---- Effort ----
   //
-  // Picked per chat (chat-effort:<id>); the last pick for an agent is the
-  // starting point for its new chats (agent-effort:<harness>). Applied when a
-  // session opens and again after a model change, since some agents (Cursor)
-  // reset effort to the new model's own default. Levels seen per model are kept
-  // (agent-efforts:<harness>) so a chat shows them before its agent starts.
+  // A thread uses its agent's own effort until the user picks one for it
+  // (chat-effort:<id>; "" goes back to the agent's own). A pick is applied when
+  // the session opens and again after a model change, since some agents
+  // (Cursor) reset effort to the new model's own default.
+  //
+  // Each agent's levels per model are kept (agent-efforts:<harness>, "*" for
+  // agents with one list for every model), so threads show the picker before
+  // their agent starts. The model probe and every session fill this in.
 
-  function effortPref(chatId, harnessId) {
-    return String(db.getSetting("chat-effort:" + chatId, "") || db.getSetting("agent-effort:" + harnessId, "") || "");
+  function effortPref(chatId) {
+    return String(db.getSetting("chat-effort:" + chatId, "") || "");
   }
 
-  function saveEffortLevels(s) {
-    if (!s || !s.client || typeof s.client.effortState !== "function") return;
-    const model = s.client.models.currentModelId || "";
-    const levels = s.client.effortState().levels;
-    const all = db.getSetting("agent-efforts:" + s.harnessId, {}) || {};
-    if (JSON.stringify(all[model] || []) === JSON.stringify(levels)) return;
-    all[model] = levels;
+  function effortCatalog(harnessId) {
+    return db.getSetting("agent-efforts:" + harnessId, null);
+  }
+
+  // Levels for every model the client knows: Claude Code lists them per model,
+  // Cursor answers cursor/list_available_models, other agents have one list.
+  async function saveEffortCatalog(harnessId, client) {
+    if (!client || typeof client.effortState !== "function") return;
+    const all = Object.assign({}, effortCatalog(harnessId) || {});
+    const NAMES = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra High", max: "Max" };
+    if (Array.isArray(client.modelInfo)) {
+      for (const m of client.modelInfo) {
+        if (m && m.value) all[m.value] = m.supportsEffort === false ? [] : (m.supportedEffortLevels || []).map((v) => ({ value: v, name: NAMES[v] || v }));
+      }
+    } else if (harnessId === "cursor" && typeof client.request === "function") {
+      try {
+        const res = await client.request("cursor/list_available_models", {});
+        for (const m of (res && res.models) || []) {
+          const eo = (m.configOptions || []).find((o) => o && o.category === "thought_level");
+          const opts = eo ? (eo.options || []).flatMap((o) => (Array.isArray(o && o.options) ? o.options : [o])) : [];
+          all[m.value] = opts.filter((o) => o && typeof o.value === "string" && o.value !== "default").map((o) => ({ value: o.value, name: String(o.name || o.value) }));
+        }
+      } catch {
+        /* older Cursor: the current model's list below */
+      }
+    }
+    const model = client.models.currentModelId || "";
+    const levels = client.effortState().levels;
+    if (model && !all[model]) all[model] = levels;
+    if (!Array.isArray(client.modelInfo) && harnessId !== "cursor") all["*"] = levels;
+    if (JSON.stringify(all) === JSON.stringify(effortCatalog(harnessId) || {})) return;
     try {
-      db.setSetting("agent-efforts:" + s.harnessId, all);
+      db.setSetting("agent-efforts:" + harnessId, all);
     } catch {
       /* best effort */
     }
   }
 
+  function levelsFor(harnessId, model) {
+    const all = effortCatalog(harnessId) || {};
+    return all[model] || all["*"] || [];
+  }
+
   function effortView(s, chat) {
-    const pref = effortPref(chat.id || (s && s.chatId), chat.harnessId);
-    if (s && s.client && s.sessionId && typeof s.client.effortState === "function") return Object.assign(s.client.effortState(), { pref, live: true });
-    const all = db.getSetting("agent-efforts:" + chat.harnessId, {}) || {};
-    const model = modelPref(chat.harnessId);
-    const levels = all[model] || Object.values(all).find((l) => l && l.length) || [];
-    return { levels, current: "", via: "", pref, live: false };
+    const id = chat.id || (s && s.chatId);
+    const pref = effortPref(id);
+    if (s && s.client && s.sessionId && typeof s.client.effortState === "function") return Object.assign(s.client.effortState(), { pref, live: true, known: true });
+    const known = Boolean(effortCatalog(chat.harnessId));
+    return { levels: levelsFor(chat.harnessId, modelPref(chat.harnessId)), current: "", via: "", pref, live: false, known };
   }
 
   async function applyEffortPref(s) {
     const c = s && s.client;
     if (!c || !s.sessionId || typeof c.effortState !== "function") return;
-    saveEffortLevels(s);
-    const pref = effortPref(s.chatId, s.harnessId);
+    await saveEffortCatalog(s.harnessId, c);
+    const pref = effortPref(s.chatId);
     const st = c.effortState();
     if (!pref || st.current === pref || !st.levels.some((l) => l.value === pref)) return;
     try {
@@ -230,16 +261,14 @@ function createAcpHost(options) {
     }
   }
 
+  // level "" puts the thread back on the agent's own effort; a running agent
+  // keeps the level it has until it starts again.
   async function setEffort(chatId, level) {
-    const chat = chatRecord(chatId);
+    chatRecord(chatId);
     const v = String(level || "");
     db.setSetting("chat-effort:" + chatId, v);
-    db.setSetting("agent-effort:" + chat.harnessId, v);
     const s = sessions.get(chatId);
-    if (s && !s.disposed && s.client && s.sessionId && s.status !== "starting" && v) {
-      await s.client.setEffort(v, s.sessionId);
-      saveEffortLevels(s);
-    }
+    if (s && !s.disposed && s.client && s.sessionId && s.status !== "starting" && v) await s.client.setEffort(v, s.sessionId);
     emitState(chatId, true);
     return snapshot(chatId);
   }
@@ -256,6 +285,7 @@ function createAcpHost(options) {
       probing: Boolean(p && p.status === "probing"),
       error: p && p.status === "error" ? p.error : "",
       models: p && p.client ? p.client.models : db.getSetting("agent-models:" + harnessId, null),
+      efforts: effortCatalog(harnessId),
       promptCapabilities: db.getSetting("agent-caps:" + harnessId, null) || NO_CAPS,
     };
   }
@@ -294,6 +324,7 @@ function createAcpHost(options) {
         await client.initialize();
         await client.newSession({ cwd, mcpServers: [] });
         saveModelCatalog(id, client.models);
+        await saveEffortCatalog(id, client);
         p.models = client.models;
         saveCaps(id, client);
         p.status = "done";

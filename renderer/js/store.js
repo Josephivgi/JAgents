@@ -56,7 +56,10 @@ export async function refreshModelInfo(agentId) {
     const cached = store.modelCache[agentId];
     const hasModels = cached && cached.models && cached.models.availableModels && cached.models.availableModels.length;
     const agent = store.acpAgents.find((a) => a.id === agentId);
-    const info = agent && agent.available && !hasModels ? await window.jagents.agents.probe(agentId) : await window.jagents.agents.modelInfo(agentId);
+    let info = agent && agent.available && !hasModels ? await window.jagents.agents.probe(agentId) : await window.jagents.agents.modelInfo(agentId);
+    // Effort levels not known yet (an agent not started since v0.5): probe
+    // once for them, so threads can show the Effort picker before starting.
+    if (agent && agent.available && info && info.efforts == null && !info.probing && !info.error) info = await window.jagents.agents.probe(agentId);
     mergeModelInfo(agentId, info);
     fire("models", agentId);
   } catch {

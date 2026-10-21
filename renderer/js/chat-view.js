@@ -33,6 +33,9 @@ on("agents", () => {
 
 const CHECK = '<svg class="ai-harness-check" viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2.5 6.5 5 9l4.5-6"/></svg>';
 
+// Agents whose effort levels were asked for this session.
+const effortAsked = new Set();
+
 // Effort levels as people read them; agents send ids like xhigh or "Thinking: max".
 const EFFORT_NAMES = { none: "None", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max", off: "Off" };
 function effortName(value, name) {
@@ -128,6 +131,8 @@ export class ChatView {
     this.openTools = new Set();
     // Files waiting in the composer: {key, name, mimeType, size, path | data, preview}.
     this.pending = [];
+    // Effort picked in a new thread before its chat exists.
+    this.pendingEffort = "";
     // The agent whose models the open picker shows (not chosen until a model is).
     this.viewHarness = "";
     // Thread mode reuses one element for every thread it opens, so every
@@ -421,11 +426,23 @@ export class ChatView {
     return searchMarkup("models") + '<p class="news-menu-label">Model</p><div class="harness-models" data-model-list role="listbox" aria-label="Models">' + rows + '<p class="model-menu-empty" data-menu-nomatch hidden>No models match.</p></div>';
   }
 
-  // Effort for this chat, next to the model: the levels its current model
-  // takes (Claude Code, Cursor, Droid, OpenCode, pi). Hidden for agents
-  // without an effort setting.
-  effortLabel() {
+  // Effort for this thread, next to the model: the levels its model takes
+  // (Claude Code, Cursor, Droid, OpenCode, pi). A running agent reports its
+  // own; otherwise they come from the levels JAgents has seen for that agent
+  // and model. "Default" leaves effort to the agent. A new thread keeps the
+  // pick until its chat exists.
+  effortData() {
+    const id = this.currentAgentId();
     const e = (this.snap && this.snap.effort) || {};
+    if (e.live) return e;
+    const all = (store.modelCache[id] || {}).efforts || null;
+    const model = this.modelInfo(id).selected || "";
+    const levels = all ? all[model] || all["*"] || [] : e.levels || [];
+    return { levels, current: "", via: "", pref: this.snap ? e.pref || "" : this.pendingEffort || "", live: false, known: Boolean(all || e.known) };
+  }
+
+  effortLabel() {
+    const e = this.effortData();
     const v = e.current || e.pref || "";
     const level = (e.levels || []).find((l) => l.value === v);
     return v ? effortName(v, level && level.name) : "Default";
@@ -434,12 +451,19 @@ export class ChatView {
   paintEffort() {
     const slot = this.el.querySelector("[data-effort]");
     if (!slot) return;
-    const e = (this.snap && this.snap.effort) || {};
-    const show = Boolean(this.chatId && (e.levels || []).length);
+    const e = this.effortData();
+    const id = this.currentAgentId();
+    const agent = store.acpAgents.find((a) => a.id === id);
+    // Levels not known for this agent yet: ask once (a short probe).
+    if (!e.known && agent && agent.available && !effortAsked.has(id)) {
+      effortAsked.add(id);
+      refreshModelInfo(id);
+    }
+    const show = (e.levels || []).length > 0;
     if (slot.hidden === show) slot.hidden = !show;
     if (!show) return this.closeEffort();
     const label = this.effortLabel();
-    const title = this.busy() ? "Wait for this turn to finish, or press Stop, to change effort." : "Effort: " + label + (e.live ? "" : ". Applies when the agent starts.");
+    const title = this.busy() ? "Wait for this turn to finish, or press Stop, to change effort." : "Effort for this thread: " + label + (e.live ? "" : ". Applies when the agent starts.");
     const html =
       '<button type="button" class="news-pill harness-toggle effort-toggle" data-effort-toggle aria-label="Effort: ' + esc(label) + '" aria-haspopup="listbox" aria-expanded="false" title="' + esc(title) + '"' + (this.busy() ? " disabled" : "") + ">" +
       icon("gauge", 15) + '<span class="news-pill-label">' + esc(label) + "</span>" + icon("chevronDown", 12) + "</button>";
@@ -461,22 +485,24 @@ export class ChatView {
   openEffort() {
     if (this.el.querySelector("[data-effort-menu]")) return this.closeEffort();
     this.closeMenus();
-    const e = (this.snap && this.snap.effort) || {};
-    const cur = e.current || e.pref || "";
-    const rows = (e.levels || [])
-      .map((l) => {
-        const picked = l.value === cur;
-        return (
-          '<button type="button" role="option" class="news-menu-row' + (picked ? " is-selected" : "") + '" data-effort-pick="' + esc(l.value) + '" aria-selected="' + picked + '">' +
-          '<span class="news-menu-text"><span class="news-menu-name">' + esc(effortName(l.value, l.name)) + "</span></span>" + (picked ? CHECK : "") + "</button>"
-        );
-      })
-      .join("");
+    const e = this.effortData();
+    const cur = e.pref || "";
+    const row = (value, name, desc) => {
+      const picked = value === cur;
+      return (
+        '<button type="button" role="option" class="news-menu-row' + (picked ? " is-selected" : "") + '" data-effort-pick="' + esc(value) + '" aria-selected="' + picked + '">' +
+        '<span class="news-menu-text"><span class="news-menu-name">' + esc(name) + "</span>" + (desc ? '<span class="news-menu-desc">' + esc(desc) + "</span>" : "") + "</span>" + (picked ? CHECK : "") + "</button>"
+      );
+    };
+    const running = e.live && e.current ? effortName(e.current, ((e.levels || []).find((l) => l.value === e.current) || {}).name) : "";
     const popup = this.el.querySelector("[data-effort-popup]");
     popup.innerHTML =
       '<div class="news-menu effort-menu" data-effort-menu role="dialog" aria-label="Effort">' +
-      '<p class="news-menu-label">Effort' + (e.via ? " · " + esc(e.via) : "") + '</p><div data-model-list role="listbox" aria-label="Effort levels">' + rows + "</div>" +
-      (e.live ? "" : '<p class="menu-note">The agent is not running. Your pick applies when it starts.</p>') +
+      '<p class="news-menu-label">Effort for this thread</p><div data-model-list role="listbox" aria-label="Effort levels">' +
+      row("", "Default", "The agent's own" + (running && !cur ? " (now " + running + ")" : "")) +
+      (e.levels || []).map((l) => row(l.value, effortName(l.value, l.name))).join("") +
+      "</div>" +
+      (e.live ? "" : '<p class="menu-note">' + (this.chatId ? "The agent is not running. Your pick applies when it starts." : "Applies when you send the first message.") + "</p>") +
       "</div>";
     this.el.querySelector("[data-effort-toggle]").setAttribute("aria-expanded", "true");
     const sel = popup.querySelector('[aria-selected="true"]') || popup.querySelector(".news-menu-row");
@@ -492,11 +518,17 @@ export class ChatView {
 
   async chooseEffort(level) {
     this.closeEffort();
-    if (!this.chatId) return;
-    try {
-      this.setSnap(await window.jagents.chats.setEffort(this.chatId, level));
-    } catch (error) {
-      toast(errorText(error));
+    if (!this.chatId) {
+      this.pendingEffort = level;
+      this.paintEffort();
+    } else {
+      const wasLive = this.effortData().live;
+      try {
+        this.setSnap(await window.jagents.chats.setEffort(this.chatId, level));
+        if (!level && wasLive) toast("Default effort applies when the agent starts again.");
+      } catch (error) {
+        toast(errorText(error));
+      }
     }
     const t = this.el.querySelector("[data-effort-toggle]");
     if (t) t.focus();
@@ -682,6 +714,8 @@ export class ChatView {
         if (agent && !agent.available) return toast(agent.name + " is not installed. " + (agent.install || ""));
         this.snap = await window.jagents.chats.create({ harnessId: this.newAgent });
         this.chatId = this.snap.chatId;
+        if (this.pendingEffort) this.snap = await window.jagents.chats.setEffort(this.chatId, this.pendingEffort);
+        this.pendingEffort = "";
         if (this.opts.onCreated) this.opts.onCreated(this.chatId);
         refreshChats();
       }
