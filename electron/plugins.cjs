@@ -123,6 +123,11 @@ and do network work in main.cjs.
 - ctx.notify(text): a toast. ctx.log(...): JAgents's log.
 - ctx.dir: this plugin's folder. ctx.dataDir: a folder for its own files.
 - ctx.dispose(fn): run fn when the plugin unloads.
+- ctx.permissions.ask({ parent, handle, agentName, harnessId, params }): an agent this
+    plugin runs for another agent (parent: that agent's handle) asks to use a tool.
+    params is ACP session/request_permission params. Resolves to the ACP outcome,
+    decided by the parent thread's permission mode or the user's pick on a card
+    that names handle. ctx.permissions.cancel(handle) drops that agent's cards.
 
 ## Example: a notes pane
 
@@ -155,7 +160,7 @@ If a plugin breaks the window, Ctrl+Shift+F12 turns every plugin off (safe mode)
 and reloads; the Plugins panel turns them back on.
 `;
 
-function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, builtinDir, getWindow }) {
+function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, builtinDir, getWindow, permissions }) {
   const dir = path.join(dataRoot, "plugins");
   const historyDir = path.join(dir, ".history");
   const trashDir = path.join(dir, ".trash");
@@ -456,6 +461,10 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, buil
       window: () => (getWindow ? getWindow() : null),
       hub: (name, args) => (hubCall ? hubCall(String(name), args || {}, null) : Promise.reject(new Error("The hub is not running."))),
       dispose: (fn) => entry.dispose.push(fn),
+      permissions: {
+        ask: (req) => (permissions ? permissions.ask(req) : Promise.resolve({ outcome: { outcome: "selected", optionId: "allow_once" } })),
+        cancel: (handle) => (permissions ? permissions.cancel(handle) : undefined),
+      },
       mcp: {
         server(name, opts) {
           const n = String(name || "");

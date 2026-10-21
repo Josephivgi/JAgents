@@ -169,6 +169,14 @@ function addMenu(anchor) {
   dropdown(anchor, items, { width: 340, alignRight: true });
 }
 
+// A notification or a subagent card asked to show a chat: its Code pane when
+// one is open on screen, otherwise the thread.
+on("open-chat", (chatId) => {
+  if (mode === "code" && focusAgent(chatId)) return;
+  setMode("threads");
+  openThread(chatId);
+});
+
 function onEvent({ type, payload }) {
   fire("app:" + type, payload);
   if (type === "pty-data") {

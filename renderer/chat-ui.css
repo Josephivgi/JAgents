@@ -183,3 +183,14 @@ html.jsystems-ui .chatview.compact .intro h1 { font-size: 18px; }
   html.jsystems-ui .chatview .tool-kind { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { html.jsystems-ui .working { animation: none; background: none; color: var(--muted); } }
+
+/* v0.5.2: tool bodies, groups and cards in the quiet row style */
+html.jsystems-ui .tool-body .tool-io { padding: 0; }
+html.jsystems-ui .tool .file-chip svg, html.jsystems-ui .tool .diff-card svg { width: 12px; height: 12px; }
+html.jsystems-ui :is(.tool, .thought, .tool-group) + :is(.tool, .thought, .tool-group) { margin-top: -12px; }
+html.jsystems-ui .chatview.compact :is(.tool, .thought, .tool-group) + :is(.tool, .thought, .tool-group) { margin-top: -9px; }
+html.jsystems-ui .tool-group-rows .tool + .tool { margin-top: 0; }
+html.jsystems-ui :is(.diff-card, .term-block, .turn-diff, .perm-input) { background: var(--jui-code); }
+html.jsystems-ui .diff-head { background: var(--well); }
+html.jsystems-ui .perm-card { border-radius: 14px; }
+html.jsystems-ui .queue-item { background: var(--surface); border-radius: 12px; }

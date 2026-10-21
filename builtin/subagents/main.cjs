@@ -264,6 +264,7 @@ exports.activate = (ctx) => {
   }
 
   function stopClient(s) {
+    if (ctx.permissions) ctx.permissions.cancel(s.handle);
     if (!s.client) return;
     const c = s.client;
     s.client = null;
@@ -346,11 +347,14 @@ exports.activate = (ctx) => {
   }
 
   // Starts an agent process with a session. Used for subagents and for Detect.
-  async function openClient(providerId, cwd, mcpServers, extraEnv, onUpd, key) {
+  // onPerm answers the agent's permission requests; Claude Code then runs its
+  // default checks and asks through it for everything they would ask about.
+  async function openClient(providerId, cwd, mcpServers, extraEnv, onUpd, key, onPerm) {
     const agent = agentsLib.acpAgent(providerId);
     if (!agent) throw new Error("Unknown provider " + providerId + ".");
     const spec = agentsLib.acpSpawnSpec(providerId);
     const opts = { harnessId: agent.id, dataRoot: ctx.dataDir, cwd, mcpServers, disallowedTools: CLAUDE_BLOCKED_TOOLS, onUpdate: onUpd || (() => {}) };
+    if (onPerm) Object.assign(opts, { onPermission: onPerm, permissionMode: "ask" });
     const client = agent.native === "claude-sdk" ? new SubagentClaude(opts) : new AcpClient(opts);
     const env = Object.assign({}, spec.env, { JAGENTS_HUB_FILE: DEAD_HUB, JAGENTS_PANE_ID: "" }, extraEnv);
     if (agent.id === "cursor") env.CURSOR_CONFIG_DIR = cursorConfig(key || "detect");
@@ -447,13 +451,16 @@ exports.activate = (ctx) => {
   async function startSession(s) {
     const mcpServers = await mcpEntriesFor(s);
     let client = null;
-    client = await openClient(s.provider, s.cwd, mcpServers, { JAGENTS_SUBAGENT: s.handle, JAGENTS_SUBAGENT_PARENT: s.parent }, (p) => s.client === client && onUpdate(s, p), s.handle);
+    // Its permission requests go to the parent's thread, which shows who asks.
+    const onPerm = ctx.permissions ? (params) => ctx.permissions.ask({ parent: s.parent, handle: s.handle, agentName: s.providerName, harnessId: s.provider, params }) : null;
+    client = await openClient(s.provider, s.cwd, mcpServers, { JAGENTS_SUBAGENT: s.handle, JAGENTS_SUBAGENT_PARENT: s.parent }, (p) => s.client === client && onUpdate(s, p), s.handle, onPerm);
     s.client = client;
     s.status = "starting";
     changed();
     const onExit = () => {
       if (s.client !== client) return;
       s.client = null;
+      if (ctx.permissions) ctx.permissions.cancel(s.handle);
       if (s.status === "busy") {
         s.status = "error";
         s.error = "The agent exited mid-turn.";
@@ -751,6 +758,7 @@ exports.activate = (ctx) => {
     handler: async (args, caller) => {
       const s = own(caller, args.agent);
       s.queue.length = 0;
+      if (ctx.permissions) ctx.permissions.cancel(s.handle);
       if (s.client && s.status === "busy") {
         try {
           await s.client.cancel(s.sessionId);

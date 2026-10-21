@@ -25,6 +25,7 @@ const { createUsage } = require("./usage.cjs");
 const mcpInstall = require("./mcp-install.cjs");
 const { findLegacyRoots, importLegacy } = require("../lib/migrate");
 const { createUpdater } = require("../lib/updater");
+const { searchFiles } = require("../lib/file-mentions");
 const { setupTaskbarIcon } = require("./win-taskbar.cjs");
 const { createLog, watchWindow } = require("./window-health.cjs");
 
@@ -34,6 +35,10 @@ const VENDOR = {
   "xterm.js": path.join(APP_ROOT, "node_modules", "@xterm", "xterm", "lib", "xterm.js"),
   "xterm.css": path.join(APP_ROOT, "node_modules", "@xterm", "xterm", "css", "xterm.css"),
   "addon-fit.js": path.join(APP_ROOT, "node_modules", "@xterm", "addon-fit", "lib", "addon-fit.js"),
+  // Chat markdown: parser, sanitizer, code highlighting (ES modules).
+  "marked.js": path.join(APP_ROOT, "node_modules", "marked", "lib", "marked.esm.js"),
+  "purify.js": path.join(APP_ROOT, "node_modules", "dompurify", "dist", "purify.es.mjs"),
+  "highlight.js": path.join(APP_ROOT, "node_modules", "@highlightjs", "cdn-assets", "es", "highlight.min.js"),
 };
 const SHELL_URL = "app://shell/index.html";
 
@@ -87,7 +92,7 @@ if (!app.requestSingleInstanceLock()) {
   process.exit(0);
 }
 
-const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".woff2": "font/woff2", ".json": "application/json" };
+const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".woff2": "font/woff2", ".json": "application/json" };
 
 let db = null;
 let ptyHost = null;
@@ -317,6 +322,20 @@ function registerIpc() {
   handle("chat-set-effort", (id, level) => acp.setEffort(id, level));
   handle("chat-handoff", (id, harnessId) => acp.handoff(id, harnessId));
   handle("chat-authenticate", (id, methodId, secret) => acp.authenticate(id, methodId, secret));
+  handle("chat-set-permission-mode", (id, mode) => acp.setPermissionMode(id, mode));
+  handle("chat-answer-permission", (id, permissionId, optionId) => acp.answerPermission(id, permissionId, optionId));
+  handle("chat-retry", (id) => acp.retry(id));
+  handle("chat-queue-edit", (id, queueId, text) => acp.editQueued(id, queueId, text));
+  handle("chat-queue-remove", (id, queueId) => acp.removeQueued(id, queueId));
+  // Unsent composer text per thread ("new" for a thread not started yet).
+  const draftKey = (id) => "chat-draft:" + (/^[A-Za-z0-9-]{1,64}$/.test(String(id)) ? String(id) : "new");
+  handle("chat-draft-get", (id) => String(db.getSetting(draftKey(id), "") || ""));
+  handle("chat-draft-set", (id, text) => db.setSetting(draftKey(id), String(text || "").slice(0, 100000)));
+  // Files for the composer's @ menu, from the chat's folder.
+  handle("chat-files", (id, query) => {
+    const chat = id ? db.getChat(id) : null;
+    return searchFiles((chat && chat.cwd) || workspace.cwdDefault(), query, 30);
+  });
   handle("chat-delete", async (id) => {
     const res = await dialog.showMessageBox(mainWindow, { type: "warning", buttons: ["Delete thread", "Cancel"], defaultId: 1, cancelId: 1, message: "Delete this thread?", detail: "Its transcript is removed from JAgents. This cannot be undone.", noLink: true });
     if (res.response !== 0) return false;
@@ -444,7 +463,10 @@ app.whenReady().then(async () => {
   ptyHost = await connectPtyHost({ emit: broadcast, dataRoot: DATA_ROOT });
   if (ptyHost.adopted.length) console.log("Reattached " + ptyHost.adopted.length + " terminals that kept running");
   const hubFiles = { hub: path.join(HOME_DIR, "hub.json"), script: path.join(HOME_DIR, "jagents-mcp.cjs"), pluginScript: path.join(HOME_DIR, "jagents-plugin-mcp.cjs") };
-  plugins = createPluginManager({ dataRoot: DATA_ROOT, db, emit: broadcast, notify, log: (t) => console.log(t), bundledDir: path.join(APP_ROOT, "plugins"), builtinDir: path.join(APP_ROOT, "builtin"), getWindow: () => mainWindow });
+  plugins = createPluginManager({ dataRoot: DATA_ROOT, db, emit: broadcast, notify, log: (t) => console.log(t), bundledDir: path.join(APP_ROOT, "plugins"), builtinDir: path.join(APP_ROOT, "builtin"), getWindow: () => mainWindow,
+    // Subagents ask through their parent's thread (acp-host askForSubagent).
+    permissions: { ask: (req) => acp.askForSubagent(req), cancel: (handle) => acp && acp.cancelSubagentPermissions(handle) },
+  });
   let ws = null;
   acp = createAcpHost({
     dataRoot: DATA_ROOT,

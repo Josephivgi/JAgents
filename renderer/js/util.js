@@ -41,55 +41,5 @@ export function monogram(name) {
   return esc((words[0][0] || "?") + (words[1] ? words[1][0] : ""));
 }
 
-// Small markdown subset for agent replies: code fences, inline code, bold,
-// italics, bullet and numbered lists, paragraphs. Everything is escaped first.
-export function markdown(src) {
-  const blocks = String(src || "").split(/```/);
-  let html = "";
-  blocks.forEach((block, i) => {
-    if (i % 2 === 1) {
-      const lang = (block.match(/^([a-zA-Z0-9_-]*)\n/) || ["", ""])[1];
-      const body = block.replace(/^[a-zA-Z0-9_-]*\n/, "");
-      html += "<pre" + (lang ? ' data-lang="' + esc(lang) + '"' : "") + "><code>" + esc(body.replace(/\n$/, "")) + "</code></pre>";
-      return;
-    }
-    const lines = block.split("\n");
-    let para = [];
-    let list = null;
-    const inline = (t) =>
-      esc(t)
-        .replace(/`([^`]+)`/g, "<code>$1</code>")
-        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-        .replace(/(^|[\s(])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>");
-    const flushPara = () => {
-      if (para.length) html += "<p>" + para.map(inline).join("<br>") + "</p>";
-      para = [];
-    };
-    const flushList = () => {
-      if (list) html += "<" + list.tag + ">" + list.items.map((t) => "<li>" + inline(t) + "</li>").join("") + "</" + list.tag + ">";
-      list = null;
-    };
-    for (const line of lines) {
-      const bullet = line.match(/^\s*[-*]\s+(.*)$/);
-      const num = line.match(/^\s*\d+[.)]\s+(.*)$/);
-      if (bullet || num) {
-        flushPara();
-        const tag = bullet ? "ul" : "ol";
-        if (!list || list.tag !== tag) {
-          flushList();
-          list = { tag, items: [] };
-        }
-        list.items.push((bullet || num)[1]);
-      } else if (!line.trim()) {
-        flushPara();
-        flushList();
-      } else {
-        flushList();
-        para.push(line.replace(/^#{1,6}\s+/, ""));
-      }
-    }
-    flushPara();
-    flushList();
-  });
-  return html;
-}
+// Agent replies as markdown (parser, highlighting, sanitizer): chat-markdown.js.
+export { markdown } from "./chat-markdown.js";

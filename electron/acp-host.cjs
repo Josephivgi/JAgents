@@ -31,10 +31,21 @@ function watchClient(client, onStderr, onExit) {
   }
 }
 const { handoffPrompt, toolDetail } = require("../lib/acp-handoff");
+const { normalMode, listPermissionOptions, autoPermissionOption } = require("../lib/acp-permissions");
 const { saveAttachments, describeAttachments, attachmentsDir } = require("../lib/attachments");
 
 const TRANSCRIPT_MAX = 800;
 const HISTORY_MAX = 8000;
+
+// Each row gets a short id so the chat can patch rows in place while they stream.
+function rowId() {
+  return randomUUID().replace(/-/g, "").slice(0, 12);
+}
+
+function withIds(rows) {
+  for (const row of rows) if (row && !row.id) row.id = rowId();
+  return rows;
+}
 
 function lastRow(rows, test) {
   for (let i = rows.length - 1; i >= 0; i--) if (test(rows[i])) return rows[i];
@@ -74,7 +85,7 @@ function createAcpHost(options) {
   const saveTimers = new Map();
   const emitTimers = new Map();
   const turnWaiters = new Map(); // chatId -> Set<fn>
-  const queues = new Map(); // chatId -> [{text, attachments, from}]
+  const queues = new Map(); // chatId -> [{id, text, attachments, from}]
   const NO_CAPS = { image: false, audio: false, embeddedContext: false };
 
   // prompt(chatId, "text", {from}) or prompt(chatId, {text, attachments}, {from}).
@@ -112,7 +123,13 @@ function createAcpHost(options) {
       effort: effortView(s, chat),
       promptCapabilities: (s && s.client && s.client.promptCapabilities) || db.getSetting("agent-caps:" + chat.harnessId, null) || NO_CAPS,
       queued: (queues.get(chatId) || []).length,
-      transcript: s ? s.transcript : chat.transcript,
+      // Messages waiting for the turn to end; the user's own can be edited.
+      queue: (queues.get(chatId) || []).map((q) => ({ id: q.id, text: q.text, from: q.from || "", files: (q.attachments || []).length })),
+      permissionMode: permMode(chatId, chat),
+      permissions: (waits.get(chatId) || []).map(permissionView),
+      commands: (s && s.commands) || db.getSetting("agent-commands:" + chat.harnessId, null) || [],
+      usage: (s && s.usage) || null,
+      transcript: withIds(s ? s.transcript : chat.transcript),
       authMethods: s && s.status === "error" ? s.authMethods || [] : [],
     };
   }
@@ -345,6 +362,158 @@ function createAcpHost(options) {
     return modelInfo(id);
   }
 
+  // ---- Permissions ----
+  //
+  // A chat's mode (chat-perm:<id>) decides which of the agent's permission
+  // requests JAgents answers by itself (lib/acp-permissions.js). The rest wait
+  // as cards in the chat until the user picks one of the agent's options, the
+  // turn is stopped, or the agent goes away. Subagents started by other agents
+  // have nobody watching them, so they default to Auto.
+  //
+  // Subagents from the subagents plugin ask through their parent's thread:
+  // the parent's mode decides, and the card names the subagent that asks.
+  // Waiting requests live per thread (waits), apart from the session, so a
+  // subagent's request outlasts its parent's turn.
+
+  const waits = new Map(); // chatId -> [request]
+
+  function permMode(chatId, chat) {
+    const saved = db.getSetting("chat-perm:" + chatId, "");
+    if (saved) return normalMode(saved);
+    const c = chat || db.getChat(chatId);
+    return c && c.parentId ? "auto" : normalMode(db.getSetting("perm-default", "ask"));
+  }
+
+  async function setPermissionMode(chatId, mode) {
+    const chat = chatRecord(chatId);
+    const m = normalMode(String(mode || ""));
+    db.setSetting("chat-perm:" + chatId, m);
+    const s = sessions.get(chatId);
+    if (s && !s.disposed && s.client && typeof s.client.setPermissionMode === "function") {
+      try {
+        await s.client.setPermissionMode(m);
+      } catch {
+        /* applied on the next start */
+      }
+    }
+    // Cards already waiting follow the new mode too.
+    for (const p of (waits.get(chatId) || []).slice()) {
+      const auto = autoPermissionOption(m, p.params);
+      if (auto) settlePermission(chatId, p, { outcome: { outcome: "selected", optionId: auto } });
+    }
+    emitState(chat.id, true);
+    return snapshot(chatId);
+  }
+
+  function permissionView(p) {
+    return { id: p.id, toolCallId: p.toolCallId, title: p.title, kind: p.kind, input: p.input, description: p.description, diffs: p.diffs, options: p.options, defaultToNo: p.defaultToNo, from: p.from || null };
+  }
+
+  // A request from the chat's own agent (from empty) or from one of its
+  // subagents (from: {handle, agentName, harnessId}).
+  function askPermission(s, params) {
+    return askIn(s.chatId, params, null, s.transcript, s.agentName);
+  }
+
+  function askIn(chatId, params, from, transcript, agentName) {
+    const auto = autoPermissionOption(permMode(chatId), params);
+    if (auto) return Promise.resolve({ outcome: { outcome: "selected", optionId: auto } });
+    const call = (params && (params.toolCall || params.tool_call)) || {};
+    const row = call.toolCallId && transcript ? lastRow(transcript, (r) => r.role === "tool" && r.toolCallId === call.toolCallId) : null;
+    const detail = toolDetail(call);
+    const options = listPermissionOptions(params).map((o) => ({ optionId: o.optionId, name: String(o.name || o.optionId), kind: o.kind }));
+    if (!options.length) return Promise.resolve({ outcome: { outcome: "selected", optionId: "allow_once" } });
+    return new Promise((resolve) => {
+      const p = {
+        id: rowId(),
+        toolCallId: String(call.toolCallId || ""),
+        title: String(call.title || (row && row.title) || "Tool call"),
+        kind: String(call.kind || (row && row.kind) || ""),
+        input: detail.input || (row && row.input) || "",
+        diffs: detail.diffs || (row && row.diffs) || null,
+        description: String((params && params.description) || ""),
+        defaultToNo: Boolean(params && params.defaultToNo),
+        options,
+        params,
+        from,
+        resolve,
+      };
+      waits.set(chatId, (waits.get(chatId) || []).concat([p]));
+      const signal = params && params.signal;
+      if (signal && typeof signal.addEventListener === "function") signal.addEventListener("abort", () => settlePermission(chatId, p, { outcome: { outcome: "cancelled" } }), { once: true });
+      emitState(chatId, true);
+      emit("acp-attention", { chatId, kind: "permission", title: p.title, agentName: from ? from.handle + " (" + from.agentName + ")" : agentName });
+    });
+  }
+
+  function settlePermission(chatId, p, result) {
+    const list = waits.get(chatId) || [];
+    if (!list.includes(p)) return;
+    const rest = list.filter((x) => x !== p);
+    if (rest.length) waits.set(chatId, rest);
+    else waits.delete(chatId);
+    p.resolve(result);
+    emitState(chatId, true);
+  }
+
+  // Answers waiting requests as cancelled: the chat's own (a stop, the turn
+  // ended), one subagent's, or all of them (the thread is gone).
+  function cancelWaits(chatId, which) {
+    for (const p of (waits.get(chatId) || []).slice()) {
+      const own = !p.from;
+      if (which === "all" || (which === "own" && own) || (which && which.handle && p.from && p.from.handle === which.handle)) settlePermission(chatId, p, { outcome: { outcome: "cancelled" } });
+    }
+  }
+
+  function cancelPermissions(s) {
+    if (s) cancelWaits(s.chatId, "own");
+  }
+
+  // The user picked one of the agent's options on a permission card.
+  function answerPermission(chatId, permissionId, optionId) {
+    const p = (waits.get(chatId) || []).find((x) => x.id === permissionId);
+    if (!p) throw new Error("That request is no longer waiting.");
+    if (!p.options.some((o) => o.optionId === optionId)) throw new Error("The agent did not offer that option.");
+    settlePermission(chatId, p, { outcome: { outcome: "selected", optionId } });
+    return snapshot(chatId);
+  }
+
+  // A subagent (subagents plugin) asks; its parent's thread decides. A parent
+  // that is not a chat (a terminal agent) has no thread to show a card in, so
+  // the global default mode applies and anything it would ask is allowed once,
+  // as subagents always were.
+  function askForSubagent(req) {
+    const r = req || {};
+    const parent = String(r.parent || "");
+    const chat = db.listChats().find((c) => c.handle === parent || c.id === parent);
+    const from = { handle: String(r.handle || "subagent"), agentName: String(r.agentName || r.harnessId || "Agent"), harnessId: String(r.harnessId || "") };
+    if (!chat) {
+      const auto = autoPermissionOption(normalMode(db.getSetting("perm-default", "ask")), r.params) || autoPermissionOption("auto", r.params);
+      return Promise.resolve({ outcome: { outcome: "selected", optionId: auto } });
+    }
+    return askIn(chat.id, r.params, from, null, "");
+  }
+
+  function cancelSubagentPermissions(handle) {
+    for (const chatId of Array.from(waits.keys())) cancelWaits(chatId, { handle: String(handle || "") });
+  }
+
+  // Output of a terminal the agent ran through this client, kept on its row.
+  function fillTerminal(s, row) {
+    if (!row.terminals || !s.client || typeof s.client.terminalText !== "function") return;
+    const parts = [];
+    let exitCode = null;
+    for (const id of row.terminals) {
+      const t = s.client.terminalText(id);
+      if (!t) continue;
+      if (t.output) parts.push(t.output);
+      if (t.exitCode != null) exitCode = t.exitCode;
+    }
+    const text = parts.join("\n");
+    if (text) row.terminalOutput = text.length > 12000 ? text.slice(-12000) : text;
+    if (exitCode != null) row.exitCode = exitCode;
+  }
+
   function notifyTurn(chatId) {
     const set = turnWaiters.get(chatId);
     if (!set) return;
@@ -377,7 +546,7 @@ function createAcpHost(options) {
   }
 
   function push(s, row) {
-    s.transcript.push(Object.assign({ at: Date.now() }, row));
+    s.transcript.push(Object.assign({ id: rowId(), at: Date.now() }, row));
     if (s.transcript.length > TRANSCRIPT_MAX) s.transcript.splice(0, s.transcript.length - TRANSCRIPT_MAX);
     persist(s);
     emitState(s.chatId);
@@ -396,16 +565,31 @@ function createAcpHost(options) {
       if (last && last.role === role) last.text += textPart;
       else return push(s, { role, text: textPart });
     } else if (kind === "tool_call") {
-      return push(s, Object.assign({ role: "tool", toolCallId: u.toolCallId, title: String(u.title || "Tool call"), status: u.status || "pending" }, toolDetail(u)));
+      const row = Object.assign({ role: "tool", toolCallId: u.toolCallId, title: String(u.title || "Tool call"), status: u.status || "pending" }, toolDetail(u));
+      fillTerminal(s, row);
+      return push(s, row);
     } else if (kind === "tool_call_update") {
       const row = lastRow(s.transcript, (r) => r.role === "tool" && r.toolCallId === u.toolCallId);
       if (!row) return;
       if (u.status) row.status = u.status;
       if (u.title) row.title = String(u.title);
       const detail = toolDetail(u);
-      if (detail.kind) row.kind = detail.kind;
-      if (detail.input) row.input = detail.input;
-      if (detail.output) row.output = detail.output;
+      for (const key of ["kind", "input", "output", "diffs", "terminals", "paths"]) if (detail[key]) row[key] = detail[key];
+      fillTerminal(s, row);
+    } else if (kind === "available_commands_update" && Array.isArray(u.availableCommands)) {
+      s.commands = u.availableCommands
+        .filter((c) => c && c.name)
+        .slice(0, 300)
+        .map((c) => ({ name: String(c.name).replace(/^\//, ""), description: String(c.description || ""), hint: c.input && c.input.hint ? String(c.input.hint) : "" }));
+      try {
+        db.setSetting("agent-commands:" + s.harnessId, s.commands);
+      } catch {
+        /* best effort */
+      }
+      return emitState(s.chatId);
+    } else if (kind === "usage_update" && Number(u.size) > 0) {
+      s.usage = { used: Number(u.used) || 0, size: Number(u.size) };
+      return emitState(s.chatId);
     } else if (kind === "plan" && Array.isArray(u.entries)) {
       const existing = lastRow(s.transcript, (r) => r.role === "plan");
       const entries = u.entries.map((e) => ({ content: String(e.content || ""), status: e.status || "pending" }));
@@ -450,6 +634,7 @@ function createAcpHost(options) {
 
   function dispose(s) {
     s.disposed = true;
+    cancelPermissions(s);
     if (s.turn) s.turn.abort();
     if (s.client) s.client.stop();
   }
@@ -468,7 +653,9 @@ function createAcpHost(options) {
       chatId, title: chat.title, harnessId: chat.harnessId, status: "starting", error: "", agentName: agent.name,
       transcript: (existing && existing.transcript) || chat.transcript.slice(), sessionId: "", client: null, turn: null,
       prefix: "", contextSent: false, disposed: false, replaying: false, turnStart: 0,
+      permissions: [], commands: existing && existing.commands, usage: existing && existing.usage,
     };
+    withIds(s.transcript);
     for (const row of s.transcript) if (row.role === "tool" && (row.status === "pending" || row.status === "in_progress")) row.status = "cancelled";
     sessions.set(chatId, s);
     emitState(chatId, true);
@@ -479,7 +666,12 @@ function createAcpHost(options) {
         const cwd = chat.cwd || defaultCwd();
         const mcpServers = mcpServersFor(chatId);
         if (chat.harnessId === "devin") writeDevinMcpConfig(cwd, mcpServers);
-        const client = makeClient(chat.harnessId, { harnessId: chat.harnessId, dataRoot, cwd, mcpServers, disallowedTools: disallowedFor ? disallowedFor(chatId) : [], onUpdate: (p) => onUpdate(s, p) });
+        const client = makeClient(chat.harnessId, {
+          harnessId: chat.harnessId, dataRoot, cwd, mcpServers, disallowedTools: disallowedFor ? disallowedFor(chatId) : [],
+          onUpdate: (p) => onUpdate(s, p),
+          onPermission: (params) => askPermission(s, params),
+          permissionMode: permMode(chatId, chat),
+        });
         s.client = client;
         const choice = authChoice(chat.harnessId);
         const env = Object.assign({ JAGENTS_PANE_ID: chatId }, spec.env, choice ? choice.env : {});
@@ -613,9 +805,16 @@ function createAcpHost(options) {
     const from = arg.from;
     if (!userText && !arg.attachments.length) throw new Error("Type a message or attach a file first.");
     let s = sessions.get(chatId);
-    if (s && (s.status === "busy" || (s.startPromise && s.status === "starting"))) throw new Error("The agent is still working on the last message.");
+    // Mid-turn messages wait in the queue (shown as cards) and go out in order.
+    if (s && !s.disposed && (s.status === "busy" || (s.startPromise && s.status === "starting"))) {
+      const q = queues.get(chatId) || [];
+      q.push({ id: rowId(), text: userText, attachments: arg.attachments, from });
+      queues.set(chatId, q);
+      emitState(chatId, true);
+      return snapshot(chatId);
+    }
     const attachments = saveAttachments(dataRoot, chatId, arg.attachments);
-    const userRow = { role: "user", text: userText };
+    const userRow = { id: rowId(), role: "user", text: userText };
     if (attachments.length) userRow.attachments = attachments;
     if (from) userRow.from = from;
     if (!s || s.disposed || s.status !== "ready") {
@@ -670,11 +869,48 @@ function createAcpHost(options) {
       push(s, { role: "error", text: String(error.message || error) });
     } finally {
       s.turn = null;
+      cancelPermissions(s);
+      // Tool calls still open when the turn ended (a stop, a crash) did not finish.
+      for (let i = s.turnStart; i < s.transcript.length; i++) {
+        const r = s.transcript[i];
+        if (r.role === "tool" && (r.status === "pending" || r.status === "in_progress")) r.status = "cancelled";
+      }
       persist(s, true);
       emitState(chatId, true);
       notifyTurn(chatId);
       setTimeout(() => drainQueue(chatId), 0);
+      if (!s.disposed) emit("acp-attention", { chatId, kind: s.status === "error" ? "error" : "done", title: s.title || "", agentName: s.agentName });
     }
+    return snapshot(chatId);
+  }
+
+  // Sends the last user message again (the Retry button on an error row).
+  function retry(chatId) {
+    const s = sessions.get(chatId);
+    const rows = (s && !s.disposed ? s.transcript : chatRecord(chatId).transcript) || [];
+    const last = lastRow(rows, (r) => r.role === "user");
+    if (!last) throw new Error("There is no message to send again.");
+    const attachments = (last.attachments || []).filter((a) => a && a.path).map((a) => ({ name: a.name, mimeType: a.mimeType, path: a.path }));
+    return prompt(chatId, { text: last.text || "", attachments }, { from: last.from || "" });
+  }
+
+  function editQueued(chatId, queueId, text) {
+    const q = queues.get(chatId) || [];
+    const item = q.find((x) => x.id === queueId);
+    if (!item) throw new Error("That message was already sent.");
+    if (item.from) throw new Error("Messages from other agents cannot be edited.");
+    const t = String(text || "").trim();
+    if (!t && !(item.attachments || []).length) return removeQueued(chatId, queueId);
+    item.text = t;
+    emitState(chatId, true);
+    return snapshot(chatId);
+  }
+
+  function removeQueued(chatId, queueId) {
+    const q = (queues.get(chatId) || []).filter((x) => x.id !== queueId);
+    if (q.length) queues.set(chatId, q);
+    else queues.delete(chatId);
+    emitState(chatId, true);
     return snapshot(chatId);
   }
 
@@ -685,7 +921,7 @@ function createAcpHost(options) {
     const busy = s && !s.disposed && (s.status === "busy" || s.status === "starting");
     if (busy) {
       const q = queues.get(chatId) || [];
-      q.push({ text, from });
+      q.push({ id: rowId(), text, from });
       queues.set(chatId, q);
       emitState(chatId, true);
       return { delivered: false, queued: q.length };
@@ -701,7 +937,7 @@ function createAcpHost(options) {
     if (s && (s.status === "busy" || s.status === "starting")) return;
     const next = q.shift();
     if (!q.length) queues.delete(chatId);
-    prompt(chatId, next.text, { from: next.from }).catch(() => {});
+    prompt(chatId, { text: next.text, attachments: next.attachments || [] }, { from: next.from }).catch(() => {});
   }
 
   function isBusy(chatId) {
@@ -740,7 +976,9 @@ function createAcpHost(options) {
   function cancel(chatId) {
     const s = sessions.get(chatId);
     queues.delete(chatId);
+    if (s) cancelPermissions(s);
     if (s && s.turn) s.turn.abort();
+    emitState(chatId, true);
     return { ok: true };
   }
 
@@ -842,6 +1080,7 @@ function createAcpHost(options) {
 
   function deleteChat(chatId) {
     stopChat(chatId);
+    cancelWaits(chatId, "all");
     clearTimeout(saveTimers.get(chatId));
     const ok = db.deleteChat(chatId);
     // The chat's attached files go with it.
@@ -887,6 +1126,13 @@ function createAcpHost(options) {
     cancel,
     setModel,
     setEffort,
+    setPermissionMode,
+    answerPermission,
+    askForSubagent,
+    cancelSubagentPermissions,
+    retry,
+    editQueued,
+    removeQueued,
     modelInfo,
     setModelPref,
     probe,

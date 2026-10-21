@@ -127,6 +127,13 @@ const GLYPHS = {
   lock:
     '<rect x="4.8" y="10.6" width="14.4" height="9.9" rx="1.9" fill="none" stroke="currentColor" stroke-width="1.7"/>' +
     stroke("M8.1 10.6V7.6a3.9 3.9 0 0 1 7.8 0v3", 1.7),
+  // Shield: the chat's permission mode.
+  shield: stroke("M12 3.4 5 6v5.6c0 4.3 2.9 7.6 7 9 4.1-1.4 7-4.7 7-9V6z", 1.7),
+  // Down arrow to a line: jump to the latest message.
+  arrowDown: stroke("M12 4.5v12M6.5 11 12 16.5 17.5 11M6 20h12", 1.8),
+  // Up and down chevrons: previous and next match.
+  chevronUp: stroke("m6 15 6-6 6 6", 1.8),
+  retry: stroke("M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4.2h-4.2", 1.8),
   // Four corner brackets: the preview takes the display and the same button
   // brings it back.
   fullscreen:

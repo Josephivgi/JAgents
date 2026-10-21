@@ -3,20 +3,112 @@
 // the agent and its model: agent logos across the top, that agent's models
 // below. Picking another agent on a bound chat hands the chat over. Code mode
 // shows several of these at once and Thread mode shows one large.
+//
+// The transcript is patched row by row (each row has an id), so streaming
+// text does not rebuild the page: selections and open Thinking rows stay put.
+// Tool calls the chat's permission mode does not answer by itself wait as
+// approval cards with the agent's own options. Messages sent mid-turn wait as
+// queue cards above the composer.
 
-import { esc, toast, errorText, markdown } from "./util.js";
+import { esc, toast, errorText } from "./util.js";
+import { markdown } from "./chat-markdown.js";
 import { harnessIcon, icon } from "./icons.js";
-import { store, on, refreshModelInfo, mergeModelInfo, refreshChats } from "./store.js";
+import { store, on, fire, refreshModelInfo, mergeModelInfo, refreshChats } from "./store.js";
 import { openMarketplace } from "./marketplace.js";
+import { toolLabel, toolBody, toolStatusIcon, groupable, groupLabel, groupIcon, turnRollup, diffCard } from "./chat-tools.js";
 
 const views = new Set();
+
+// Last known state of every chat, for subagent cards in their parent's chat.
+const chatStates = new Map();
 
 export function routeAcpState(snap) {
   if (snap.models && snap.models.availableModels.length) {
     store.modelCache[snap.harnessId] = Object.assign({ preferred: "" }, store.modelCache[snap.harnessId], { models: snap.models });
   }
+  const prev = chatStates.get(snap.chatId);
+  const next = { chatId: snap.chatId, status: snap.status, title: snap.title, handle: snap.handle, harnessId: snap.harnessId, parentId: snap.parentId, agentName: snap.agentName };
+  chatStates.set(snap.chatId, next);
   for (const v of views) if (v.chatId === snap.chatId) v.setSnap(snap);
+  // A subagent's status or title changed: its parent's card shows it.
+  if (snap.parentId && (!prev || prev.status !== next.status || prev.title !== next.title)) {
+    for (const v of views) if (v.chatId === snap.parentId) v.paint();
+  }
 }
+
+// Permission modes, as the composer's picker shows them.
+const PERM_MODES = [
+  { value: "ask", name: "Ask", desc: "Asks before each tool call the agent wants approved." },
+  { value: "edits", name: "Accept edits", desc: "Reads, edits and searches without asking. Asks before commands." },
+  { value: "auto", name: "Auto", desc: "Allows each tool call once, without asking." },
+  { value: "full", name: "Full access", desc: "Allows everything and tells the agent not to ask." },
+];
+
+// A chat counts as watched when the window has focus and the chat is on screen.
+function watched(chatId) {
+  if (!document.hasFocus()) return false;
+  for (const v of views) if (v.chatId === chatId && v.el.offsetParent !== null) return true;
+  return false;
+}
+
+// A system notification when a turn ends or needs approval in a chat nobody is
+// looking at. Clicking it opens that chat.
+on("app:acp-attention", (a) => {
+  if (!a || !a.chatId || watched(a.chatId)) return;
+  const state = chatStates.get(a.chatId) || (store.chats || []).find((c) => c.id === a.chatId) || {};
+  // Subagents finish all the time; their parent gets the reply.
+  if (a.kind !== "permission" && state.parentId) return;
+  const who = a.agentName || "The agent";
+  const title = a.kind === "permission" ? who + " needs your approval" : a.kind === "error" ? who + " stopped with an error" : who + " finished";
+  const body = a.kind === "permission" ? a.title || "" : state.title || a.title || "";
+  try {
+    const n = new Notification(title, { body, silent: false });
+    n.onclick = () => {
+      window.focus();
+      fire("open-chat", a.chatId);
+    };
+  } catch {
+    /* notifications unavailable */
+  }
+});
+
+on("chats", () => {
+  for (const v of views) if (v.chatId) v.paint();
+});
+
+// Subagents from the subagents plugin (handles like claude-code-3/devin-1),
+// for the live cards in their parent's chat. The plugin says when they change.
+let pluginSubs = [];
+let subsTimer = 0;
+async function refreshSubagents() {
+  try {
+    const st = await window.jagents.plugins.invoke("subagents", "state");
+    pluginSubs = (st && st.subagents) || [];
+  } catch {
+    pluginSubs = [];
+  }
+  for (const v of views) if (v.chatId) v.paint();
+}
+on("app:plugin-message", (m) => {
+  if (!m || m.id !== "subagents") return;
+  clearTimeout(subsTimer);
+  subsTimer = setTimeout(refreshSubagents, 150);
+});
+setTimeout(refreshSubagents, 500);
+
+// Ctrl+F finds in the chat that has focus, or the one last used.
+let lastView = null;
+document.addEventListener("keydown", (event) => {
+  if (!((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "f")) return;
+  const active = document.activeElement;
+  let view = null;
+  for (const v of views) if (v.el.contains(active)) view = v;
+  if (!view && lastView && views.has(lastView) && lastView.el.offsetParent !== null) view = lastView;
+  if (!view) for (const v of views) if (v.el.offsetParent !== null) view = view || v;
+  if (!view) return;
+  event.preventDefault();
+  view.openFind();
+});
 
 export function routeAcpModels(info) {
   if (!info || !info.harnessId) return;
@@ -107,8 +199,50 @@ function attachmentMarkup(chatId, a) {
   return '<button type="button" class="att-file"' + open + ' title="' + esc(a.path || a.name) + '">' + icon("file", 15) + '<span class="att-name">' + name + '</span><span class="att-size">' + fileSize(a.size || 0) + "</span></button>";
 }
 
-function toolIcon(st) {
-  return st === "completed" ? icon("check", 14) : st === "failed" || st === "cancelled" ? icon("close", 14) : '<span class="spinner sm"></span>';
+// A row's key: its id, or its place for rows saved before rows had ids.
+function rowKey(row, index) {
+  return row.id || "i" + index;
+}
+
+// Puts the blocks in the transcript, reusing every element whose markup did
+// not change and moving none that are already in place.
+function reconcile(inner, blocks) {
+  const existing = new Map();
+  for (const el of Array.from(inner.children)) {
+    const k = el.dataset ? el.dataset.key : "";
+    if (k && !existing.has(k)) existing.set(k, el);
+    else el.remove();
+  }
+  let prev = null;
+  for (const b of blocks) {
+    let el = existing.get(b.key);
+    existing.delete(b.key);
+    if (!el || el._html !== b.html) {
+      const tpl = document.createElement("template");
+      tpl.innerHTML = b.html;
+      const fresh = tpl.content.firstElementChild || document.createElement("div");
+      fresh.dataset.key = b.key;
+      fresh._html = b.html;
+      if (el) el.replaceWith(fresh);
+      el = fresh;
+    }
+    const want = prev ? prev.nextSibling : inner.firstChild;
+    if (want !== el) inner.insertBefore(el, want);
+    prev = el;
+  }
+  for (const el of existing.values()) el.remove();
+}
+
+const SUB_STATUS = { busy: "Working", starting: "Starting", ready: "Done", idle: "Idle", error: "Error", stopped: "Stopped" };
+
+function subagentCard(c) {
+  const st = c.status || "idle";
+  const open = c.chatId ? 'data-open-chat="' + esc(c.chatId) + '"' : "data-open-subagents";
+  return (
+    '<button type="button" class="sub-card" ' + open + ' title="Open ' + esc(c.handle || "subagent") + '">' +
+    harnessIcon(c.harnessId, 15) + '<span class="sub-handle">' + esc(c.handle || "subagent") + '</span><span class="sub-title muted">' + esc(c.title || "") + "</span>" +
+    '<span class="sub-status is-' + esc(st) + '">' + (st === "busy" || st === "starting" ? '<span class="spinner sm"></span>' : "") + esc(SUB_STATUS[st] || st) + "</span></button>"
+  );
 }
 
 export function statusLabel(snap) {
@@ -128,7 +262,26 @@ export class ChatView {
     this.newAgent = this.opts.agentId || (store.acpAgents.find((a) => a.available) || { id: "devin" }).id;
     this.snap = null;
     this.forceScroll = true;
-    this.openTools = new Set();
+    // Open or closed by the user, by row key; rows not in here use their default.
+    this.toolOpen = new Map();
+    this.openThoughts = new Set();
+    // Rendered rows by key: {sig, html}. Only rows whose sig changed are redrawn.
+    this.rowCache = new Map();
+    this.seenKeys = new Set();
+    this.markerKey = "";
+    this.unseen = 0;
+    // Permission mode picked in a new thread before its chat exists.
+    this.pendingPerm = "";
+    // Up-arrow recall of sent messages: index into them, and the draft it replaced.
+    this.recall = -1;
+    this.recallSaved = "";
+    // Slash command and @file menu: {type, start, items, index}.
+    this.ac = null;
+    this.acSeq = 0;
+    this.draftTimer = 0;
+    this.findQuery = "";
+    this.findIndex = 0;
+    this.findTimer = 0;
     // Files waiting in the composer: {key, name, mimeType, size, path | data, preview}.
     this.pending = [];
     // Effort picked in a new thread before its chat exists.
@@ -144,16 +297,25 @@ export class ChatView {
     this.el.classList.add("chatview");
     if (this.opts.compact) this.el.classList.add("compact");
     this.el.innerHTML =
+      '<div class="find-bar" data-find hidden role="search">' + icon("search", 14) +
+      '<input type="text" data-find-input placeholder="Find in chat" aria-label="Find in chat" autocomplete="off" spellcheck="false">' +
+      '<span class="find-count muted small" data-find-count></span>' +
+      '<button type="button" class="icon-btn" data-find-prev aria-label="Previous match" title="Previous match (Shift+Enter)">' + icon("chevronUp", 14) + "</button>" +
+      '<button type="button" class="icon-btn" data-find-next aria-label="Next match" title="Next match (Enter)">' + icon("chevronDown", 14) + "</button>" +
+      '<button type="button" class="icon-btn" data-find-close aria-label="Close find" title="Close (Esc)">' + icon("close", 14) + "</button></div>" +
       '<div class="transcript"><div class="transcript-inner"></div></div>' +
-      '<div class="composer-wrap"><div class="composer-inner">' +
+      '<div class="composer-wrap"><button type="button" class="jump-latest" data-jump hidden>' + icon("arrowDown", 14) + '<span data-jump-label>Jump to latest</span></button><div class="composer-inner">' +
+      '<div class="queue-list" data-queue hidden></div>' +
       '<form class="composer-card" data-form>' +
+      '<div class="ac-menu news-menu" data-ac hidden role="listbox" aria-label="Suggestions"></div>' +
       '<div class="attach-tray" data-tray hidden></div>' +
       '<div class="composer-input-wrap"><textarea data-input rows="1" placeholder="' + esc(this.opts.placeholder || "Message the agent") + '"></textarea></div>' +
       '<p class="muted small composer-hint" data-hint></p>' +
       '<div class="composer-foot"><div class="composer-settings">' +
       '<button type="button" class="news-pill attach-btn" data-attach aria-label="Attach files" title="Attach files. You can also paste or drop them here.">' + icon("paperclip", 16) + "</button>" +
-      '<div class="harness-picker" data-picker></div><div class="harness-picker effort-picker" data-effort hidden></div></div>' +
+      '<div class="harness-picker" data-picker></div><div class="harness-picker effort-picker" data-effort hidden></div><div class="harness-picker perm-picker" data-perm></div></div>' +
       '<p class="composer-keys" aria-hidden="true"><kbd>Enter</kbd> send <span>·</span> <kbd>Shift</kbd>+<kbd>Enter</kbd> new line</p><div class="composer-submit">' +
+      '<span class="ctx-ring" data-ctx hidden></span>' +
       '<button type="button" class="send-btn stop" data-stop hidden>' + icon("stop", 12) + "<span>Stop</span></button>" +
       '<button type="button" class="send-btn" data-send aria-label="Send">' + icon("arrowUp", 16) + "</button>" +
       "</div></div></form></div></div>" +
@@ -174,12 +336,15 @@ export class ChatView {
     }
     if (this.destroyed) return;
     this.paint();
+    this.loadDraft();
     const id = this.currentAgentId();
     const cached = store.modelCache[id];
     if (!(cached && cached.models && cached.models.availableModels && cached.models.availableModels.length) && !(cached && cached.probing)) refreshModelInfo(id);
   }
 
   destroy() {
+    this.saveDraft(true);
+    this.closeFind();
     this.destroyed = true;
     views.delete(this);
     this.abort.abort();
@@ -254,24 +419,29 @@ export class ChatView {
       return '<div class="msg user' + (row.from ? " relayed" : "") + '">' + from + files + text + "</div>";
     }
     if (row.role === "agent") return '<div class="msg agent"><div class="bubble">' + markdown(row.text) + "</div></div>";
-    if (row.role === "thought") return '<details class="thought"><summary>Thinking</summary><div>' + esc(row.text) + "</div></details>";
+    if (row.role === "thought") {
+      const key = rowKey(row, index);
+      return '<details class="thought" data-thought="' + esc(key) + '"' + (this.openThoughts.has(key) ? " open" : "") + "><summary>Thinking</summary><div>" + esc(row.text) + "</div></details>";
+    }
     if (row.role === "tool") {
       const st = row.status || "pending";
-      const key = row.toolCallId || "row-" + index;
-      const detail = row.input || row.output;
-      const head = toolIcon(st) + '<span class="grow">' + esc(row.title) + "</span>" + (row.kind ? '<span class="tool-kind">' + esc(row.kind) + "</span>" : "");
-      if (!detail) return '<div class="tool ' + esc(st) + '">' + head + "</div>";
-      return (
-        '<details class="tool ' + esc(st) + '" data-tool="' + esc(key) + '"' + (this.openTools.has(key) ? " open" : "") + "><summary>" + head + "</summary>" +
-        (row.input ? '<div class="tool-io"><span>Input</span><pre>' + esc(row.input) + "</pre></div>" : "") +
-        (row.output ? '<div class="tool-io"><span>Output</span><pre>' + esc(row.output) + "</pre></div>" : "") +
-        "</details>"
-      );
+      const key = rowKey(row, index);
+      const kind = String(row.kind || "").toLowerCase();
+      const body = toolBody(row);
+      const head = toolStatusIcon(st) + '<span class="tool-line">' + toolLabel(row) + "</span>";
+      if (!body) return '<div class="tool ' + esc(st) + " kind-" + esc(kind || "other") + '">' + head + "</div>";
+      // Diffs and failed commands show open until the user closes them.
+      const byDefault = Boolean((row.diffs && row.diffs.length) || (row.exitCode != null && row.exitCode !== 0));
+      const open = this.toolOpen.has(key) ? this.toolOpen.get(key) : byDefault;
+      return '<details class="tool ' + esc(st) + " kind-" + esc(kind || "other") + '" data-tool="' + esc(key) + '"' + (open ? " open" : "") + "><summary>" + head + '</summary><div class="tool-body">' + body + "</div></details>";
     }
     if (row.role === "plan") {
       return '<div class="plan"><strong>Plan</strong>' + (row.entries || []).map((e) => '<div class="plan-row ' + (e.status === "completed" ? "done" : esc(e.status)) + '"><span class="plan-dot"></span>' + esc(e.content) + "</div>").join("") + "</div>";
     }
-    if (row.role === "error") return '<div class="err-row">' + esc(row.text) + "</div>";
+    if (row.role === "error") {
+      const retry = index === this.lastErrorIndex && !this.busy() ? '<button type="button" class="btn sm secondary" data-retry>' + icon("retry", 14) + "Retry</button>" : "";
+      return '<div class="err-row"><span class="grow">' + esc(row.text) + "</span>" + retry + "</div>";
+    }
     if (row.role === "system" && row.kind === "handoff") return '<div class="sys handoff">' + icon("handoff", 13) + "<span>" + esc(row.text) + "</span></div>";
     if (row.role === "system" && row.kind === "handoff-in") {
       return '<div class="sys handoff">' + icon("handoff", 13) + "<span>" + esc(row.text) + "</span>" + (row.file ? '<button type="button" class="link" data-open-file="' + esc(row.file) + '">View</button>' : "") + "</div>";
@@ -329,21 +499,634 @@ export class ChatView {
     const pinned = nearBottom(scroller);
     const inner = scroller.querySelector(".transcript-inner");
     const rows = this.snap ? this.snap.transcript : [];
-    if (!rows.length) inner.innerHTML = this.introMarkup();
-    else {
-      const working = this.snap.status === "busy" ? '<div class="working"><span class="spinner"></span>' + esc(this.snap.agentName || "Agent") + " is working…</div>" : this.snap.status === "starting" ? '<div class="working"><span class="spinner"></span>' + (this.signingIn ? "Signing in to " + esc(this.snap.agentName || "the agent") + "… If a browser window opened, finish signing in there." : "Starting " + esc(this.snap.agentName || "agent") + "…") + "</div>" : "";
-      inner.innerHTML = rows.map((r, i) => this.rowMarkup(r, i)).join("") + working + (this.snap.status === "error" && this.snap.error ? this.errorMarkup() : "");
+    // Rows that arrive while the reader is scrolled up get a "New messages" line.
+    const follow = pinned || this.forceScroll;
+    if (follow) {
+      this.markerKey = "";
+      this.unseen = 0;
     }
-    if (pinned || this.forceScroll) scroller.scrollTop = scroller.scrollHeight;
+    let fresh = 0;
+    rows.forEach((r, i) => {
+      const k = rowKey(r, i);
+      if (this.seenKeys.has(k)) return;
+      this.seenKeys.add(k);
+      if (!follow && this.painted && r.role !== "user") {
+        fresh++;
+        if (!this.markerKey) this.markerKey = k;
+      }
+    });
+    this.unseen += fresh;
+    this.painted = true;
+    reconcile(inner, this.blocks(rows));
+    if (follow) scroller.scrollTop = scroller.scrollHeight;
     this.forceScroll = false;
+    this.paintJump();
     this.paintToggles();
+    this.paintQueue();
     const agent = this.currentAgent();
     const hint = this.el.querySelector("[data-hint]");
     hint.textContent = agent && !agent.available ? agent.name + " is not installed. " + (agent.install || "") : "";
     const busy = this.busy();
-    this.el.querySelector("[data-send]").hidden = busy;
+    // While the agent works, Send queues the message and Stop ends the turn.
+    this.el.querySelector("[data-send]").setAttribute("aria-label", busy ? "Queue message" : "Send");
+    this.el.querySelector("[data-send]").title = busy ? "Queue this message. It is sent when the agent finishes." : "Send";
     this.el.querySelector("[data-stop]").hidden = !busy;
+    if (this.findOpen()) this.scheduleFind();
     if (this.opts.onChange) this.opts.onChange(this.snap);
+  }
+
+  // Everything the transcript shows, as keyed blocks of markup.
+  blocks(rows) {
+    const snap = this.snap;
+    if (!rows.length && !(snap && snap.permissions && snap.permissions.length)) return [{ key: "intro", html: this.introMarkup() }];
+    const busy = this.busy();
+    this.lastErrorIndex = -1;
+    for (let i = rows.length - 1; i >= 0; i--) {
+      if (rows[i].role === "user") break;
+      if (rows[i].role === "error") {
+        this.lastErrorIndex = i;
+        break;
+      }
+    }
+    const children = this.children();
+    const placed = new Set();
+    const out = [];
+    let turnStart = 0;
+    let i = 0;
+    while (i < rows.length) {
+      const row = rows[i];
+      const key = rowKey(row, i);
+      if (row.role === "user") turnStart = i;
+      // A run of the same kind of finished tool call folds into one row.
+      let end = i + 1;
+      if (groupable(row)) while (end < rows.length && groupable(rows[end]) && rows[end].kind === row.kind) end++;
+      const span = rows.slice(i, end);
+      if (this.markerKey && span.some((r, n) => rowKey(r, i + n) === this.markerKey)) out.push({ key: "marker", html: '<div class="new-marker" role="separator"><span>New messages</span></div>' });
+      if (span.length >= 2) {
+        const gkey = "g-" + key;
+        const sig = span.map((r, n) => rowKey(r, i + n) + ":" + this.rowSig(r, i + n)).join(",") + (this.toolOpen.get(gkey) ? "|o" : "");
+        out.push(this.cached(gkey, sig, () => {
+          const open = this.toolOpen.get(gkey) ? " open" : "";
+          return '<details class="tool-group" data-tool="' + esc(gkey) + '"' + open + "><summary>" + groupIcon(span) + '<span class="tool-verb">' + esc(groupLabel(span)) + "</span>" + icon("chevronDown", 12) + '</summary><div class="tool-group-rows">' + span.map((r, n) => this.rowMarkup(r, i + n)).join("") + "</div></details>";
+        }));
+      } else {
+        out.push(this.cached(key, this.rowSig(row, i), () => this.rowMarkup(row, i)));
+      }
+      // Subagents this row started, with their live status.
+      for (const r of span) {
+        if (r.role !== "tool") continue;
+        const text = [r.title, r.input, r.output].join(" ");
+        for (const c of children) {
+          if (placed.has(c.key) || !c.handle || !text.includes(c.handle)) continue;
+          placed.add(c.key);
+          out.push({ key: "sub-" + c.key, html: subagentCard(c) });
+        }
+      }
+      // The files a finished turn changed.
+      const last = end - 1;
+      const turnEnds = end >= rows.length ? !busy : rows[end].role === "user";
+      if (turnEnds) {
+        const turn = rows.slice(turnStart, last + 1);
+        const sig = turn.filter((r) => r.role === "tool" && r.diffs).map((r) => rowKey(r, 0) + r.status + r.diffs.length).join(",");
+        if (sig) {
+          const block = this.cached("roll-" + key, sig, () => turnRollup(turn));
+          if (block.html) out.push(block);
+        }
+      }
+      i = end;
+    }
+    for (const c of children) if (!placed.has(c.key)) out.push({ key: "sub-" + c.key, html: subagentCard(c) });
+    for (const p of (snap && snap.permissions) || []) out.push({ key: "perm-" + p.id, html: this.permissionMarkup(p) });
+    if (snap && (snap.status === "busy" || snap.status === "starting")) {
+      const waiting = snap.permissions && snap.permissions.length;
+      const text =
+        snap.status === "starting"
+          ? this.signingIn
+            ? "Signing in to " + esc(snap.agentName || "the agent") + "… If a browser window opened, finish signing in there."
+            : "Starting " + esc(snap.agentName || "agent") + "…"
+          : waiting
+            ? esc(snap.agentName || "The agent") + " is waiting for your approval."
+            : esc(snap.agentName || "Agent") + " is working…";
+      out.push({ key: "working", html: '<div class="working"><span class="spinner"></span>' + text + "</div>" });
+    }
+    // The session's error, unless the last row already says the same thing.
+    const lastRow = rows[rows.length - 1];
+    const repeated = lastRow && lastRow.role === "error" && lastRow.text === (snap && snap.error) && !(snap.authMethods || []).length;
+    if (snap && snap.status === "error" && snap.error && !repeated) out.push({ key: "err-state", html: this.errorMarkup() });
+    return out;
+  }
+
+  cached(key, sig, build) {
+    const hit = this.rowCache.get(key);
+    if (hit && hit.sig === sig) return { key, html: hit.html };
+    const html = build();
+    this.rowCache.set(key, { sig, html });
+    return { key, html };
+  }
+
+  // What a row's markup depends on; rows only grow or change status.
+  rowSig(row, index) {
+    const key = rowKey(row, index);
+    const len = (v) => (v ? String(v).length : 0);
+    return [
+      row.role, row.status, row.title, row.kind, len(row.text), len(row.output), len(row.input), len(row.terminalOutput), row.exitCode,
+      (row.diffs || []).length, (row.paths || []).length, row.role === "plan" ? JSON.stringify(row.entries) : "",
+      this.toolOpen.has(key) ? String(this.toolOpen.get(key)) : "", this.openThoughts.has(key) ? "o" : "",
+      row.role === "error" ? String(index === this.lastErrorIndex && !this.busy()) : "",
+    ].join("|");
+  }
+
+  // Subagents this chat started: the subagents plugin's (by this chat's
+  // handle) and chats spawned through the hub (by parent id).
+  children() {
+    if (!this.chatId) return [];
+    const mine = this.snap && this.snap.handle;
+    const plugin = mine
+      ? pluginSubs.filter((s) => s.parent === mine).map((s) => ({ chatId: "", key: s.handle, status: s.status, title: s.task, handle: s.handle, harnessId: s.provider }))
+      : [];
+    const chats = (store.chats || [])
+      .filter((c) => c.parentId === this.chatId)
+      .map((c) => Object.assign({ chatId: c.id, key: c.id, status: "idle", title: c.title, handle: c.handle, harnessId: c.harnessId }, chatStates.get(c.id) || {}));
+    return plugin.concat(chats);
+  }
+
+  // ---- Permission cards ----------------------------------------------------
+
+  permissionMarkup(p) {
+    // A subagent's request names the subagent, so it is clear who asks.
+    const who = p.from
+      ? harnessIcon(p.from.harnessId, 14) + "<span>" + esc(p.from.handle) + '</span> <span class="perm-from muted">(' + esc(p.from.agentName) + " subagent)</span>"
+      : esc((this.snap && this.snap.agentName) || "The agent");
+    let detail = "";
+    if (p.diffs && p.diffs.length) detail = p.diffs.slice(0, 3).map(diffCard).join("");
+    else if (p.input) {
+      let shown = p.input;
+      try {
+        const parsed = JSON.parse(p.input);
+        shown = typeof parsed.command === "string" ? "$ " + parsed.command : JSON.stringify(parsed, null, 2);
+      } catch {
+        /* as sent */
+      }
+      detail = '<pre class="perm-input">' + esc(shown) + "</pre>";
+    }
+    const buttons = p.options
+      .map((o) => {
+        const reject = /reject|deny/.test(o.kind + " " + o.optionId);
+        const cls = reject ? "secondary" : /always/.test(o.kind) ? "secondary" : "primary";
+        return '<button type="button" class="btn sm ' + cls + (reject ? " perm-reject" : "") + '" data-perm-answer="' + esc(p.id) + '" data-perm-option="' + esc(o.optionId) + '">' + esc(o.name) + "</button>";
+      })
+      .join("");
+    return (
+      '<div class="perm-card" role="group" aria-label="Approval needed">' +
+      '<div class="perm-head">' + icon("shield", 15) + "<b>" + who + " wants to: " + esc(p.title) + "</b></div>" +
+      (p.description ? '<p class="muted small">' + esc(p.description) + "</p>" : "") +
+      detail +
+      '<div class="perm-actions">' + buttons + '<span class="grow"></span><button type="button" class="link small" data-open-perm-mode>Change what needs approval</button></div></div>'
+    );
+  }
+
+  async answerPermission(id, optionId) {
+    try {
+      this.setSnap(await window.jagents.chats.answerPermission(this.chatId, id, optionId));
+    } catch (error) {
+      toast(errorText(error));
+    }
+  }
+
+  // ---- Queue cards ---------------------------------------------------------
+
+  paintQueue() {
+    const slot = this.el.querySelector("[data-queue]");
+    const q = (this.snap && this.snap.queue) || [];
+    if (slot.querySelector("[data-queue-input]")) {
+      // Keep an open editor; drop it only if its message went out.
+      const id = slot.querySelector("[data-queue-input]").dataset.queueInput;
+      if (q.some((x) => x.id === id)) return;
+    }
+    const html = q
+      .map(
+        (m) =>
+          '<div class="queue-item" data-qid="' + esc(m.id) + '">' +
+          '<span class="queue-tag">' + (m.from ? icon("hub", 12) + esc(m.from) : "Queued") + "</span>" +
+          '<span class="queue-text" title="' + esc(m.text) + '">' + esc(m.text || (m.files ? m.files + " file" + (m.files === 1 ? "" : "s") : "")) + "</span>" +
+          (m.from ? "" : '<button type="button" class="icon-btn" data-queue-edit="' + esc(m.id) + '" aria-label="Edit queued message" title="Edit">' + icon("pencil", 13) + "</button>") +
+          '<button type="button" class="icon-btn" data-queue-remove="' + esc(m.id) + '" aria-label="Remove queued message" title="Remove">' + icon("close", 13) + "</button></div>",
+      )
+      .join("");
+    if (slot._html === html) return;
+    slot._html = html;
+    slot.innerHTML = html;
+    slot.hidden = !q.length;
+  }
+
+  editQueued(id) {
+    const m = ((this.snap && this.snap.queue) || []).find((x) => x.id === id);
+    const item = this.el.querySelector('[data-qid="' + CSS.escape(id) + '"]');
+    if (!m || !item) return;
+    item.innerHTML =
+      '<textarea class="queue-edit" data-queue-input="' + esc(id) + '" rows="2" aria-label="Edit queued message"></textarea>' +
+      '<button type="button" class="btn sm primary" data-queue-save="' + esc(id) + '">Save</button>' +
+      '<button type="button" class="btn sm ghost" data-queue-cancel>Cancel</button>';
+    const ta = item.querySelector("textarea");
+    ta.value = m.text;
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+  }
+
+  async saveQueued(id) {
+    const ta = this.el.querySelector('[data-queue-input="' + CSS.escape(id) + '"]');
+    const text = ta ? ta.value : "";
+    this.el.querySelector("[data-queue]")._html = "";
+    if (ta) ta.removeAttribute("data-queue-input");
+    try {
+      this.setSnap(await window.jagents.chats.editQueued(this.chatId, id, text));
+    } catch (error) {
+      toast(errorText(error));
+      this.paintQueue();
+    }
+    this.input.focus();
+  }
+
+  async removeQueued(id) {
+    try {
+      this.setSnap(await window.jagents.chats.removeQueued(this.chatId, id));
+    } catch (error) {
+      toast(errorText(error));
+    }
+  }
+
+  // Stop: the turn ends and the user's queued messages come back to the composer.
+  async stop() {
+    if (!this.chatId) return;
+    const mine = ((this.snap && this.snap.queue) || []).filter((m) => !m.from && m.text).map((m) => m.text);
+    if (mine.length) {
+      const cur = this.input.value.trim();
+      this.input.value = mine.concat(cur ? [cur] : []).join("\n\n");
+      autoGrow(this.input);
+      this.saveDraft();
+    }
+    try {
+      await window.jagents.chats.cancel(this.chatId);
+    } catch (error) {
+      toast(errorText(error));
+    }
+  }
+
+  async retry() {
+    try {
+      this.forceScroll = true;
+      const done = await window.jagents.chats.retry(this.chatId);
+      if (done && views.has(this)) this.setSnap(done);
+    } catch (error) {
+      toast(errorText(error));
+    }
+  }
+
+  // ---- Jump to latest ------------------------------------------------------
+
+  paintJump() {
+    const scroller = this.el.querySelector(".transcript");
+    const btn = this.el.querySelector("[data-jump]");
+    const away = !nearBottom(scroller) && scroller.scrollHeight > scroller.clientHeight;
+    if (btn.hidden === away) btn.hidden = !away;
+    const label = this.unseen ? this.unseen + " new message" + (this.unseen === 1 ? "" : "s") : "Jump to latest";
+    const span = btn.querySelector("[data-jump-label]");
+    if (span.textContent !== label) span.textContent = label;
+  }
+
+  jumpToLatest() {
+    const scroller = this.el.querySelector(".transcript");
+    scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
+  }
+
+  onScroll() {
+    const scroller = this.el.querySelector(".transcript");
+    if (nearBottom(scroller) && (this.unseen || this.markerKey)) {
+      this.unseen = 0;
+      // The marker stays until the next message so the reader sees where they were.
+    }
+    this.paintJump();
+  }
+
+  // ---- Find in chat --------------------------------------------------------
+
+  findOpen() {
+    return !this.el.querySelector("[data-find]").hidden;
+  }
+
+  openFind() {
+    for (const v of views) if (v !== this) v.closeFind();
+    const bar = this.el.querySelector("[data-find]");
+    bar.hidden = false;
+    const input = bar.querySelector("[data-find-input]");
+    const sel = String(window.getSelection() || "").trim();
+    if (sel && sel.length < 200 && !sel.includes("\n")) input.value = sel;
+    input.focus();
+    input.select();
+    this.runFind(true);
+  }
+
+  closeFind() {
+    const bar = this.el.querySelector("[data-find]");
+    if (!bar || bar.hidden) return;
+    bar.hidden = true;
+    if (typeof CSS !== "undefined" && CSS.highlights) {
+      CSS.highlights.delete("jagents-find");
+      CSS.highlights.delete("jagents-find-current");
+    }
+    if (!this.destroyed) this.input.focus();
+  }
+
+  scheduleFind() {
+    clearTimeout(this.findTimer);
+    this.findTimer = setTimeout(() => this.runFind(false), 150);
+  }
+
+  // Highlights every match with the CSS Highlight API (no DOM changes, so the
+  // row patching is unaffected). Text inside closed rows is skipped.
+  runFind(reset, step) {
+    const bar = this.el.querySelector("[data-find]");
+    const query = bar.querySelector("[data-find-input]").value;
+    const count = bar.querySelector("[data-find-count]");
+    if (reset || query !== this.findQuery) this.findIndex = 0;
+    this.findQuery = query;
+    const ranges = [];
+    const needle = query.toLowerCase();
+    if (needle) {
+      const inner = this.el.querySelector(".transcript-inner");
+      const walker = document.createTreeWalker(inner, NodeFilter.SHOW_TEXT, {
+        acceptNode: (node) => {
+          const parent = node.parentElement;
+          if (!parent || parent.closest(".jui-copy, .jui-code-head, button.icon-btn")) return NodeFilter.FILTER_REJECT;
+          const d = parent.closest("details");
+          if (d && !d.open && !parent.closest("summary")) return NodeFilter.FILTER_REJECT;
+          return NodeFilter.FILTER_ACCEPT;
+        },
+      });
+      for (let node = walker.nextNode(); node && ranges.length < 2000; node = walker.nextNode()) {
+        const text = node.data.toLowerCase();
+        let at = text.indexOf(needle);
+        while (at >= 0) {
+          const r = new Range();
+          r.setStart(node, at);
+          r.setEnd(node, at + needle.length);
+          ranges.push(r);
+          at = text.indexOf(needle, at + needle.length);
+        }
+      }
+    }
+    if (step) this.findIndex = ranges.length ? (this.findIndex + step + ranges.length) % ranges.length : 0;
+    if (this.findIndex >= ranges.length) this.findIndex = Math.max(0, ranges.length - 1);
+    count.textContent = needle ? (ranges.length ? this.findIndex + 1 + " of " + ranges.length : "No matches") : "";
+    if (typeof CSS === "undefined" || !CSS.highlights) return;
+    CSS.highlights.set("jagents-find", new Highlight(...ranges));
+    const cur = ranges[this.findIndex];
+    if (cur) {
+      CSS.highlights.set("jagents-find-current", new Highlight(cur));
+      if (reset || step) {
+        const scroller = this.el.querySelector(".transcript");
+        const box = cur.getBoundingClientRect();
+        const view = scroller.getBoundingClientRect();
+        if (box.top < view.top + 20 || box.bottom > view.bottom - 20) scroller.scrollTop += box.top - view.top - view.height / 2;
+      }
+    } else CSS.highlights.delete("jagents-find-current");
+  }
+
+  // ---- Drafts and recall ---------------------------------------------------
+
+  draftId() {
+    return this.chatId || "new";
+  }
+
+  async loadDraft() {
+    try {
+      const text = await window.jagents.chats.getDraft(this.draftId());
+      if (text && !this.input.value && !this.destroyed) {
+        this.input.value = text;
+        autoGrow(this.input);
+      }
+    } catch {
+      /* no draft */
+    }
+  }
+
+  saveDraft(now) {
+    clearTimeout(this.draftTimer);
+    const id = this.draftId();
+    const text = this.input.value;
+    const save = () => window.jagents.chats.setDraft(id, text).catch(() => {});
+    if (now) save();
+    else this.draftTimer = setTimeout(save, 400);
+  }
+
+  sentHistory() {
+    const rows = (this.snap && this.snap.transcript) || [];
+    const out = [];
+    for (let i = rows.length - 1; i >= 0 && out.length < 50; i--) {
+      const r = rows[i];
+      if (r.role === "user" && !r.from && r.text && !out.includes(r.text)) out.push(r.text);
+    }
+    return out;
+  }
+
+  // Up arrow at the start of the composer steps back through sent messages;
+  // down arrow at the end steps forward and back to the draft.
+  recallStep(dir) {
+    const list = this.sentHistory();
+    if (!list.length) return false;
+    if (this.recall < 0) {
+      if (dir > 0) return false;
+      this.recallSaved = this.input.value;
+    }
+    const next = this.recall + (dir < 0 ? 1 : -1);
+    if (next >= list.length) return true;
+    this.recall = next;
+    this.input.value = next < 0 ? this.recallSaved : list[next];
+    autoGrow(this.input);
+    const end = this.input.value.length;
+    this.input.setSelectionRange(dir < 0 ? 0 : end, dir < 0 ? 0 : end);
+    return true;
+  }
+
+  // ---- Slash commands and @files -------------------------------------------
+
+  async updateAc() {
+    const v = this.input.value;
+    const pos = this.input.selectionStart;
+    const before = v.slice(0, pos);
+    const slash = /^\/([^\s]*)$/.exec(before);
+    const at = /(^|\s)@([^\s@]*)$/.exec(before);
+    if (slash) {
+      const q = slash[1].toLowerCase();
+      const list = ((this.snap && this.snap.commands) || []).filter((c) => c.name.toLowerCase().includes(q));
+      list.sort((a, b) => Number(!a.name.toLowerCase().startsWith(q)) - Number(!b.name.toLowerCase().startsWith(q)) || a.name.localeCompare(b.name));
+      const items = list.slice(0, 40).map((c) => ({ label: "/" + c.name, desc: c.description + (c.hint ? " " + c.hint : ""), insert: "/" + c.name + " " }));
+      return this.showAc({ type: "slash", start: 0, end: pos, items });
+    }
+    if (at) {
+      const seq = ++this.acSeq;
+      const q = at[2];
+      let files = [];
+      try {
+        files = await window.jagents.chats.files(this.chatId || "", q);
+      } catch {
+        files = [];
+      }
+      if (seq !== this.acSeq || this.input.selectionStart !== pos) return;
+      const items = files.map((f) => ({ label: f, desc: "", insert: "@" + f + " ", file: true }));
+      return this.showAc({ type: "file", start: pos - q.length - 1, end: pos, items });
+    }
+    this.closeAc();
+  }
+
+  showAc(state) {
+    const menu = this.el.querySelector("[data-ac]");
+    if (!state.items.length) return this.closeAc();
+    const keep = this.ac && this.ac.type === state.type ? Math.min(this.ac.index, state.items.length - 1) : 0;
+    this.ac = Object.assign(state, { index: keep });
+    menu.innerHTML =
+      '<p class="news-menu-label">' + (state.type === "slash" ? "Commands" : "Files") + "</p>" +
+      state.items
+        .map(
+          (it, i) =>
+            '<button type="button" role="option" class="news-menu-row' + (i === keep ? " is-selected" : "") + '" data-ac-pick="' + i + '" aria-selected="' + (i === keep) + '">' +
+            (it.file ? icon("file", 14) : "") +
+            '<span class="news-menu-text"><span class="news-menu-name">' + esc(it.label) + "</span>" + (it.desc ? '<span class="news-menu-desc">' + esc(it.desc) + "</span>" : "") + "</span></button>",
+        )
+        .join("");
+    menu.hidden = false;
+  }
+
+  moveAc(step) {
+    if (!this.ac) return;
+    this.ac.index = (this.ac.index + step + this.ac.items.length) % this.ac.items.length;
+    const menu = this.el.querySelector("[data-ac]");
+    menu.querySelectorAll("[data-ac-pick]").forEach((b, i) => {
+      b.classList.toggle("is-selected", i === this.ac.index);
+      b.setAttribute("aria-selected", String(i === this.ac.index));
+      if (i === this.ac.index) b.scrollIntoView({ block: "nearest" });
+    });
+  }
+
+  pickAc(i) {
+    const ac = this.ac;
+    if (!ac) return;
+    const it = ac.items[i == null ? ac.index : i];
+    if (!it) return;
+    const v = this.input.value;
+    this.input.value = v.slice(0, ac.start) + it.insert + v.slice(ac.end);
+    const caret = ac.start + it.insert.length;
+    this.input.setSelectionRange(caret, caret);
+    this.closeAc();
+    autoGrow(this.input);
+    this.input.focus();
+    this.saveDraft();
+  }
+
+  closeAc() {
+    this.ac = null;
+    this.acSeq++;
+    const menu = this.el.querySelector("[data-ac]");
+    if (menu && !menu.hidden) {
+      menu.hidden = true;
+      menu.innerHTML = "";
+    }
+  }
+
+  // ---- Permission mode picker and context ring -----------------------------
+
+  permMode() {
+    return (this.snap && this.snap.permissionMode) || this.pendingPerm || "ask";
+  }
+
+  paintPerm() {
+    const slot = this.el.querySelector("[data-perm]");
+    if (!slot) return;
+    const mode = PERM_MODES.find((m) => m.value === this.permMode()) || PERM_MODES[0];
+    const html =
+      '<button type="button" class="news-pill harness-toggle perm-toggle mode-' + mode.value + '" data-perm-toggle aria-label="Permissions: ' + esc(mode.name) + '" aria-haspopup="listbox" aria-expanded="false" title="' + esc("Permissions for this thread: " + mode.name + ". " + mode.desc) + '">' +
+      icon("shield", 15) + '<span class="news-pill-label">' + esc(mode.name) + "</span>" + icon("chevronDown", 12) + "</button>";
+    if (slot._html === html) return;
+    slot._html = html;
+    const toggle = slot.querySelector("[data-perm-toggle]");
+    if (!toggle) {
+      slot.innerHTML = html + "<div data-perm-popup></div>";
+      return;
+    }
+    const tpl = document.createElement("template");
+    tpl.innerHTML = html;
+    const next = tpl.content.firstElementChild;
+    for (const a of Array.from(toggle.attributes)) if (!next.hasAttribute(a.name)) toggle.removeAttribute(a.name);
+    for (const a of Array.from(next.attributes)) if (a.name !== "aria-expanded") toggle.setAttribute(a.name, a.value);
+    toggle.innerHTML = next.innerHTML;
+  }
+
+  openPerm() {
+    if (this.el.querySelector("[data-perm-menu]")) return this.closePerm();
+    this.closeMenus();
+    this.closeEffort();
+    const cur = this.permMode();
+    const popup = this.el.querySelector("[data-perm-popup]");
+    popup.innerHTML =
+      '<div class="news-menu effort-menu perm-menu" data-perm-menu role="dialog" aria-label="Permissions">' +
+      '<p class="news-menu-label">Permissions for this thread</p><div data-model-list role="listbox" aria-label="Permission modes">' +
+      PERM_MODES.map((m) => {
+        const picked = m.value === cur;
+        return (
+          '<button type="button" role="option" class="news-menu-row' + (picked ? " is-selected" : "") + '" data-perm-pick="' + m.value + '" aria-selected="' + picked + '">' +
+          '<span class="news-menu-text"><span class="news-menu-name">' + esc(m.name) + '</span><span class="news-menu-desc">' + esc(m.desc) + "</span></span>" + (picked ? CHECK : "") + "</button>"
+        );
+      }).join("") +
+      "</div></div>";
+    this.el.querySelector("[data-perm-toggle]").setAttribute("aria-expanded", "true");
+    const sel = popup.querySelector('[aria-selected="true"]');
+    if (sel) sel.focus();
+  }
+
+  closePerm() {
+    const menu = this.el.querySelector("[data-perm-menu]");
+    if (menu) menu.remove();
+    const toggle = this.el.querySelector("[data-perm-toggle]");
+    if (toggle) toggle.setAttribute("aria-expanded", "false");
+  }
+
+  async choosePerm(mode) {
+    this.closePerm();
+    if (!this.chatId) {
+      this.pendingPerm = mode;
+      this.paintPerm();
+    } else {
+      try {
+        this.setSnap(await window.jagents.chats.setPermissionMode(this.chatId, mode));
+      } catch (error) {
+        toast(errorText(error));
+      }
+    }
+    const t = this.el.querySelector("[data-perm-toggle]");
+    if (t) t.focus();
+  }
+
+  paintCtx() {
+    const slot = this.el.querySelector("[data-ctx]");
+    const u = this.snap && this.snap.usage;
+    const show = Boolean(u && u.size > 0);
+    if (slot.hidden === show) slot.hidden = !show;
+    if (!show) return;
+    const pct = Math.max(0, Math.min(100, (u.used / u.size) * 100));
+    const r = 7;
+    const c = 2 * Math.PI * r;
+    const k = (n) => (n >= 1000 ? Math.round(n / 1000) + "k" : String(n));
+    const tone = pct >= 90 ? " is-high" : pct >= 70 ? " is-mid" : "";
+    const html =
+      '<svg viewBox="0 0 18 18" width="18" height="18" aria-hidden="true"><circle cx="9" cy="9" r="' + r + '" class="ctx-track"/><circle cx="9" cy="9" r="' + r + '" class="ctx-fill' + tone + '" stroke-dasharray="' + c.toFixed(2) + '" stroke-dashoffset="' + (c * (1 - pct / 100)).toFixed(2) + '" transform="rotate(-90 9 9)"/></svg><span class="ctx-pct">' + Math.round(pct) + "%</span>";
+    const title = "Context: " + k(u.used) + " of " + k(u.size) + " tokens (" + Math.round(pct) + "%)";
+    if (slot._html !== html) {
+      slot._html = html;
+      slot.innerHTML = html;
+    }
+    slot.title = title;
+    slot.setAttribute("role", "img");
+    slot.setAttribute("aria-label", title);
   }
 
   // ---- Agent and model picker -------------------------------------------
@@ -536,6 +1319,8 @@ export class ChatView {
 
   paintToggles() {
     this.paintEffort();
+    this.paintPerm();
+    this.paintCtx();
     const slot = this.el.querySelector("[data-picker]");
     const html = this.pickerToggleMarkup();
     if (!slot || slot._html === html) return;
@@ -716,6 +1501,9 @@ export class ChatView {
         this.chatId = this.snap.chatId;
         if (this.pendingEffort) this.snap = await window.jagents.chats.setEffort(this.chatId, this.pendingEffort);
         this.pendingEffort = "";
+        if (this.pendingPerm) this.snap = await window.jagents.chats.setPermissionMode(this.chatId, this.pendingPerm);
+        this.pendingPerm = "";
+        window.jagents.chats.setDraft("new", "").catch(() => {});
         if (this.opts.onCreated) this.opts.onCreated(this.chatId);
         refreshChats();
       }
@@ -723,12 +1511,21 @@ export class ChatView {
       autoGrow(this.input);
       this.pending = [];
       this.paintTray();
+      this.recall = -1;
+      this.closeAc();
+      this.saveDraft(true);
+      const input0 = pending.length ? { text, attachments: pending.map((p) => (p.path ? { name: p.name, mimeType: p.mimeType, path: p.path } : { name: p.name, mimeType: p.mimeType, data: p.data })) } : text;
+      // Mid-turn: the host queues it and the queue card shows it.
+      if (this.busy()) {
+        this.setSnap(await window.jagents.chats.prompt(this.chatId, input0));
+        return;
+      }
       this.forceScroll = true;
+      this.markerKey = "";
       const shown = pending.map((p) => ({ name: p.name, mimeType: p.mimeType, size: p.size, path: p.path, preview: p.preview }));
-      this.snap = Object.assign({}, this.snap, { status: this.snap.status === "ready" ? "busy" : "starting", transcript: this.snap.transcript.concat([{ role: "user", text, attachments: shown }]) });
+      this.snap = Object.assign({}, this.snap, { status: this.snap.status === "ready" ? "busy" : "starting", transcript: this.snap.transcript.concat([{ id: "local-" + Date.now(), role: "user", text, attachments: shown }]) });
       this.paint();
-      const input = pending.length ? { text, attachments: pending.map((p) => (p.path ? { name: p.name, mimeType: p.mimeType, path: p.path } : { name: p.name, mimeType: p.mimeType, data: p.data })) } : text;
-      const done = await window.jagents.chats.prompt(this.chatId, input);
+      const done = await window.jagents.chats.prompt(this.chatId, input0);
       if (done && views.has(this)) this.setSnap(done);
     } catch (error) {
       toast(errorText(error));
@@ -748,7 +1545,54 @@ export class ChatView {
       }
       if (t.closest("[data-effort-toggle]")) {
         event.stopPropagation();
+        this.closePerm();
         return this.openEffort();
+      }
+      if (t.closest("[data-perm-toggle]")) {
+        event.stopPropagation();
+        return this.openPerm();
+      }
+      const permPick = t.closest("[data-perm-pick]");
+      if (permPick) return this.choosePerm(permPick.dataset.permPick);
+      if (t.closest("[data-open-perm-mode]")) {
+        event.stopPropagation();
+        return this.openPerm();
+      }
+      const answer = t.closest("[data-perm-answer]");
+      if (answer) return this.answerPermission(answer.dataset.permAnswer, answer.dataset.permOption);
+      const acPick = t.closest("[data-ac-pick]");
+      if (acPick) return this.pickAc(Number(acPick.dataset.acPick));
+      if (t.closest("[data-retry]")) return this.retry();
+      if (t.closest("[data-jump]")) return this.jumpToLatest();
+      const qe = t.closest("[data-queue-edit]");
+      if (qe) return this.editQueued(qe.dataset.queueEdit);
+      const qs = t.closest("[data-queue-save]");
+      if (qs) return this.saveQueued(qs.dataset.queueSave);
+      if (t.closest("[data-queue-cancel]")) {
+        this.el.querySelector("[data-queue]")._html = "";
+        const ta = this.el.querySelector("[data-queue-input]");
+        if (ta) ta.removeAttribute("data-queue-input");
+        return this.paintQueue();
+      }
+      const qr = t.closest("[data-queue-remove]");
+      if (qr) return this.removeQueued(qr.dataset.queueRemove);
+      if (t.closest("[data-find-next]")) return this.runFind(false, 1);
+      if (t.closest("[data-find-prev]")) return this.runFind(false, -1);
+      if (t.closest("[data-find-close]")) return this.closeFind();
+      const sub = t.closest("[data-open-chat]");
+      if (sub) return fire("open-chat", sub.dataset.openChat);
+      // A plugin subagent opens in the Subagents tab.
+      if (t.closest("[data-open-subagents]")) {
+        const tab = document.querySelector('[data-mode="subagents"]');
+        return tab ? tab.click() : toast("Turn on the Subagents plugin to see subagents.");
+      }
+      const link = t.closest(".bubble a[href]");
+      if (link) {
+        event.preventDefault();
+        const href = link.getAttribute("href") || "";
+        if (/^https:\/\//i.test(href)) window.jagents.openUrl(href).catch((e) => toast(errorText(e)));
+        else if (/^http:\/\//i.test(href)) toast("Only https links open from a chat.");
+        return;
       }
       const effortPick = t.closest("[data-effort-pick]");
       if (effortPick) return this.chooseEffort(effortPick.dataset.effortPick);
@@ -770,21 +1614,28 @@ export class ChatView {
       const auth = t.closest("[data-auth]");
       if (auth) return this.signIn(auth.dataset.auth);
       const file = t.closest("[data-open-file]");
-      if (file) return window.jagents.openPath(file.dataset.openFile);
+      if (file) {
+        // A chip inside a row's summary opens the file, not the row.
+        event.preventDefault();
+        return window.jagents.openPath(file.dataset.openFile);
+      }
       if (t.closest("[data-send]")) return this.send();
-      if (t.closest("[data-stop]") && this.chatId) return window.jagents.chats.cancel(this.chatId);
+      if (t.closest("[data-stop]") && this.chatId) return this.stop();
       if (!t.closest(".news-menu")) {
         this.closeMenus();
         this.closeEffort();
+        this.closePerm();
+        this.closeAc();
       }
     }, sig);
     el.addEventListener(
       "toggle",
       (event) => {
         const d = event.target;
-        if (d.matches && d.matches("details[data-tool]")) {
-          if (d.open) this.openTools.add(d.dataset.tool);
-          else this.openTools.delete(d.dataset.tool);
+        if (d.matches && d.matches("details[data-tool]")) this.toolOpen.set(d.dataset.tool, d.open);
+        else if (d.matches && d.matches("details[data-thought]")) {
+          if (d.open) this.openThoughts.add(d.dataset.thought);
+          else this.openThoughts.delete(d.dataset.thought);
         }
       },
       { capture: true, signal: this.abort.signal },
@@ -792,13 +1643,53 @@ export class ChatView {
     el.addEventListener("input", (event) => {
       const search = event.target.closest("[data-menu-search]");
       if (search) applyFilter(search.closest(".news-menu").querySelector("[data-model-list]"), search.value);
+      if (event.target.matches("[data-find-input]")) this.runFind(true);
     }, sig);
+    el.addEventListener("focusin", () => (lastView = this), sig);
+    el.addEventListener("pointerdown", () => (lastView = this), sig);
+    el.querySelector(".transcript").addEventListener("scroll", () => this.onScroll(), { passive: true, signal: this.abort.signal });
     el.addEventListener("keydown", (event) => {
-      if (event.key === "Escape" && el.querySelector(".news-menu")) {
+      if (event.target.matches && event.target.matches("[data-find-input]")) {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          return this.runFind(false, event.shiftKey ? -1 : 1);
+        }
+        if (event.key === "Escape") {
+          event.preventDefault();
+          return this.closeFind();
+        }
+        return;
+      }
+      if (event.target.matches && event.target.matches("[data-queue-input]")) {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          return this.saveQueued(event.target.dataset.queueInput);
+        }
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          el.querySelector("[data-queue]")._html = "";
+          event.target.removeAttribute("data-queue-input");
+          this.paintQueue();
+          return this.input.focus();
+        }
+        return;
+      }
+      if (event.key === "Escape" && el.querySelector(".news-menu:not([data-ac])")) {
         event.preventDefault();
         this.closeMenus();
         this.closeEffort();
+        this.closePerm();
         return this.input.focus();
+      }
+      if (event.key === "Escape" && this.findOpen()) {
+        event.preventDefault();
+        return this.closeFind();
+      }
+      // Esc stops the turn.
+      if (event.key === "Escape" && !this.ac && this.busy()) {
+        event.preventDefault();
+        return this.stop();
       }
       const inSearch = event.target.matches && event.target.matches("[data-menu-search]");
       if (inSearch && event.key === "Enter") {
@@ -831,6 +1722,7 @@ export class ChatView {
       if (!event.composedPath().includes(el)) {
         this.closeMenus();
         this.closeEffort();
+        this.closePerm();
       }
     }, sig);
     // Files dropped anywhere on the chat are attached.
@@ -869,11 +1761,40 @@ export class ChatView {
       this.addFiles(files);
     }, sig);
     this.input.addEventListener("keydown", (event) => {
+      if (this.ac) {
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          return this.moveAc(event.key === "ArrowDown" ? 1 : -1);
+        }
+        if ((event.key === "Enter" && !event.shiftKey) || event.key === "Tab") {
+          event.preventDefault();
+          return this.pickAc();
+        }
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          return this.closeAc();
+        }
+      }
       if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
         event.preventDefault();
         this.send();
+        return;
+      }
+      const at0 = this.input.selectionStart === 0 && this.input.selectionEnd === 0;
+      const atEnd = this.input.selectionStart === this.input.value.length;
+      if (event.key === "ArrowUp" && !event.shiftKey && at0 && (this.recall >= 0 || !this.input.value)) {
+        if (this.recallStep(-1)) event.preventDefault();
+      } else if (event.key === "ArrowDown" && !event.shiftKey && atEnd && this.recall >= 0) {
+        if (this.recallStep(1)) event.preventDefault();
       }
     }, sig);
-    this.input.addEventListener("input", () => autoGrow(this.input), sig);
+    this.input.addEventListener("input", () => {
+      autoGrow(this.input);
+      this.recall = -1;
+      this.saveDraft();
+      this.updateAc();
+    }, sig);
+    this.input.addEventListener("blur", () => setTimeout(() => !this.el.contains(document.activeElement) && this.closeAc(), 150), sig);
   }
 }
