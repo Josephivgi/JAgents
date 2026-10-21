@@ -87,7 +87,10 @@ async function refreshSubagents() {
   } catch {
     pluginSubs = [];
   }
-  for (const v of views) if (v.chatId) v.paint();
+  for (const v of views) {
+    if (v.subOpen) v.loadSub();
+    else if (v.chatId) v.paint();
+  }
 }
 on("app:plugin-message", (m) => {
   if (!m || m.id !== "subagents") return;
@@ -237,7 +240,7 @@ const SUB_STATUS = { busy: "Working", starting: "Starting", ready: "Done", idle:
 
 function subagentCard(c) {
   const st = c.status || "idle";
-  const open = c.chatId ? 'data-open-chat="' + esc(c.chatId) + '"' : "data-open-subagents";
+  const open = c.chatId ? 'data-open-chat="' + esc(c.chatId) + '"' : 'data-open-sub="' + esc(c.handle) + '"';
   return (
     '<button type="button" class="sub-card" ' + open + ' title="Open ' + esc(c.handle || "subagent") + '">' +
     harnessIcon(c.harnessId, 15) + '<span class="sub-handle">' + esc(c.handle || "subagent") + '</span><span class="sub-title muted">' + esc(c.title || "") + "</span>" +
@@ -282,6 +285,9 @@ export class ChatView {
     this.findQuery = "";
     this.findIndex = 0;
     this.findTimer = 0;
+    // A plugin subagent open as a thread over this chat: its handle and rows.
+    this.subOpen = "";
+    this.subData = null;
     // Files waiting in the composer: {key, name, mimeType, size, path | data, preview}.
     this.pending = [];
     // Effort picked in a new thread before its chat exists.
@@ -319,7 +325,8 @@ export class ChatView {
       '<button type="button" class="send-btn stop" data-stop hidden>' + icon("stop", 12) + "<span>Stop</span></button>" +
       '<button type="button" class="send-btn" data-send aria-label="Send">' + icon("arrowUp", 16) + "</button>" +
       "</div></div></form></div></div>" +
-      '<div class="drop-overlay" data-drop hidden>' + icon("paperclip", 22) + "<span>Drop files to attach</span></div>";
+      '<div class="drop-overlay" data-drop hidden>' + icon("paperclip", 22) + "<span>Drop files to attach</span></div>" +
+      '<div class="sub-view" data-sub-view hidden></div>';
     this.input = this.el.querySelector("[data-input]");
     this.wire();
     views.add(this);
@@ -518,6 +525,7 @@ export class ChatView {
     this.unseen += fresh;
     this.painted = true;
     reconcile(inner, this.blocks(rows));
+    if (this.subOpen) this.paintSub();
     if (follow) scroller.scrollTop = scroller.scrollHeight;
     this.forceScroll = false;
     this.paintJump();
@@ -614,6 +622,102 @@ export class ChatView {
     const repeated = lastRow && lastRow.role === "error" && lastRow.text === (snap && snap.error) && !(snap.authMethods || []).length;
     if (snap && snap.status === "error" && snap.error && !repeated) out.push({ key: "err-state", html: this.errorMarkup() });
     return out;
+  }
+
+  // ---- A subagent's thread, shown over this chat ----
+
+  openSub(handle) {
+    this.subOpen = handle;
+    this.subData = null;
+    this.subPainted = false;
+    this.paintSub();
+    this.loadSub();
+    const back = this.el.querySelector("[data-sub-back]");
+    if (back) back.focus();
+  }
+
+  closeSub() {
+    if (!this.subOpen) return;
+    this.subOpen = "";
+    this.subData = null;
+    const box = this.el.querySelector("[data-sub-view]");
+    box.hidden = true;
+    box.innerHTML = "";
+    box._html = "";
+    this.paint();
+    this.input.focus();
+  }
+
+  async loadSub() {
+    const handle = this.subOpen;
+    if (!handle) return;
+    let data = null;
+    try {
+      data = await window.jagents.plugins.invoke("subagents", "transcript", { handle });
+    } catch (error) {
+      data = { handle, error: errorText(error) };
+    }
+    if (this.subOpen !== handle || this.destroyed) return;
+    this.subData = data;
+    this.paintSub();
+  }
+
+  paintSub() {
+    const box = this.el.querySelector("[data-sub-view]");
+    const handle = this.subOpen;
+    const s = this.subData || pluginSubs.find((x) => x.handle === handle) || { handle };
+    const st = s.status || "idle";
+    if (box.hidden) {
+      box.hidden = false;
+      box.innerHTML =
+        '<header class="sub-view-head"><button type="button" class="btn sm ghost" data-sub-back title="Back to the parent thread (Esc)">' + icon("back", 15) + "<span>Back</span></button>" +
+        '<span data-sub-head class="sub-view-title"></span></header>' +
+        '<div class="transcript" data-sub-scroll><div class="transcript-inner"></div></div>' +
+        '<footer class="sub-view-foot muted small" data-sub-foot></footer>';
+    }
+    const head = box.querySelector("[data-sub-head]");
+    const headHtml =
+      harnessIcon(s.provider, 15) + '<span class="sub-handle">' + esc(handle) + "</span>" +
+      (s.providerName ? '<span class="muted small">' + esc(s.providerName) + " subagent</span>" : "") +
+      '<span class="sub-status is-' + esc(st) + '">' + (st === "busy" || st === "starting" ? '<span class="spinner sm"></span>' : "") + esc(SUB_STATUS[st] || st) + "</span>";
+    if (head._html !== headHtml) head.innerHTML = head._html = headHtml;
+    const parent = s.parent || handle.split("/").slice(0, -1).join("/");
+    const foot = box.querySelector("[data-sub-foot]");
+    const footText = "Only " + parent + " can message or stop this subagent. Go back and ask " + parent + " if you want something from it.";
+    if (foot.textContent !== footText) foot.textContent = footText;
+
+    const scroller = box.querySelector("[data-sub-scroll]");
+    const pinned = nearBottom(scroller);
+    const out = [];
+    if (s.task) out.push({ key: "task", html: '<div class="msg user relayed"><span class="from-tag">' + icon("hub", 12) + esc(parent) + '</span><div class="bubble">' + esc(s.task) + "</div></div>" });
+    const rows = s.rows || null;
+    if (!rows) out.push({ key: "loading", html: '<div class="sys">' + (s.error && !s.status ? esc(s.error) : "Loading…") + "</div>" });
+    else {
+      rows.forEach((r, i) => {
+        // The plugin keeps short rows; draw them as this chat's own rows.
+        if (i === 0 && r.role === "user" && r.text === s.task) return;
+        const row =
+          r.role === "assistant" ? { role: "agent", text: r.text }
+          : r.role === "tool" ? { role: "tool", id: r.id, title: r.text, status: r.status }
+          : r.role === "user" ? { role: "user", text: r.text, from: parent }
+          : r;
+        const id = "sub:" + handle + ":" + i;
+        const sig = [row.role, row.status, row.title, (row.text || "").length, this.openThoughts.has(id) ? "o" : ""].join("|");
+        out.push(this.cached(id, sig, () => this.rowMarkup(Object.assign({}, row, { id }), i)));
+      });
+    }
+    // Its permission requests can be answered here too; others wait in the parent.
+    let elsewhere = 0;
+    for (const p of (this.snap && this.snap.permissions) || []) {
+      if (p.from && p.from.handle === handle) out.push({ key: "perm-" + p.id, html: this.permissionMarkup(p) });
+      else elsewhere++;
+    }
+    if (elsewhere) out.push({ key: "perm-elsewhere", html: '<div class="sys handoff">' + icon("shield", 13) + "<span>" + esc(parent) + " is waiting for your approval.</span>" + '<button type="button" class="link" data-sub-back>Back to approve</button></div>' });
+    if (st === "busy" || st === "starting") out.push({ key: "working", html: '<div class="working"><span class="spinner"></span>' + esc(handle) + " is working…</div>" });
+    if (st === "error" && s.error) out.push({ key: "err", html: '<div class="err-row">' + esc(s.error) + "</div>" });
+    reconcile(scroller.querySelector(".transcript-inner"), out);
+    if (pinned || !this.subPainted) scroller.scrollTop = scroller.scrollHeight;
+    this.subPainted = true;
   }
 
   cached(key, sig, build) {
@@ -1581,11 +1685,10 @@ export class ChatView {
       if (t.closest("[data-find-close]")) return this.closeFind();
       const sub = t.closest("[data-open-chat]");
       if (sub) return fire("open-chat", sub.dataset.openChat);
-      // A plugin subagent opens in the Subagents tab.
-      if (t.closest("[data-open-subagents]")) {
-        const tab = document.querySelector('[data-mode="subagents"]');
-        return tab ? tab.click() : toast("Turn on the Subagents plugin to see subagents.");
-      }
+      // A plugin subagent opens as a thread over this chat; Back returns.
+      const ps = t.closest("[data-open-sub]");
+      if (ps) return this.openSub(ps.dataset.openSub);
+      if (t.closest("[data-sub-back]")) return this.closeSub();
       const link = t.closest(".bubble a[href]");
       if (link) {
         event.preventDefault();
@@ -1685,6 +1788,10 @@ export class ChatView {
       if (event.key === "Escape" && this.findOpen()) {
         event.preventDefault();
         return this.closeFind();
+      }
+      if (event.key === "Escape" && this.subOpen) {
+        event.preventDefault();
+        return this.closeSub();
       }
       // Esc stops the turn.
       if (event.key === "Escape" && !this.ac && this.busy()) {

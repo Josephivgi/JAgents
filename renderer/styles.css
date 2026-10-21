@@ -653,6 +653,16 @@ details.tool[open] { align-self: stretch; }
 /* Subagent cards */
 .sub-card { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; padding: 7px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink); font-size: 13px; text-align: left; cursor: pointer; }
 .sub-card:hover, .sub-card:focus-visible { border-color: color-mix(in oklch, var(--accent) 45%, var(--line)); outline: none; }
+/* A plugin subagent's thread, over its parent's chat */
+.sub-view { position: absolute; inset: 0; z-index: 30; display: flex; flex-direction: column; min-height: 0; background: var(--canvas, var(--surface)); }
+.sub-view[hidden] { display: none; }
+.sub-view-head { display: flex; align-items: center; gap: 10px; flex: none; height: 44px; padding: 0 12px 0 6px; border-bottom: 1px solid var(--line); }
+.sub-view-head .btn { gap: 4px; }
+.sub-view-title { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.sub-view-title .sub-handle { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sub-view-title .sub-status { margin-left: auto; }
+.sub-view .transcript { flex: 1; min-height: 0; }
+.sub-view-foot { flex: none; padding: 10px 16px 14px; border-top: 1px solid var(--line); text-align: center; }
 .sub-handle { flex: none; font-weight: 500; }
 .sub-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sub-status { display: inline-flex; align-items: center; gap: 5px; flex: none; font-size: 12px; color: var(--muted); }
