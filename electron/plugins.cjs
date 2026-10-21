@@ -71,6 +71,9 @@ change reloads live and keeps the previous version so it can be undone.
 ## Renderer API (the jagents argument of activate)
 
 Everything you add is removed automatically when the plugin reloads or is turned off.
+Timers, animation frames and observers you start are not: stop them in the cleanup
+function and have callbacks check a flag it sets. A callback that keeps running after
+cleanup can fight the next copy of the plugin and freeze the window.
 
 - jagents.topbar.button({ icon, label, title, onClick }): a top bar button (next to the MCP hub).
     icon is an icon name (plus, chat, terminal, grid, hub, sun, moon, restart,
