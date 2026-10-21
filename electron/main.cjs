@@ -483,7 +483,7 @@ app.whenReady().then(async () => {
       const base = "You are " + handleName + ", running in JAgents next to other coding agents. Your working folder is " + ((chat && chat.cwd) || "") + ".";
       const parent = chat && chat.parentId ? ws.findAgent(chat.parentId) : null;
       const sub = parent ? " You are a subagent started by " + parent.handle + "; finish the task, then reply with a short, complete summary of what you did and found. Your final message is returned to " + parent.handle + "." : "";
-      const tools = ws ? " The jagents MCP tools (list_agents, send_message, read_agent, spawn_subagent, wait_for_agent, handoff_context) let you work with the other agents." : "";
+      const tools = ws ? ws.toolsNote() : "";
       return base + sub + tools;
     },
   });

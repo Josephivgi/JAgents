@@ -97,12 +97,25 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
     return disabledTools().map(claudeToolName);
   }
 
-  function systemNote(handle) {
+  // What agents are told about the JAgents tools, matching what plugins left
+  // on. With the Subagents plugin, subagents start through its spawn tool.
+  function toolsNote() {
+    const p = plugged();
+    const off = new Set(p.disabled);
+    const subs = p.inApp.some((s) => s.name === "subagents");
+    const spawn = subs
+      ? " To start a subagent (Claude Code, Codex, Devin, Cursor, Gemini, ...), use the subagents MCP server's spawn tool, not a built-in subagent or task tool, so the user sees it in JAgents."
+      : off.has("jagents.spawn_subagent")
+        ? ""
+        : " Spawn subagents such as Claude Code, Devin or Cursor on a task with spawn_subagent and wait_for_agent.";
     return (
-      "You are " + handle + ", one of several coding agents running side by side in JAgents. " +
-      "The jagents MCP server lets you list the other agents (list_agents), message one (send_message), read what one is doing (read_agent), " +
-      "spawn subagents such as Claude Code, Devin or Cursor on a task (spawn_subagent, wait_for_agent), and hand your context to another agent (handoff_context)."
+      " The jagents MCP server lets you list the other agents (list_agents), message one (send_message), read what one is doing (read_agent), " +
+      "and hand your context to another agent (handoff_context)." + spawn
     );
+  }
+
+  function systemNote(handle) {
+    return "You are " + handle + ", one of several coding agents running side by side in JAgents." + toolsNote();
   }
 
   // Per-launch MCP wiring: Claude Code takes --mcp-config, Codex takes -c
@@ -331,7 +344,7 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
     return panes.find((p) => p.kind === "chat" && p.chatId === chatId) || null;
   }
 
-  return { list, agents, findAgent, addTerminal, ensureTerminal, restartTerminal, launchRestored, addChatPane, addPluginPane, updatePluginPane, newChat, removePane, reorder, paneForChat, cwdDefault, hubOn, mcpEntry, mcpEntries, claudeDisallowed, systemNote };
+  return { list, agents, findAgent, addTerminal, ensureTerminal, restartTerminal, launchRestored, addChatPane, addPluginPane, updatePluginPane, newChat, removePane, reorder, paneForChat, cwdDefault, hubOn, mcpEntry, mcpEntries, claudeDisallowed, systemNote, toolsNote };
 }
 
 module.exports = { createWorkspace };
