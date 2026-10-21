@@ -43,7 +43,7 @@ export function dropdown(anchor, items, opts) {
       if (it.divider) return '<div class="menu-divider"></div>';
       return (
         '<button type="button" role="menuitem" class="news-menu-row agent-row' + (it.disabled ? " is-missing" : "") + '" data-i="' + i + '"' + (it.disabled ? " disabled" : "") + ">" +
-        (it.icon || "") + '<span class="news-menu-text"><span class="news-menu-name">' + esc(it.label) + "</span>" + (it.desc ? '<span class="news-menu-desc">' + esc(it.desc) + "</span>" : "") + "</span>" +
+        (it.icon || "") + '<span class="news-menu-text"><span class="news-menu-name" title="' + esc(it.label) + '">' + esc(it.label) + "</span>" + (it.desc ? '<span class="news-menu-desc">' + esc(it.desc) + "</span>" : "") + "</span>" +
         (it.badge ? '<span class="agent-badge">' + esc(it.badge) + "</span>" : "") + "</button>"
       );
     })
