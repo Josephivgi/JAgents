@@ -76,6 +76,7 @@ const GLYPHS = {
   help: '<circle cx="12" cy="12" r="8.6" fill="none" stroke="currentColor" stroke-width="1.6"/>' + stroke("M9.6 9.6a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.1-2.4 3.6") + '<circle cx="12" cy="17" r="1" fill="currentColor"/>',
   update: stroke("M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14"),
   usage: stroke("M4 19h16M7 15v-4M12 15V7M17 15v-6"),
+  gauge: stroke("M4.5 17a8 8 0 1 1 15 0M12 14l3.6-4"),
   paperclip: stroke("M19.2 11.4 12 18.6a4.6 4.6 0 0 1-6.5-6.5l7.6-7.6a3.1 3.1 0 0 1 4.4 4.4l-7.6 7.6a1.5 1.5 0 0 1-2.2-2.2l7-7", 1.7),
   arrowUp: stroke("M12 19V5.5m0 0L6.4 11.1M12 5.5l5.6 5.6", 2),
   stop: '<rect x="6" y="6" width="12" height="12" rx="2.4" fill="currentColor"/>',

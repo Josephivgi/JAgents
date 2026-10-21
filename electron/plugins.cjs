@@ -13,6 +13,11 @@
 // changed a plugin last, and load errors live in jagents.db; each change first
 // snapshots the old files under plugins/.history so it can be undone. Plugins
 // shipped with the app (<app>/plugins) are copied in once on first run.
+//
+// Built-in features (<app>/builtin/<id>: the browser, subagents) use the same
+// files and API but are part of JAgents: always on (safe mode too), not listed
+// with the user's plugins, and not editable or removable. Their data stays in
+// plugin-data/<id>.
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -22,8 +27,9 @@ const SERVER_RE = /^[a-zA-Z0-9_-]{1,40}$/;
 const RESERVED_SERVERS = ["jagents", "relay"];
 const FILE_MAX = 512 * 1024;
 const HISTORY_KEEP = 20;
-// Former plugins that are built into JAgents now (the chat look, attachments, settling threads, usage).
-const RETIRED = ["jsystems-new-ui", "image-input", "settle-threads", "usage-meter"];
+// Former plugins that are built into JAgents now (the chat look, attachments,
+// settling threads, usage, the browser and subagents).
+const RETIRED = ["jsystems-new-ui", "image-input", "settle-threads", "usage-meter", "browser", "subagents"];
 
 // Copy then delete: renaming a folder that fs.watch is watching fails on Windows.
 function moveDir(from, to) {
@@ -101,7 +107,7 @@ cleanup can fight the next copy of the plugin and freeze the window.
 - jagents.dispose(fn): run fn when the plugin unloads.
 
 The window blocks remote scripts, frames and network requests. Show web pages
-with an Electron WebContentsView from main.cjs (see the built-in browser plugin)
+with an Electron WebContentsView from main.cjs (see JAgents' built-in browser, builtin/browser in the app)
 and do network work in main.cjs.
 
 ## Main API (the ctx argument of activate in main.cjs)
@@ -149,7 +155,7 @@ If a plugin breaks the window, Ctrl+Shift+F12 turns every plugin off (safe mode)
 and reloads; the Plugins panel turns them back on.
 `;
 
-function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getWindow }) {
+function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, builtinDir, getWindow }) {
   const dir = path.join(dataRoot, "plugins");
   const historyDir = path.join(dir, ".history");
   const trashDir = path.join(dir, ".trash");
@@ -189,6 +195,25 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
     return path.join(dir, checkId(id));
   }
 
+  const BUILTIN = (() => {
+    try {
+      return fs.readdirSync(builtinDir, { withFileTypes: true }).filter((e) => e.isDirectory() && ID_RE.test(e.name) && fs.existsSync(path.join(builtinDir, e.name, "plugin.json"))).map((e) => e.name).sort();
+    } catch {
+      return [];
+    }
+  })();
+  const isBuiltin = (id) => BUILTIN.includes(id);
+
+  // Where a plugin's files are: the app for built-ins, else the plugins folder.
+  function rootOf(id) {
+    return isBuiltin(id) ? path.join(builtinDir, id) : pluginDir(id);
+  }
+
+  function notBuiltin(id) {
+    if (isBuiltin(id)) throw new Error(id + " is built into JAgents and cannot be changed, turned off or removed. Pick another plugin id.");
+    return id;
+  }
+
   function insidePlugin(id, rel) {
     const root = pluginDir(id);
     const abs = path.resolve(root, String(rel || ""));
@@ -198,7 +223,7 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
 
   function readManifest(id) {
     try {
-      return JSON.parse(fs.readFileSync(path.join(pluginDir(id), "plugin.json"), "utf8"));
+      return JSON.parse(fs.readFileSync(path.join(rootOf(id), "plugin.json"), "utf8"));
     } catch {
       return {};
     }
@@ -222,9 +247,9 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
 
   function stamp(id) {
     let t = 0;
-    for (const f of walk(pluginDir(id), "")) {
+    for (const f of walk(rootOf(id), "")) {
       try {
-        t = Math.max(t, fs.statSync(path.join(pluginDir(id), f)).mtimeMs);
+        t = Math.max(t, fs.statSync(path.join(rootOf(id), f)).mtimeMs);
       } catch {
         /* removed meanwhile */
       }
@@ -234,7 +259,7 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
 
   function ids() {
     try {
-      return fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory() && ID_RE.test(e.name)).map((e) => e.name).sort();
+      return fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory() && ID_RE.test(e.name) && !isBuiltin(e.name)).map((e) => e.name).sort();
     } catch {
       return [];
     }
@@ -249,13 +274,14 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
   }
 
   function isOn(id) {
+    if (isBuiltin(id)) return true;
     return !safeMode() && (state()[id] || {}).enabled !== false;
   }
 
   function info(id) {
     const m = readManifest(id);
     const st = state()[id] || {};
-    const files = walk(pluginDir(id), "");
+    const files = walk(rootOf(id), "");
     const err = errors.get(id) || {};
     const entry = mains.get(id);
     return {
@@ -263,7 +289,8 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
       name: String(m.name || id),
       description: String(m.description || ""),
       version: String(m.version || ""),
-      enabled: st.enabled !== false,
+      enabled: isBuiltin(id) || st.enabled !== false,
+      builtin: isBuiltin(id),
       // Shipped in the app's plugins folder, and flagged as a trial by its manifest.
       included: Boolean(bundledDir && fs.existsSync(path.join(bundledDir, id, "plugin.json"))),
       experimental: m.experimental === true,
@@ -284,11 +311,11 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
 
   function list() {
     const all = ids().map(info);
-    return { safeMode: safeMode(), dir, plugins: all.filter((p) => p.included).concat(all.filter((p) => !p.included)) };
+    return { safeMode: safeMode(), dir, plugins: all.filter((p) => p.included).concat(all.filter((p) => !p.included)), builtins: BUILTIN.map(info) };
   }
 
   function read(id) {
-    const root = pluginDir(id);
+    const root = rootOf(checkId(id));
     if (!fs.existsSync(root)) throw new Error("No plugin " + id + ". Call list_plugins.");
     const files = {};
     for (const f of walk(root, "")) {
@@ -331,7 +358,7 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
     const external = [];
     const inApp = [];
     const disabled = new Set();
-    for (const id of ids()) {
+    for (const id of BUILTIN.concat(ids())) {
       if (!isOn(id)) continue;
       const m = readManifest(id);
       const problems = [];
@@ -406,21 +433,21 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
         log("plugin " + id + " cleanup failed: " + error.message);
       }
     }
-    const root = path.join(dir, id);
+    const root = rootOf(id);
     for (const key of Object.keys(require.cache)) if (key.startsWith(root + path.sep)) delete require.cache[key];
   }
 
   function loadMain(id) {
     unloadMain(id);
     errors.set(id, Object.assign({}, errors.get(id), { main: "" }));
-    const file = path.join(pluginDir(id), "main.cjs");
+    const file = path.join(rootOf(id), "main.cjs");
     if (!isOn(id) || !fs.existsSync(file)) return;
     const entry = { dispose: [], handlers: new Map(), servers: new Map() };
     mains.set(id, entry);
     const dataDir = path.join(dataRoot, "plugin-data", id);
     const ctx = {
       id,
-      dir: pluginDir(id),
+      dir: rootOf(id),
       dataDir,
       log: (...args) => log("[plugin " + id + "] " + args.map(String).join(" ")),
       notify: (text) => notify(String(text)),
@@ -509,7 +536,7 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
   // ---- writes (agents, the panel, the user) ------------------------------
 
   async function write(idIn, input, author) {
-    const id = checkId(idIn);
+    const id = notBuiltin(checkId(idIn));
     const src = input || {};
     const root = pluginDir(id);
     const isNew = !fs.existsSync(root);
@@ -550,14 +577,14 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
   }
 
   async function setEnabled(idIn, enabled, author) {
-    const id = checkId(idIn);
+    const id = notBuiltin(checkId(idIn));
     if (!fs.existsSync(pluginDir(id))) throw new Error("No plugin " + id + ".");
     touch(id, author, { enabled: Boolean(enabled) });
     return reload(id, { wait: Boolean(enabled), reason: enabled ? "enabled" : "disabled" });
   }
 
   async function undo(idIn, author) {
-    const id = checkId(idIn);
+    const id = notBuiltin(checkId(idIn));
     const all = historyFor(id);
     if (!all.length) throw new Error("Plugin " + id + " has no earlier version.");
     const last = all[all.length - 1];
@@ -572,7 +599,7 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
   }
 
   async function remove(idIn, author) {
-    const id = checkId(idIn);
+    const id = notBuiltin(checkId(idIn));
     const root = pluginDir(id);
     if (!fs.existsSync(root)) throw new Error("No plugin " + id + ".");
     suppress.set(id, Date.now() + 1500);
@@ -628,7 +655,8 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
     if (!bundledDir || !fs.existsSync(bundledDir)) return;
     const seeded = new Set(db.getSetting("plugins.seeded", []) || []);
     for (const e of fs.readdirSync(bundledDir, { withFileTypes: true })) {
-      if (!e.isDirectory() || !ID_RE.test(e.name) || seeded.has(e.name)) continue;
+      // An update copies over the app folder, so an old <app>/plugins/browser can linger.
+      if (!e.isDirectory() || !ID_RE.test(e.name) || seeded.has(e.name) || isBuiltin(e.name)) continue;
       const dest = path.join(dir, e.name);
       if (!fs.existsSync(dest)) {
         fs.cpSync(path.join(bundledDir, e.name), dest, { recursive: true });
@@ -685,7 +713,7 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
     hubCall = opts && opts.hubCall;
     retireBuiltIn();
     seedBundled();
-    for (const id of ids()) loadMain(id);
+    for (const id of BUILTIN.concat(ids())) loadMain(id);
     agentMcp();
     watch();
   }
@@ -695,7 +723,12 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, getW
     for (const id of Array.from(mains.keys())) unloadMain(id);
   }
 
-  return { dir, docs: DOCS, list, read, info, write, setEnabled, undo, remove, scaffold, report, invoke, agentMcp, appServerTools, callAppServer, setSafeMode, safeMode, start, stop };
+  // Where the window loads a plugin's renderer.js and style.css from.
+  function fileRoot(id) {
+    return rootOf(checkId(id));
+  }
+
+  return { dir, fileRoot, docs: DOCS, list, read, info, write, setEnabled, undo, remove, scaffold, report, invoke, agentMcp, appServerTools, callAppServer, setSafeMode, safeMode, start, stop };
 }
 
 module.exports = { createPluginManager };

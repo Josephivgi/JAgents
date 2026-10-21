@@ -132,7 +132,7 @@ function registerProtocol() {
     // edit so the window re-imports a changed renderer.js.
     const plug = /^plugins\/([a-z0-9][a-z0-9-]{0,39})@\d+\/(.+)$/.exec(rel);
     if (plug && plugins) {
-      const file = insideDir(path.join(plugins.dir, plug[1]), plug[2]);
+      const file = insideDir(plugins.fileRoot(plug[1]), plug[2]);
       return file ? serveFile(file) : new Response("Not found", { status: 404 });
     }
     // Files attached to chats, for thumbnails in the transcript.
@@ -314,6 +314,7 @@ function registerIpc() {
   });
   handle("chat-cancel", (id) => acp.cancel(id));
   handle("chat-set-model", (id, modelId) => acp.setModel(id, modelId));
+  handle("chat-set-effort", (id, level) => acp.setEffort(id, level));
   handle("chat-handoff", (id, harnessId) => acp.handoff(id, harnessId));
   handle("chat-authenticate", (id, methodId, secret) => acp.authenticate(id, methodId, secret));
   handle("chat-delete", async (id) => {
@@ -341,6 +342,7 @@ function registerIpc() {
   handle("plugins-undo", (id) => plugins.undo(id, "you"));
   handle("plugins-remove", async (id) => {
     const p = plugins.info(id);
+    if (p.builtin) throw new Error(p.name + " is built into JAgents and cannot be removed.");
     const res = await dialog.showMessageBox(mainWindow, { type: "warning", buttons: ["Remove plugin", "Cancel"], defaultId: 1, cancelId: 1, message: "Remove " + p.name + "?", detail: "Its folder moves to the plugins trash (" + path.join(plugins.dir, ".trash") + "), so it can be put back by hand.", noLink: true });
     if (res.response !== 0) return false;
     return plugins.remove(id, "you");
@@ -442,7 +444,7 @@ app.whenReady().then(async () => {
   ptyHost = await connectPtyHost({ emit: broadcast, dataRoot: DATA_ROOT });
   if (ptyHost.adopted.length) console.log("Reattached " + ptyHost.adopted.length + " terminals that kept running");
   const hubFiles = { hub: path.join(HOME_DIR, "hub.json"), script: path.join(HOME_DIR, "jagents-mcp.cjs"), pluginScript: path.join(HOME_DIR, "jagents-plugin-mcp.cjs") };
-  plugins = createPluginManager({ dataRoot: DATA_ROOT, db, emit: broadcast, notify, log: (t) => console.log(t), bundledDir: path.join(APP_ROOT, "plugins"), getWindow: () => mainWindow });
+  plugins = createPluginManager({ dataRoot: DATA_ROOT, db, emit: broadcast, notify, log: (t) => console.log(t), bundledDir: path.join(APP_ROOT, "plugins"), builtinDir: path.join(APP_ROOT, "builtin"), getWindow: () => mainWindow });
   let ws = null;
   acp = createAcpHost({
     dataRoot: DATA_ROOT,

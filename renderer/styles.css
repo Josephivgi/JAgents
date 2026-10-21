@@ -294,6 +294,9 @@ details.tool[open] { align-self: stretch; }
 
 /* Agent and model picker: agent logos across the top, that agent's models below */
 .news-menu.harness-menu { width: 300px; max-height: min(460px, 70vh); overflow: hidden; }
+.effort-picker[hidden] { display: none; }
+.effort-toggle > svg:first-child { color: var(--accent); }
+.news-menu.effort-menu { width: 220px; }
 .harness-menu > * { flex: none; }
 .harness-tabs { display: flex; flex-wrap: wrap; gap: 1px; padding: 0 0 6px; margin-bottom: 2px; border-bottom: 1px solid var(--line); }
 .harness-tab { position: relative; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 8px; background: none; color: var(--muted); cursor: pointer; }

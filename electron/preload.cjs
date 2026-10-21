@@ -72,6 +72,7 @@ contextBridge.exposeInMainWorld("jagents", {
     prompt: call("chat-prompt"),
     cancel: call("chat-cancel"),
     setModel: call("chat-set-model"),
+    setEffort: call("chat-set-effort"),
     handoff: call("chat-handoff"),
     authenticate: call("chat-authenticate"),
     remove: call("chat-delete"),

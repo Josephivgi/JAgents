@@ -109,6 +109,7 @@ function createAcpHost(options) {
       error: s ? s.error : "",
       agentName: s ? s.agentName : (acpAgent(chat.harnessId) || {}).name || chat.harnessId,
       models: s && s.client ? s.client.models : { availableModels: [], currentModelId: "" },
+      effort: effortView(s, chat),
       promptCapabilities: (s && s.client && s.client.promptCapabilities) || db.getSetting("agent-caps:" + chat.harnessId, null) || NO_CAPS,
       queued: (queues.get(chatId) || []).length,
       transcript: s ? s.transcript : chat.transcript,
@@ -178,6 +179,69 @@ function createAcpHost(options) {
     } catch {
       /* the agent declined; leave its own default */
     }
+  }
+
+  // ---- Effort ----
+  //
+  // Picked per chat (chat-effort:<id>); the last pick for an agent is the
+  // starting point for its new chats (agent-effort:<harness>). Applied when a
+  // session opens and again after a model change, since some agents (Cursor)
+  // reset effort to the new model's own default. Levels seen per model are kept
+  // (agent-efforts:<harness>) so a chat shows them before its agent starts.
+
+  function effortPref(chatId, harnessId) {
+    return String(db.getSetting("chat-effort:" + chatId, "") || db.getSetting("agent-effort:" + harnessId, "") || "");
+  }
+
+  function saveEffortLevels(s) {
+    if (!s || !s.client || typeof s.client.effortState !== "function") return;
+    const model = s.client.models.currentModelId || "";
+    const levels = s.client.effortState().levels;
+    const all = db.getSetting("agent-efforts:" + s.harnessId, {}) || {};
+    if (JSON.stringify(all[model] || []) === JSON.stringify(levels)) return;
+    all[model] = levels;
+    try {
+      db.setSetting("agent-efforts:" + s.harnessId, all);
+    } catch {
+      /* best effort */
+    }
+  }
+
+  function effortView(s, chat) {
+    const pref = effortPref(chat.id || (s && s.chatId), chat.harnessId);
+    if (s && s.client && s.sessionId && typeof s.client.effortState === "function") return Object.assign(s.client.effortState(), { pref, live: true });
+    const all = db.getSetting("agent-efforts:" + chat.harnessId, {}) || {};
+    const model = modelPref(chat.harnessId);
+    const levels = all[model] || Object.values(all).find((l) => l && l.length) || [];
+    return { levels, current: "", via: "", pref, live: false };
+  }
+
+  async function applyEffortPref(s) {
+    const c = s && s.client;
+    if (!c || !s.sessionId || typeof c.effortState !== "function") return;
+    saveEffortLevels(s);
+    const pref = effortPref(s.chatId, s.harnessId);
+    const st = c.effortState();
+    if (!pref || st.current === pref || !st.levels.some((l) => l.value === pref)) return;
+    try {
+      await c.setEffort(pref, s.sessionId);
+    } catch {
+      /* the agent declined; keep its own */
+    }
+  }
+
+  async function setEffort(chatId, level) {
+    const chat = chatRecord(chatId);
+    const v = String(level || "");
+    db.setSetting("chat-effort:" + chatId, v);
+    db.setSetting("agent-effort:" + chat.harnessId, v);
+    const s = sessions.get(chatId);
+    if (s && !s.disposed && s.client && s.sessionId && s.status !== "starting" && v) {
+      await s.client.setEffort(v, s.sessionId);
+      saveEffortLevels(s);
+    }
+    emitState(chatId, true);
+    return snapshot(chatId);
   }
 
   function mcpServersFor(chatId) {
@@ -441,6 +505,7 @@ function createAcpHost(options) {
         s.status = "ready";
         saveModelCatalog(s.harnessId, client.models);
         await applyModelPref(s.harnessId, client, s.sessionId);
+        await applyEffortPref(s);
         persist(s, true);
         return snapshot(chatId);
       } catch (error) {
@@ -660,6 +725,7 @@ function createAcpHost(options) {
     await s.client.setModel(String(modelId), s.sessionId);
     db.setSetting("agent-model:" + s.harnessId, String(modelId));
     saveModelCatalog(s.harnessId, s.client.models);
+    await applyEffortPref(s);
     emitState(chatId, true);
     return snapshot(chatId);
   }
@@ -677,6 +743,7 @@ function createAcpHost(options) {
       if (s.disposed || s.harnessId !== id || !s.client || s.client.models.currentModelId === mid) continue;
       try {
         await s.client.setModel(mid, s.sessionId);
+        await applyEffortPref(s);
         emitState(s.chatId);
       } catch {
         /* next start applies the pref */
@@ -788,6 +855,7 @@ function createAcpHost(options) {
     isBusy,
     cancel,
     setModel,
+    setEffort,
     modelInfo,
     setModelPref,
     probe,

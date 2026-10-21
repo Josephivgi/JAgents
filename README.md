@@ -15,7 +15,9 @@ Requires Node.js 22.5 or newer (for `node:sqlite`) and Windows, macOS or Linux.
 
 - **Code**: terminals and chats in a split grid.
 - **Threads**: every chat thread in a list, one open at full width.
-- **Help**: a guide to the JAgents MCP server, with the live tool list and which agents get it.
+- **Subagents**: every agent's subagents, grouped by parent. Agents start them with the built-in `subagents` MCP server (Claude Code, Codex, Droid, Cursor, Devin, Gemini, OpenCode and other installed agents). Only the parent can message or stop its subagents. **Settings** turns subagents on or off (all, or per provider) and sets each provider's default model and effort. It takes the old Help tab's place.
+- **Browser**: **+ > Browser** opens a browser pane. Agents drive the same page with the built-in `browser` MCP server.
+- **Effort**: chats show an Effort picker next to the model for agents that have one (Claude Code, Cursor, Droid, OpenCode, pi). The pick is kept per chat.
 - **MCP hub** (top bar): connect terminals, Auto MCP, global installs for agents outside the app.
 - **Version button** (top bar): shows the running version, checks GitHub releases, installs updates.
 

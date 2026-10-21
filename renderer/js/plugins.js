@@ -214,7 +214,9 @@ function sync(force) {
   syncing = syncing.then(async () => {
     const state = await window.jagents.plugins.list();
     store.plugins = state;
-    const want = new Map(state.plugins.filter((p) => !state.safeMode && p.enabled && (p.hasRenderer || p.hasCss)).map((p) => [p.id, p]));
+    // Built-in features (browser, subagents) always load; plugins unless safe mode.
+    const builtins = (state.builtins || []).filter((p) => p.hasRenderer || p.hasCss);
+    const want = new Map(builtins.concat(state.plugins.filter((p) => !state.safeMode && p.enabled && (p.hasRenderer || p.hasCss))).map((p) => [p.id, p]));
     for (const id of Array.from(loaded.keys())) {
       const p = want.get(id);
       if (!p || p.stamp !== loaded.get(id).stamp || (force && force.has(id))) unload(id);

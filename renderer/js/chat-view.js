@@ -33,6 +33,14 @@ on("agents", () => {
 
 const CHECK = '<svg class="ai-harness-check" viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2.5 6.5 5 9l4.5-6"/></svg>';
 
+// Effort levels as people read them; agents send ids like xhigh or "Thinking: max".
+const EFFORT_NAMES = { none: "None", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max", off: "Off" };
+function effortName(value, name) {
+  if (EFFORT_NAMES[value]) return EFFORT_NAMES[value];
+  const n = String(name || value).replace(/^(thinking|effort|reasoning)\s*:\s*/i, "");
+  return n.charAt(0).toUpperCase() + n.slice(1);
+}
+
 function searchMarkup(what) {
   return '<div class="menu-search">' + icon("search", 14) + '<input type="text" data-menu-search autocomplete="off" spellcheck="false" placeholder="Search ' + what + '…" aria-label="Search ' + what + '"></div>';
 }
@@ -139,7 +147,7 @@ export class ChatView {
       '<p class="muted small composer-hint" data-hint></p>' +
       '<div class="composer-foot"><div class="composer-settings">' +
       '<button type="button" class="news-pill attach-btn" data-attach aria-label="Attach files" title="Attach files. You can also paste or drop them here.">' + icon("paperclip", 16) + "</button>" +
-      '<div class="harness-picker" data-picker></div></div>' +
+      '<div class="harness-picker" data-picker></div><div class="harness-picker effort-picker" data-effort hidden></div></div>' +
       '<p class="composer-keys" aria-hidden="true"><kbd>Enter</kbd> send <span>·</span> <kbd>Shift</kbd>+<kbd>Enter</kbd> new line</p><div class="composer-submit">' +
       '<button type="button" class="send-btn stop" data-stop hidden>' + icon("stop", 12) + "<span>Stop</span></button>" +
       '<button type="button" class="send-btn" data-send aria-label="Send">' + icon("arrowUp", 16) + "</button>" +
@@ -413,7 +421,89 @@ export class ChatView {
     return searchMarkup("models") + '<p class="news-menu-label">Model</p><div class="harness-models" data-model-list role="listbox" aria-label="Models">' + rows + '<p class="model-menu-empty" data-menu-nomatch hidden>No models match.</p></div>';
   }
 
+  // Effort for this chat, next to the model: the levels its current model
+  // takes (Claude Code, Cursor, Droid, OpenCode, pi). Hidden for agents
+  // without an effort setting.
+  effortLabel() {
+    const e = (this.snap && this.snap.effort) || {};
+    const v = e.current || e.pref || "";
+    const level = (e.levels || []).find((l) => l.value === v);
+    return v ? effortName(v, level && level.name) : "Default";
+  }
+
+  paintEffort() {
+    const slot = this.el.querySelector("[data-effort]");
+    if (!slot) return;
+    const e = (this.snap && this.snap.effort) || {};
+    const show = Boolean(this.chatId && (e.levels || []).length);
+    if (slot.hidden === show) slot.hidden = !show;
+    if (!show) return this.closeEffort();
+    const label = this.effortLabel();
+    const title = this.busy() ? "Wait for this turn to finish, or press Stop, to change effort." : "Effort: " + label + (e.live ? "" : ". Applies when the agent starts.");
+    const html =
+      '<button type="button" class="news-pill harness-toggle effort-toggle" data-effort-toggle aria-label="Effort: ' + esc(label) + '" aria-haspopup="listbox" aria-expanded="false" title="' + esc(title) + '"' + (this.busy() ? " disabled" : "") + ">" +
+      icon("gauge", 15) + '<span class="news-pill-label">' + esc(label) + "</span>" + icon("chevronDown", 12) + "</button>";
+    if (slot._html === html) return;
+    slot._html = html;
+    const toggle = slot.querySelector("[data-effort-toggle]");
+    if (!toggle) {
+      slot.innerHTML = html + "<div data-effort-popup></div>";
+      return;
+    }
+    const tpl = document.createElement("template");
+    tpl.innerHTML = html;
+    const next = tpl.content.firstElementChild;
+    for (const a of Array.from(toggle.attributes)) if (!next.hasAttribute(a.name)) toggle.removeAttribute(a.name);
+    for (const a of Array.from(next.attributes)) if (a.name !== "aria-expanded") toggle.setAttribute(a.name, a.value);
+    toggle.innerHTML = next.innerHTML;
+  }
+
+  openEffort() {
+    if (this.el.querySelector("[data-effort-menu]")) return this.closeEffort();
+    this.closeMenus();
+    const e = (this.snap && this.snap.effort) || {};
+    const cur = e.current || e.pref || "";
+    const rows = (e.levels || [])
+      .map((l) => {
+        const picked = l.value === cur;
+        return (
+          '<button type="button" role="option" class="news-menu-row' + (picked ? " is-selected" : "") + '" data-effort-pick="' + esc(l.value) + '" aria-selected="' + picked + '">' +
+          '<span class="news-menu-text"><span class="news-menu-name">' + esc(effortName(l.value, l.name)) + "</span></span>" + (picked ? CHECK : "") + "</button>"
+        );
+      })
+      .join("");
+    const popup = this.el.querySelector("[data-effort-popup]");
+    popup.innerHTML =
+      '<div class="news-menu effort-menu" data-effort-menu role="dialog" aria-label="Effort">' +
+      '<p class="news-menu-label">Effort' + (e.via ? " · " + esc(e.via) : "") + '</p><div data-model-list role="listbox" aria-label="Effort levels">' + rows + "</div>" +
+      (e.live ? "" : '<p class="menu-note">The agent is not running. Your pick applies when it starts.</p>') +
+      "</div>";
+    this.el.querySelector("[data-effort-toggle]").setAttribute("aria-expanded", "true");
+    const sel = popup.querySelector('[aria-selected="true"]') || popup.querySelector(".news-menu-row");
+    if (sel) sel.focus();
+  }
+
+  closeEffort() {
+    const menu = this.el.querySelector("[data-effort-menu]");
+    if (menu) menu.remove();
+    const toggle = this.el.querySelector("[data-effort-toggle]");
+    if (toggle) toggle.setAttribute("aria-expanded", "false");
+  }
+
+  async chooseEffort(level) {
+    this.closeEffort();
+    if (!this.chatId) return;
+    try {
+      this.setSnap(await window.jagents.chats.setEffort(this.chatId, level));
+    } catch (error) {
+      toast(errorText(error));
+    }
+    const t = this.el.querySelector("[data-effort-toggle]");
+    if (t) t.focus();
+  }
+
   paintToggles() {
+    this.paintEffort();
     const slot = this.el.querySelector("[data-picker]");
     const html = this.pickerToggleMarkup();
     if (!slot || slot._html === html) return;
@@ -619,8 +709,15 @@ export class ChatView {
       const t = event.target;
       if (t.closest("[data-picker-toggle]")) {
         event.stopPropagation();
+        this.closeEffort();
         return this.openMenu();
       }
+      if (t.closest("[data-effort-toggle]")) {
+        event.stopPropagation();
+        return this.openEffort();
+      }
+      const effortPick = t.closest("[data-effort-pick]");
+      if (effortPick) return this.chooseEffort(effortPick.dataset.effortPick);
       const tab = t.closest("[data-harness-tab]");
       if (tab) return this.viewAgent(tab.dataset.harnessTab);
       if (t.closest("[data-open-market]")) {
@@ -642,7 +739,10 @@ export class ChatView {
       if (file) return window.jagents.openPath(file.dataset.openFile);
       if (t.closest("[data-send]")) return this.send();
       if (t.closest("[data-stop]") && this.chatId) return window.jagents.chats.cancel(this.chatId);
-      if (!t.closest(".news-menu")) this.closeMenus();
+      if (!t.closest(".news-menu")) {
+        this.closeMenus();
+        this.closeEffort();
+      }
     }, sig);
     el.addEventListener(
       "toggle",
@@ -663,6 +763,7 @@ export class ChatView {
       if (event.key === "Escape" && el.querySelector(".news-menu")) {
         event.preventDefault();
         this.closeMenus();
+        this.closeEffort();
         return this.input.focus();
       }
       const inSearch = event.target.matches && event.target.matches("[data-menu-search]");
@@ -693,7 +794,10 @@ export class ChatView {
     // composedPath, not contains: a harness tab redraws the menu on click, so
     // by now the clicked button is no longer in the page.
     document.addEventListener("click", (event) => {
-      if (!event.composedPath().includes(el)) this.closeMenus();
+      if (!event.composedPath().includes(el)) {
+        this.closeMenus();
+        this.closeEffort();
+      }
     }, sig);
     // Files dropped anywhere on the chat are attached.
     const overlay = el.querySelector("[data-drop]");
