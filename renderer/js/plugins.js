@@ -225,7 +225,7 @@ function sync(force) {
   return syncing;
 }
 
-// The Plugins card at the bottom of the sidebar: how many are on, and any trouble.
+// The Plugins line in the sidebar dock: how many are on, and any trouble.
 function paintCard() {
   const el = document.querySelector("[data-plugin-summary]");
   if (!el) return;

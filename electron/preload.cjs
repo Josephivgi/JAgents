@@ -92,6 +92,10 @@ contextBridge.exposeInMainWorld("jagents", {
     state: call("legacy-state"),
     importData: call("legacy-import"),
   },
+  usage: {
+    get: call("usage-get"),
+    refresh: call("usage-refresh"),
+  },
   updates: {
     state: call("update-state"),
     check: call("update-check"),

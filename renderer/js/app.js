@@ -5,6 +5,7 @@ import { routeAcpState, routeAcpModels } from "./chat-view.js";
 import { routePtyData, routePtyExit, retheme } from "./terminal-view.js";
 import { renderCodeMode, syncPanes, addTerminal, addChat, setLayout, getLayout, markExited, focusAgent } from "./code-mode.js";
 import { renderThreadMode, noteThreadState, openThread } from "./thread-mode.js";
+import { initUsage, noteUsage } from "./usage.js";
 import { dropdown, openHubPanel, openUpdatesPanel, updateActivity } from "./dialogs.js";
 import { renderHelpMode, refreshHelp } from "./help-mode.js";
 import { initPlugins, openPluginsPanel, pluginKinds, openPluginPane } from "./plugins.js";
@@ -60,21 +61,23 @@ function paintTopbar() {
   app.querySelector("[data-theme-toggle]").innerHTML = icon(store.info.theme === "dark" ? "sun" : "moon", 16);
 }
 
-// The Updates card above Plugins: running version, latest release, and the
-// next step (check, install, restart). Details opens the full Updates panel.
+// The Updates line in the sidebar dock: running version, latest release, and
+// the next step (check, install, restart). The line itself opens the full
+// Updates panel.
 function paintUpdateCard() {
   const sum = app.querySelector("[data-update-summary]");
   if (!sum) return;
   const u = update || { current: store.info.version };
   const busy = u.checking || u.applying;
-  sum.textContent = "v" + (u.current || "") + " · " + (u.applying ? (u.step || "Installing " + u.latest) + "…" : u.checking ? "Checking…" : u.applied ? u.applied + " installed, restart to run it" : u.available ? u.latest + " available" : u.error ? "Check failed" : u.latest ? "Up to date" : "Not checked yet");
+  sum.textContent = "v" + (u.current || "") + " · " + (u.applying ? (u.step || "Installing " + u.latest) + "…" : u.checking ? "Checking…" : u.applied ? u.applied + " installed, restart" : u.available ? u.latest + " available" : u.error ? "Check failed" : u.latest ? "Up to date" : "Not checked");
   sum.title = u.error || sum.textContent;
-  const primary = u.applied
-    ? '<button type="button" class="btn sm primary" data-update-act="restart">' + icon("restart", 14) + "Restart</button>"
+  sum.classList.toggle("warn-text", Boolean(u.error));
+  const act = u.applied
+    ? '<button type="button" class="btn xs primary" data-update-act="restart">Restart</button>'
     : u.available
-      ? '<button type="button" class="btn sm primary" data-update-act="apply"' + (busy ? " disabled" : "") + ">" + (u.applying ? '<span class="spinner"></span>' : icon("update", 14)) + "Install</button>"
-      : '<button type="button" class="btn sm secondary" data-update-act="check"' + (busy ? " disabled" : "") + ">" + (u.checking ? '<span class="spinner"></span>' : icon("restart", 14)) + "Check now</button>";
-  app.querySelector("[data-update-actions]").innerHTML = primary + '<button type="button" class="btn sm ghost" data-update-act="details">Details</button>';
+      ? '<button type="button" class="btn xs primary" data-update-act="apply"' + (busy ? " disabled" : "") + ">" + (u.applying ? '<span class="spinner sm"></span>' : "") + "Install</button>"
+      : '<button type="button" class="icon-btn dock-btn" data-update-act="check" title="Check for updates" aria-label="Check for updates"' + (busy ? " disabled" : "") + ">" + (u.checking ? '<span class="spinner sm"></span>' : icon("restart", 13)) + "</button>";
+  app.querySelector("[data-update-actions]").innerHTML = act;
 }
 
 function setMode(next) {
@@ -193,7 +196,8 @@ function onEvent({ type, payload }) {
   } else if (type === "update-status") {
     update = payload;
     paintTopbar();
-  } else if (type === "toast") toast(payload.text);
+  } else if (type === "usage") noteUsage(payload);
+  else if (type === "toast") toast(payload.text);
 }
 
 async function boot() {
@@ -208,13 +212,16 @@ async function boot() {
     '<div data-code-side class="side-pane"><p class="nav-label">Agents</p><div class="agent-list" data-agents></div><div class="plugin-side" data-plugin-side hidden></div><p class="nav-label">Activity</p><div class="side-activity" data-side-activity></div></div>' +
     '<div data-thread-side class="side-pane" hidden></div>' +
     '<div data-help-side class="side-pane" hidden></div>' +
-    '<section class="sidebar-plugins sidebar-updates" aria-labelledby="updates-title">' +
-    '<div class="plugins-card-head">' + icon("update", 16) + '<div class="grow"><h2 id="updates-title">Updates</h2><p class="muted small" data-update-summary>Loading</p></div></div>' +
-    '<div class="update-card-actions" data-update-actions></div>' +
-    "</section>" +
-    '<section class="sidebar-plugins" aria-labelledby="plugins-title" data-plugin-card>' +
-    '<div class="plugins-card-head">' + icon("puzzle", 16) + '<div class="grow"><h2 id="plugins-title">Plugins</h2><p class="muted small" data-plugin-summary>Loading</p></div></div>' +
-    '<button type="button" class="btn sm secondary block" data-plugins>Manage plugins</button>' +
+    // One dock at the bottom of the sidebar: Usage, Updates and Plugins, a
+    // line or two each. (.sidebar-updates stays as the hook plugins insert
+    // their sidebar sections above.)
+    '<section class="side-dock sidebar-updates" aria-label="Usage, updates and plugins">' +
+    '<div class="dock-usage" data-usage>' +
+    '<div class="dock-row">' + icon("usage", 14) + '<button type="button" class="dock-main" data-usage-open title="Usage for every agent"><b>Usage</b><span class="dock-sub" data-usage-summary>Checking</span></button>' +
+    '<button type="button" class="icon-btn dock-btn" data-usage-refresh title="Check usage now" aria-label="Check usage now">' + icon("restart", 13) + "</button></div>" +
+    '<button type="button" class="usage-rows" data-usage-open data-usage-rows title="Usage for every agent"></button></div>' +
+    '<div class="dock-row">' + icon("update", 14) + '<button type="button" class="dock-main" data-update-act="details" title="Version and updates"><b>Updates</b><span class="dock-sub" data-update-summary>Loading</span></button><span class="dock-act" data-update-actions></span></div>' +
+    '<div class="dock-row" data-plugin-card>' + icon("puzzle", 14) + '<button type="button" class="dock-main" data-plugins title="Manage plugins"><b>Plugins</b><span class="dock-sub" data-plugin-summary>Loading</span></button></div>' +
     "</section>" +
     "</aside>" +
     '<main class="main"><div class="code-mode" data-code-main></div><div class="thread-mode" data-thread-main hidden></div><div class="help-mode" data-help-main hidden></div></main>' +
@@ -228,6 +235,7 @@ async function boot() {
     },
   });
   renderHelpMode(app.querySelector("[data-help-side]"), app.querySelector("[data-help-main]"));
+  initUsage(app.querySelector("[data-usage]"));
   on("open-help", (section) => {
     setMode("help");
     const el = document.getElementById("help-" + (section || "overview"));

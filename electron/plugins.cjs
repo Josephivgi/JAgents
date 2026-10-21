@@ -22,8 +22,8 @@ const SERVER_RE = /^[a-zA-Z0-9_-]{1,40}$/;
 const RESERVED_SERVERS = ["jagents", "relay"];
 const FILE_MAX = 512 * 1024;
 const HISTORY_KEEP = 20;
-// Former plugins that are built into JAgents now (the chat look, attachments).
-const RETIRED = ["jsystems-new-ui", "image-input"];
+// Former plugins that are built into JAgents now (the chat look, attachments, settling threads, usage).
+const RETIRED = ["jsystems-new-ui", "image-input", "settle-threads", "usage-meter"];
 
 // Copy then delete: renaming a folder that fs.watch is watching fails on Windows.
 function moveDir(from, to) {

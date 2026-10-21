@@ -21,6 +21,7 @@ const { createAcpHost } = require("./acp-host.cjs");
 const { createWorkspace } = require("./workspace.cjs");
 const { createHub, HOME_DIR } = require("./hub.cjs");
 const { createPluginManager } = require("./plugins.cjs");
+const { createUsage } = require("./usage.cjs");
 const mcpInstall = require("./mcp-install.cjs");
 const { findLegacyRoots, importLegacy } = require("../lib/migrate");
 const { createUpdater } = require("../lib/updater");
@@ -99,6 +100,7 @@ let mainWindow = null;
 let windowHealth = null;
 let started = false;
 let updater = null;
+let usage = null;
 const log = createLog(path.join(DATA_ROOT, "jagents.log"));
 let autoMcp = { at: 0, changes: [], running: false };
 let legacyData = { status: "off" };
@@ -198,13 +200,28 @@ function notify(text) {
 function registerIpc() {
   // The page reports in once it has drawn the app (or its start error).
   ipcMain.on("app-ready", () => windowHealth && windowHealth.ready());
-  handle("app-info", () => ({ dataRoot: DATA_ROOT, hubDir: HOME_DIR, theme: theme(), cwd: workspace.cwdDefault(), hubAttach: workspace.hubOn(), hubChosen: db.getSetting("hub.chosen", false), mode: db.getSetting("mode", "code"), version: updater.state().current, mcpAutoUpdate: db.getSetting("mcp.autoUpdate", true), mcpAutoInstall: db.getSetting("mcp.autoInstall", false), layout: db.getSetting("layout", "grid"), threadCurrent: db.getSetting("thread.current", ""), platform: process.platform }));
+  // Settled threads used to come from the settle-threads plugin; its saved
+  // list carries over the first time.
+  function settledThreads() {
+    let settled = db.getSetting("thread.settled", null);
+    if (!settled) {
+      const old = db.getSetting("plugin-store:settle-threads", {}) || {};
+      settled = old.settled && typeof old.settled === "object" ? old.settled : {};
+      db.setSetting("thread.settled", settled);
+      if (old.folded) db.setSetting("thread.settledFolded", true);
+    }
+    return settled;
+  }
+  handle("app-info", () => ({ dataRoot: DATA_ROOT, hubDir: HOME_DIR, theme: theme(), cwd: workspace.cwdDefault(), hubAttach: workspace.hubOn(), hubChosen: db.getSetting("hub.chosen", false), mode: db.getSetting("mode", "code"), version: updater.state().current, mcpAutoUpdate: db.getSetting("mcp.autoUpdate", true), mcpAutoInstall: db.getSetting("mcp.autoInstall", false), layout: db.getSetting("layout", "grid"), threadCurrent: db.getSetting("thread.current", ""), threadSettled: settledThreads(), threadSettledFolded: Boolean(db.getSetting("thread.settledFolded", false)), platform: process.platform }));
   handle("set-setting", (key, value) => {
-    const allowed = ["theme", "mode", "layout", "hub.attach", "hub.chosen", "thread.current", "ui.sidebar", "mcp.autoUpdate", "mcp.autoInstall", "help.section"];
+    const allowed = ["theme", "mode", "layout", "hub.attach", "hub.chosen", "thread.current", "thread.settled", "thread.settledFolded", "ui.sidebar", "mcp.autoUpdate", "mcp.autoInstall", "help.section"];
     if (!allowed.includes(key)) throw new Error("Unknown setting " + key);
     db.setSetting(key, value);
     return true;
   });
+  // Plan limits read from each agent's own sign-in (electron/usage.cjs).
+  handle("usage-get", () => usage.list());
+  handle("usage-refresh", () => usage.refresh());
   handle("pick-folder", async () => {
     const res = await dialog.showOpenDialog(mainWindow, { properties: ["openDirectory", "createDirectory"], defaultPath: workspace.cwdDefault() });
     if (res.canceled || !res.filePaths[0]) return null;
@@ -420,6 +437,7 @@ app.whenReady().then(async () => {
   db = openDb(DATA_ROOT);
   setExtraAgents(() => marketplace.extraAgents(db));
   updater = createUpdater({ appRoot: APP_ROOT, emit: broadcast });
+  usage = createUsage({ emit: broadcast });
   registerProtocol();
   ptyHost = await connectPtyHost({ emit: broadcast, dataRoot: DATA_ROOT });
   if (ptyHost.adopted.length) console.log("Reattached " + ptyHost.adopted.length + " terminals that kept running");
@@ -452,6 +470,7 @@ app.whenReady().then(async () => {
   plugins.start({ hubCall: (name, args) => hub.call(name, args, null), onToolsChanged: () => hub.toolsChanged() });
   workspace.launchRestored();
   registerIpc();
+  usage.start();
   try {
     taskbar = setupTaskbarIcon({ app, shell, appRoot: APP_ROOT, icoPath: path.join(APP_ROOT, "build", "icon.ico"), customRoot: process.env.JAGENTS_DATA_ROOT ? DATA_ROOT : "", jagentsHome: process.env.JAGENTS_HOME ? HOME_DIR : "", log: (t) => console.log(t) });
   } catch (error) {
@@ -500,6 +519,7 @@ app.on("before-quit", (event) => {
   try {
     if (acp) acp.stopAll();
     if (plugins) plugins.stop();
+    if (usage) usage.stop();
     if (hub) hub.stop();
   } catch {
     /* quitting */
