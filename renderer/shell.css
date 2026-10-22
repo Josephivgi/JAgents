@@ -171,11 +171,6 @@ body.settings-on .main::before { display: none; }
 .set-row .seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--well); }
 .set-row .seg button { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 6px; font-size: 12.5px; color: var(--muted); }
 .set-row .seg button.on { background: var(--canvas); color: var(--ink); box-shadow: 0 1px 2px oklch(0 0 0 / 0.15); }
-.switch { position: relative; width: 36px; height: 20px; border-radius: 999px; background: var(--line); transition: background 0.15s; flex: none; }
-html[data-theme="dark"] .switch { background: oklch(1 0 0 / 0.14); }
-.switch[aria-checked="true"] { background: var(--accent); }
-.switch-knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform 0.15s; box-shadow: 0 1px 2px oklch(0 0 0 / 0.3); }
-.switch[aria-checked="true"] .switch-knob { transform: translateX(16px); }
 .about-card { display: flex; align-items: center; gap: 16px; padding: 16px; }
 .about-card > div { display: flex; flex-direction: column; gap: 2px; }
 .about-card b { font-size: 16px; }

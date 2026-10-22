@@ -93,7 +93,7 @@ function row(title, desc, control) {
 }
 
 function toggle(attr, on, label) {
-  return '<button type="button" role="switch" class="switch" ' + attr + ' aria-checked="' + on + '" aria-label="' + esc(label) + '"><span class="switch-knob"></span></button>';
+  return '<button type="button" role="switch" class="switch' + (on ? " on" : "") + '" ' + attr + ' aria-checked="' + on + '" aria-label="' + esc(label) + '"></button>';
 }
 
 function generalHtml() {
@@ -232,6 +232,7 @@ async function onClick(e) {
     store.info.updateAuto = !(store.info.updateAuto !== false);
     await window.jagents.setSetting("update.auto", store.info.updateAuto);
     au.setAttribute("aria-checked", String(store.info.updateAuto));
+    au.classList.toggle("on", Boolean(store.info.updateAuto));
     return;
   }
   const rv = t.closest("[data-set-reveal]");
