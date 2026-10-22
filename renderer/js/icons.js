@@ -4,6 +4,7 @@
 // rest of renderer/js.
 
 import { HARNESS_LOGOS } from "./harness-logos.js";
+import { AGENT_LOGOS } from "./agent-logos.js";
 
 function svg(inner, size, cls, viewBox) {
   return (
@@ -76,6 +77,8 @@ const GLYPHS = {
   help: '<circle cx="12" cy="12" r="8.6" fill="none" stroke="currentColor" stroke-width="1.6"/>' + stroke("M9.6 9.6a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.1-2.4 3.6") + '<circle cx="12" cy="17" r="1" fill="currentColor"/>',
   update: stroke("M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14"),
   usage: stroke("M4 19h16M7 15v-4M12 15V7M17 15v-6"),
+  tree: '<g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="5" rx="1.2"/><rect x="3" y="16" width="6" height="5" rx="1.2"/><rect x="15" y="16" width="6" height="5" rx="1.2"/><path d="M12 8v4M6 16v-2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2"/></g>',
+  gear: stroke("M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1.08 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.85 1 1.51 1H21a2 2 0 1 1 0 4h-.09c-.66 0-1.25.4-1.51 1Z", 1.6),
   gauge: stroke("M4.5 17a8 8 0 1 1 15 0M12 14l3.6-4"),
   paperclip: stroke("M19.2 11.4 12 18.6a4.6 4.6 0 0 1-6.5-6.5l7.6-7.6a3.1 3.1 0 0 1 4.4 4.4l-7.6 7.6a1.5 1.5 0 0 1-2.2-2.2l7-7", 1.7),
   arrowUp: stroke("M12 19V5.5m0 0L6.4 11.1M12 5.5l5.6 5.6", 2),
@@ -292,9 +295,34 @@ function registryLogo(key) {
   return null;
 }
 
+// Brand logos (agent-logos.js). Ids inside each SVG get a per-render suffix so
+// two copies of a gradient logo never point at each other's hidden <defs>.
+let logoSeq = 0;
+function agentLogoId(key) {
+  if (Object.hasOwn(AGENT_LOGOS, key)) return key;
+  const base = key.replace(/-(acp|cli|code|agent)$/, "");
+  if (Object.hasOwn(AGENT_LOGOS, base)) return base;
+  for (const name of ["claude", "cursor", "devin", "opencode", "gemini", "codex", "copilot", "qwen", "grok"]) if (key.startsWith(name)) return name;
+  if (key.includes("openai")) return "codex";
+  return "";
+}
+
+export function agentLogo(key, px) {
+  const id = agentLogoId(String(key || "").toLowerCase());
+  if (!id) return "";
+  const n = ++logoSeq;
+  const raw = AGENT_LOGOS[id]
+    .replace(/\bid="([^"]+)"/g, 'id="$1-' + n + '"')
+    .replace(/url\(#([^)]+)\)/g, "url(#$1-" + n + ")")
+    .replace(/href="#([^"]+)"/g, 'href="#$1-' + n + '"');
+  return raw.replace("<svg", '<svg class="ai-ic ai-harness-ic ai-agent-logo ai-agent-logo-' + id + '" width="' + px + '" height="' + px + '" aria-hidden="true" focusable="false"');
+}
+
 export function harnessIcon(id, size) {
   const key = String(id || "").toLowerCase();
   const px = size || 15;
+  const brandLogo = agentLogo(key, px);
+  if (brandLogo) return brandLogo;
   if (!Object.hasOwn(HARNESS_BRANDS, key)) {
     const exact = Object.hasOwn(HARNESS_LOGOS, key) ? HARNESS_LOGOS[key] : null;
     if (exact) return svg(exact.body, px, "ai-ic ai-harness-ic ai-harness-logo", exact.viewBox);

@@ -8,6 +8,14 @@ contextBridge.exposeInMainWorld("jagents", {
   appInfo: call("app-info"),
   setSetting: call("set-setting"),
   pickFolder: call("pick-folder"),
+  titlebarColors: call("titlebar-colors"),
+  projects: {
+    list: call("projects-list"),
+    add: call("projects-add"),
+    remove: call("projects-remove"),
+    rename: call("projects-rename"),
+    activate: call("projects-activate"),
+  },
   pickFiles: call("pick-files"),
   // The page has drawn the app; until then a stuck start gets reloaded.
   ready: () => ipcRenderer.send("app-ready"),

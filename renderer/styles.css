@@ -97,7 +97,7 @@ code, pre, .mono { font-family: var(--mono); font-size: 12.5px; }
 #app { height: 100vh; display: flex; flex-direction: column; }
 .topbar { display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 12px 0 14px; border-bottom: 1px solid var(--line); background: var(--surface); flex: none; }
 .brand { display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: 15px; margin-right: 6px; }
-.brand-mark { width: 22px; height: 22px; flex: none; }
+.brand-mark { width: 36px; height: 36px; flex: none; }
 .folder-pill, .hub-pill { display: inline-flex; align-items: center; gap: 7px; height: 30px; max-width: 260px; padding: 0 11px; border-radius: 999px; border: 1px solid var(--line); color: var(--ink); font-size: 13px; }
 .folder-pill span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .folder-pill svg, .hub-pill svg { color: var(--muted); flex: none; }

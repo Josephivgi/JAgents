@@ -5,7 +5,11 @@
       <stop offset="1" stop-color="#14121F"/>
     </linearGradient>
   </defs>
-  <rect width="1024" height="1024" rx="228" fill="url(#tile)"/>
-  <path d="M296 300H452M412 300V610A100 100 0 0 1 212 610" fill="none" stroke="#F4F3FA" stroke-width="96" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M548 724L688 300L828 724M598 574H778" fill="none" stroke="#8B7CFF" stroke-width="96" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect width="1024" height="1024" rx="200" fill="url(#tile)"/>
+  <g transform="translate(112 -122) scale(0.77)">
+    <path d="M296 300H452M412 300V610A100 100 0 0 1 212 610" fill="none" stroke="#F4F3FA" stroke-width="104" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M548 724L688 300L828 724M598 574H778" fill="none" stroke="#8B7CFF" stroke-width="104" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <rect x="64" y="540" width="896" height="420" rx="110" fill="#8B7CFF"/>
+  <text x="512" y="868" text-anchor="middle" textLength="800" lengthAdjust="spacingAndGlyphs" font-family="Segoe UI Black, Segoe UI, Arial Black, Arial, sans-serif" font-weight="900" font-size="340" fill="#14121F">BETA</text>
 </svg>

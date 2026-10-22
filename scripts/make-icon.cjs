@@ -8,10 +8,13 @@ const { app, BrowserWindow } = require("electron");
 
 const BUILD = path.join(__dirname, "..", "build");
 const SVG = fs.readFileSync(path.join(BUILD, "icon.svg"), "utf8");
+// Sizes up to 32 use a heavier drawing (icon-small.svg) so BETA stays readable.
+const SMALL = fs.existsSync(path.join(BUILD, "icon-small.svg")) ? fs.readFileSync(path.join(BUILD, "icon-small.svg"), "utf8") : SVG;
 const SIZES = [16, 24, 32, 48, 64, 128, 256];
 
 async function render(win, size) {
-  const html = "<html><body style='margin:0;background:transparent'><img width='" + size + "' height='" + size + "' src='data:image/svg+xml;base64," + Buffer.from(SVG).toString("base64") + "'></body></html>";
+  const svg = size <= 32 ? SMALL : SVG;
+  const html = "<html><body style='margin:0;background:transparent'><img width='" + size + "' height='" + size + "' src='data:image/svg+xml;base64," + Buffer.from(svg).toString("base64") + "'></body></html>";
   win.setContentSize(size, size);
   await win.loadURL("data:text/html;base64," + Buffer.from(html).toString("base64"));
   await new Promise((r) => setTimeout(r, 150));

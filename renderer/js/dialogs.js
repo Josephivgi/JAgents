@@ -54,8 +54,15 @@ export function dropdown(anchor, items, opts) {
   el.style.width = w + "px";
   const left = Math.min(window.innerWidth - w - 8, (opts && opts.alignRight ? r.right - w : r.left));
   el.style.left = Math.max(8, left) + "px";
-  el.style.top = r.bottom + 6 + "px";
-  el.style.maxHeight = Math.max(200, window.innerHeight - r.bottom - 20) + "px";
+  // Opens upward from the bottom of the window (the sidebar dock).
+  const below = window.innerHeight - r.bottom - 20;
+  if ((opts && opts.up) || (below < 240 && r.top > below)) {
+    el.style.bottom = window.innerHeight - r.top + 6 + "px";
+    el.style.maxHeight = Math.max(200, r.top - 20) + "px";
+  } else {
+    el.style.top = r.bottom + 6 + "px";
+    el.style.maxHeight = Math.max(200, below) + "px";
+  }
   el.addEventListener("click", (e) => {
     const row = e.target.closest("[data-i]");
     if (!row || row.disabled) return;
@@ -69,7 +76,42 @@ export function dropdown(anchor, items, opts) {
   if (first) first.focus();
 }
 
+// Settings shows the app's panels (MCP hub, Updates, Plugins, Agents) on its
+// page: the next modal() call draws into that element instead of a popup.
+let embedHost = null;
+export function embedNextModal(el) {
+  embedHost = el;
+}
+
 export function modal(html, opts) {
+  if (embedHost) {
+    const host = embedHost;
+    embedHost = null;
+    host.innerHTML = "";
+    const box = document.createElement("div");
+    box.className = "modal embedded" + (opts && opts.wide ? " wide" : "");
+    box.innerHTML = html;
+    host.appendChild(box);
+    let done = false;
+    const close = () => {
+      if (done) return;
+      done = true;
+      box.remove();
+      if (opts && opts.onClose) opts.onClose();
+    };
+    // Replaced or removed with the page: run the panel's own cleanup.
+    const watch = new MutationObserver(() => {
+      if (!box.isConnected) {
+        watch.disconnect();
+        close();
+      }
+    });
+    watch.observe(host, { childList: true });
+    box.addEventListener("click", (e) => {
+      if (e.target.closest("[data-close]")) e.stopPropagation();
+    });
+    return { el: box, close, embedded: true };
+  }
   const back = document.createElement("div");
   back.className = "modal-back";
   back.innerHTML = '<div class="modal' + (opts && opts.wide ? " wide" : "") + '" role="dialog" aria-modal="true">' + html + "</div>";

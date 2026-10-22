@@ -81,14 +81,19 @@ Timers, animation frames and observers you start are not: stop them in the clean
 function and have callbacks check a flag it sets. A callback that keeps running after
 cleanup can fight the next copy of the plugin and freeze the window.
 
-- jagents.topbar.button({ icon, label, title, onClick }): a top bar button (next to the MCP hub).
-    icon is an icon name (plus, chat, terminal, grid, hub, sun, moon, restart,
-    handoff, folder, search, close, puzzle, globe, back, next, external, code, undo)
+- jagents.topbar.button({ icon, label, title, onClick }): an icon button in the dock at
+    the bottom of the sidebar (JAgents has no top bar since v0.6; the label becomes the
+    tooltip). icon is an icon name (plus, chat, terminal, grid, hub, sun, moon, restart,
+    handoff, folder, search, close, puzzle, globe, back, next, external, code, undo, gear)
     or an <svg> string.
-- jagents.sidebar.section({ title, render(el) }): a section in the Code mode sidebar.
-    jagents.sidebar.refresh() renders again.
-- jagents.panes.register(kind, { title, icon, mount(el, pane) }): a new pane type for
-    Code mode, listed in the + menu. mount may return a cleanup function.
+- jagents.sidebar.section({ title, render(el) }): a section in the Code mode sidebar,
+    under Projects. jagents.sidebar.refresh() renders again.
+- A page of your own: add a tab to the sidebar's mode tabs (.mode-seg, a button with
+    role="tab" and data-mode="<your id>") and a view in main.main. JAgents marks the
+    tab .on when it is picked; show your view while it is. The top 38px of the window
+    is the title bar: JAgents keeps that band free above plugin pages.
+- jagents.panes.register(kind, { title, icon, mount(el, pane) }): a new tab type for
+    Code mode, listed in the new tab picker. mount may return a cleanup function.
     pane.id, pane.state (saved per pane), pane.setState(obj), pane.setTitle(text),
     pane.visible() (false while the pane is parked or covered by a menu).
 - jagents.panes.open(kind, { title, state }): open a pane of a registered kind.

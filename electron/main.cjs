@@ -158,6 +158,8 @@ function theme() {
   return db.getSetting("theme", "dark") === "light" ? "light" : "dark";
 }
 
+const TITLEBAR_H = 38;
+
 function createWindow() {
   started = true;
   mainWindow = new BrowserWindow({
@@ -169,6 +171,10 @@ function createWindow() {
     icon: path.join(APP_ROOT, "build", process.platform === "win32" ? "icon.ico" : "icon.png"),
     backgroundColor: theme() === "dark" ? "#16181d" : "#f5f6f8",
     autoHideMenuBar: true,
+    // No title bar: the tab strip is the title bar, and Windows draws its own
+    // minimize, maximize and close buttons over its right end.
+    titleBarStyle: "hidden",
+    titleBarOverlay: { color: theme() === "dark" ? "#111111" : "#ffffff", symbolColor: theme() === "dark" ? "#d4d4d8" : "#3f3f46", height: TITLEBAR_H },
     webPreferences: { preload: path.join(__dirname, "preload.cjs"), contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
   mainWindow.setMenuBarVisibility(false);
@@ -217,9 +223,19 @@ function registerIpc() {
     }
     return settled;
   }
-  handle("app-info", () => ({ dataRoot: DATA_ROOT, hubDir: HOME_DIR, theme: theme(), cwd: workspace.cwdDefault(), hubAttach: workspace.hubOn(), hubChosen: db.getSetting("hub.chosen", false), mode: db.getSetting("mode", "code"), version: updater.state().current, mcpAutoUpdate: db.getSetting("mcp.autoUpdate", true), mcpAutoInstall: db.getSetting("mcp.autoInstall", false), layout: db.getSetting("layout", "grid"), threadCurrent: db.getSetting("thread.current", ""), threadSettled: settledThreads(), threadSettledFolded: Boolean(db.getSetting("thread.settledFolded", false)), platform: process.platform }));
+  handle("app-info", () => ({ dataRoot: DATA_ROOT, hubDir: HOME_DIR, theme: theme(), cwd: workspace.cwdDefault(), hubAttach: workspace.hubOn(), hubChosen: db.getSetting("hub.chosen", false), mode: db.getSetting("mode", "code"), version: updater.state().current, mcpAutoUpdate: db.getSetting("mcp.autoUpdate", true), mcpAutoInstall: db.getSetting("mcp.autoInstall", false), layout: db.getSetting("layout", "grid"), threadCurrent: db.getSetting("thread.current", ""), threadSettled: settledThreads(), threadSettledFolded: Boolean(db.getSetting("thread.settledFolded", false)), platform: process.platform, updateAuto: db.getSetting("update.auto", true) !== false, updateSnooze: db.getSetting("update.snooze", null), groups: db.getSetting("ui.groups", null), sidebarWidth: db.getSetting("ui.sidebarWidth", 0), sidebarHidden: Boolean(db.getSetting("ui.sidebarHidden", false)), projects: workspace.projects() }));
+  // The page sends its colors so the window buttons match the theme.
+  handle("titlebar-colors", (colors) => {
+    if (!mainWindow || !colors || process.platform === "darwin") return false;
+    try {
+      mainWindow.setTitleBarOverlay({ color: String(colors.color), symbolColor: String(colors.symbolColor), height: TITLEBAR_H });
+    } catch {
+      return false;
+    }
+    return true;
+  });
   handle("set-setting", (key, value) => {
-    const allowed = ["theme", "mode", "layout", "hub.attach", "hub.chosen", "thread.current", "thread.settled", "thread.settledFolded", "ui.sidebar", "mcp.autoUpdate", "mcp.autoInstall", "help.section"];
+    const allowed = ["update.auto", "update.snooze", "ui.sidebarWidth", "ui.groups", "ui.sidebarHidden", "theme", "mode", "layout", "hub.attach", "hub.chosen", "thread.current", "thread.settled", "thread.settledFolded", "ui.sidebar", "mcp.autoUpdate", "mcp.autoInstall", "help.section"];
     if (!allowed.includes(key)) throw new Error("Unknown setting " + key);
     db.setSetting(key, value);
     return true;
@@ -227,6 +243,19 @@ function registerIpc() {
   // Plan limits read from each agent's own sign-in (electron/usage.cjs).
   handle("usage-get", () => usage.list());
   handle("usage-refresh", () => usage.refresh());
+  handle("projects-list", () => workspace.projects());
+  handle("projects-add", async (dir) => {
+    let target = dir;
+    if (!target) {
+      const res = await dialog.showOpenDialog(mainWindow, { title: "Add a project folder", properties: ["openDirectory", "createDirectory"], defaultPath: workspace.cwdDefault() });
+      if (res.canceled || !res.filePaths.length) return null;
+      target = res.filePaths[0];
+    }
+    return workspace.addProject(target);
+  });
+  handle("projects-remove", (dir) => workspace.removeProject(dir));
+  handle("projects-rename", (dir, name) => workspace.renameProject(dir, name));
+  handle("projects-activate", (dir) => workspace.setActiveProject(dir));
   handle("pick-folder", async () => {
     const res = await dialog.showOpenDialog(mainWindow, { properties: ["openDirectory", "createDirectory"], defaultPath: workspace.cwdDefault() });
     if (res.canceled || !res.filePaths[0]) return null;
@@ -512,8 +541,10 @@ app.whenReady().then(async () => {
   }
   runAutoMcp(false);
   setInterval(() => runAutoMcp(false), 10 * 60 * 1000);
-  setTimeout(() => updater.check(), 8000);
-  setInterval(() => updater.check(), 6 * 60 * 60 * 1000);
+  // Settings > Updates can turn the automatic checks off.
+  const autoCheck = () => db.getSetting("update.auto", true) !== false && updater.check().catch(() => {});
+  setTimeout(autoCheck, 8000);
+  setInterval(autoCheck, 6 * 60 * 60 * 1000);
 });
 
 // Opening JAgents again shows the running one. Before startup finishes there

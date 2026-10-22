@@ -8,6 +8,7 @@ import { store, on } from "./store.js";
 import { openHubPanel, openUpdatesPanel } from "./dialogs.js";
 
 const SECTIONS = [
+  ["workspace", "Projects and tabs"],
   ["overview", "What it is"],
   ["turn-on", "Turn it on"],
   ["who", "Which agents get it"],
@@ -80,16 +81,21 @@ function article() {
   const v = store.info.version || "";
   return (
     '<article class="help-doc">' +
-    '<header class="help-hero">' + icon("hub", 26) + '<div><h1>JAgents MCP guide</h1><p class="muted">The <code>jagents</code> MCP server lets the coding agents in this app see each other, talk, share work, and start helpers.</p></div></header>' +
+    '<header class="help-hero">' + icon("hub", 26) + '<div><h1>JAgents guide</h1><p class="muted">The <code>jagents</code> MCP server lets the coding agents in this app see each other, talk, share work, and start helpers.</p></div></header>' +
+
+    '<section id="help-workspace"><h2>Projects and tabs</h2>' +
+    "<p>A <b>project</b> is a folder. Add one with <b>+</b> next to Projects in the sidebar; pick a project to see its agents. New agents start in the open project's folder. Right-click a project to rename it, show it in Explorer, or remove it from the list.</p>" +
+    "<p>Each agent is a <b>tab</b>. Open one with <b>+</b> in a tab strip: pick a terminal, a browser tab, or an agent. Agents that have a chat start as a chat; the terminal button at the end of their row starts the CLI instead. Type in the menu's search box to jump to an open tab, find an agent, or open a URL. The <b>⋯</b> menu (or right-clicking a tab) has <b>Split right</b> and <b>Split down</b> to put a tab in its own group, new empty groups, even sizes, and merging a group back. Drag a tab to another group's strip to move it, drag the line between groups to resize them, and double-click that line to even them out. Middle-click a tab to close it.</p>" +
+    "<p>The <b>gear</b> at the bottom of the sidebar opens Settings: theme, projects, agents to install, the MCP hub, updates, plugins, usage, and this guide.</p></section>" +
 
     '<section id="help-overview"><h2>What it is</h2>' +
     "<p>Every agent JAgents starts can get an MCP server named <code>jagents</code>. Its tools reach the hub inside the app, which knows every terminal, chat, and subagent. Through it an agent can list the other agents, send one a message, read another agent's screen or transcript, start a subagent on a task and wait for its answer, or hand its whole context to another agent.</p>" +
     "<p>In Claude Code the tools show up as <code>mcp__jagents__list_agents</code>, <code>mcp__jagents__send_message</code>, and so on.</p></section>" +
 
     '<section id="help-turn-on"><h2>Turn it on</h2><ol>' +
-    "<li>Open <b>MCP hub</b> in the top bar.</li>" +
+    "<li>Open <b>Settings &gt; MCP hub</b> (the gear at the bottom of the sidebar).</li>" +
     "<li>Turn on <b>Connect terminals launched in JAgents</b>.</li>" +
-    "<li>Restart any terminal that was already open (the Restart button in its pane header). New terminals get it on their own.</li>" +
+    "<li>Restart any terminal that was already open (<b>Restart</b> in its tab's <b>⋯</b> menu). New terminals get it on their own.</li>" +
     "</ol><p>Chats (ACP agents and Claude Code through the Agent SDK) always get the server; the switch is for terminals.</p>" +
     '<p class="help-status">' + (store.info.hubAttach ? '<span class="pill ok">On</span> Terminals launched now get the jagents server.' : '<span class="pill">Off</span> Terminals launch without the jagents server.') + ' <button class="btn sm secondary" data-help="hub">' + icon("hub", 14) + "Open MCP hub</button></p></section>" +
 
@@ -124,7 +130,7 @@ function article() {
     "<dt>A subagent never answers</dt><dd>Call <code>wait_for_agent</code> again with a longer <code>timeout_seconds</code> (up to 900), or open its thread to see what it is doing.</dd>" +
     "</dl></section>" +
 
-    '<section id="help-updates"><h2>Version and updates</h2><p>This is JAgents <b>v' + esc(v) + "</b>. The version button in the top bar shows it and gets a dot when a newer GitHub release is out. Open it to read the release notes, install the update, and restart when you are ready.</p>" +
+    '<section id="help-updates"><h2>Version and updates</h2><p>This is JAgents <b>v' + esc(v) + "</b>. When a newer GitHub release is out, a reminder pops up in the bottom right and the gear at the bottom of the sidebar gets a dot. Install it from the reminder or from <b>Settings &gt; Updates</b>, read the release notes there, and restart when you are ready. <b>Later</b> hides the reminder for a few hours.</p>" +
     '<p><button class="btn sm secondary" data-help="updates">' + icon("update", 14) + "Check for updates</button></p></section>" +
     "</article>"
   );
@@ -150,9 +156,9 @@ function paintSide(activeId) {
 export function renderHelpMode(sideEl, mainEl) {
   side = sideEl;
   main = mainEl;
-  side.innerHTML = '<p class="nav-label">MCP guide</p><div class="thread-list" data-help-nav></div>';
+  side.innerHTML = '<p class="nav-label">Guide</p><div class="thread-list" data-help-nav></div>';
   main.innerHTML = '<div class="help-scroll" data-help-scroll>' + article() + "</div>";
-  paintSide("overview");
+  paintSide("workspace");
   side.addEventListener("click", (e) => {
     const go = e.target.closest("[data-help-go]");
     if (!go) return;

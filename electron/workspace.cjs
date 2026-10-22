@@ -31,6 +31,9 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
   function save() {
     db.setSetting("panes", panes);
     emit("panes-changed", list());
+    // A pane in a new folder adds that folder as a project.
+    const known = (db.getSetting("projects", null) || []).length;
+    if (projectList().length !== known) emit("projects-changed", projects());
   }
 
   function nextHandle(provider) {
@@ -46,6 +49,73 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
 
   function cwdDefault() {
     return db.getSetting("cwd", "") || require("node:os").homedir();
+  }
+
+  // ---- Projects: folders agents work in -----------------------------------
+  //
+  // A project is a folder. Every pane belongs to the project whose folder is its
+  // working folder; the active project's folder is where new agents start (the
+  // "cwd" setting). Folders that panes use are added on their own.
+
+  const normPath = (p) => path.resolve(String(p || "")).replace(/[\/]+$/, "").toLowerCase();
+
+  function projectList() {
+    const saved = (db.getSetting("projects", null) || []).filter((p) => p && p.path);
+    const seen = new Set(saved.map((p) => normPath(p.path)));
+    let added = false;
+    for (const dir of [cwdDefault()].concat(panes.map((p) => p.cwd).filter(Boolean))) {
+      if (seen.has(normPath(dir))) continue;
+      seen.add(normPath(dir));
+      saved.push({ path: dir, name: path.basename(dir) || dir });
+      added = true;
+    }
+    if (added || !db.getSetting("projects", null)) db.setSetting("projects", saved);
+    return saved;
+  }
+
+  function projects() {
+    const active = normPath(cwdDefault());
+    return projectList().map((p) => Object.assign({}, p, { active: normPath(p.path) === active }));
+  }
+
+  function setActiveProject(dir) {
+    if (!dir || !fs.existsSync(dir)) throw new Error("Folder not found: " + dir);
+    db.setSetting("cwd", dir);
+    projectList();
+    emit("projects-changed", projects());
+    return projects();
+  }
+
+  function addProject(dir) {
+    if (!dir || !fs.existsSync(dir)) throw new Error("Folder not found: " + dir);
+    const list = projectList();
+    if (!list.some((p) => normPath(p.path) === normPath(dir))) {
+      list.push({ path: dir, name: path.basename(dir) || dir });
+      db.setSetting("projects", list);
+    }
+    return setActiveProject(dir);
+  }
+
+  // Removes a project from the list. Its agents must be closed first.
+  function removeProject(dir) {
+    const key = normPath(dir);
+    if (panes.some((p) => p.cwd && normPath(p.cwd) === key)) throw new Error("Close this project's agents first.");
+    const list = projectList().filter((p) => normPath(p.path) !== key);
+    db.setSetting("projects", list);
+    if (normPath(cwdDefault()) === key) db.setSetting("cwd", list.length ? list[0].path : require("node:os").homedir());
+    projectList();
+    emit("projects-changed", projects());
+    return projects();
+  }
+
+  function renameProject(dir, name) {
+    const list = projectList();
+    const p = list.find((x) => normPath(x.path) === normPath(dir));
+    if (!p) throw new Error("No project " + dir + ".");
+    p.name = String(name || "").trim().slice(0, 60) || path.basename(p.path);
+    db.setSetting("projects", list);
+    emit("projects-changed", projects());
+    return projects();
   }
 
   // stdio entry for the JAgents MCP server, in ACP's {name, command, args, env[]} shape.
@@ -344,7 +414,7 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
     return panes.find((p) => p.kind === "chat" && p.chatId === chatId) || null;
   }
 
-  return { list, agents, findAgent, addTerminal, ensureTerminal, restartTerminal, launchRestored, addChatPane, addPluginPane, updatePluginPane, newChat, removePane, reorder, paneForChat, cwdDefault, hubOn, mcpEntry, mcpEntries, claudeDisallowed, systemNote, toolsNote };
+  return { list, agents, findAgent, addTerminal, ensureTerminal, restartTerminal, launchRestored, addChatPane, addPluginPane, updatePluginPane, newChat, removePane, reorder, paneForChat, cwdDefault, projects, addProject, removeProject, renameProject, setActiveProject, hubOn, mcpEntry, mcpEntries, claudeDisallowed, systemNote, toolsNote };
 }
 
 module.exports = { createWorkspace };

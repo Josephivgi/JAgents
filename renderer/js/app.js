@@ -3,85 +3,59 @@ import { icon, harnessIcon } from "./icons.js";
 import { store, fire, on, refreshAgents, refreshChats } from "./store.js";
 import { routeAcpState, routeAcpModels } from "./chat-view.js";
 import { routePtyData, routePtyExit, retheme } from "./terminal-view.js";
-import { renderCodeMode, syncPanes, addTerminal, addChat, setLayout, getLayout, markExited, focusAgent } from "./code-mode.js";
+import { renderCodeMode, syncPanes, addChat, markExited, focusAgent, projectCounts, showProject } from "./code-mode.js";
 import { renderThreadMode, noteThreadState, openThread } from "./thread-mode.js";
 import { initUsage, noteUsage } from "./usage.js";
-import { dropdown, openHubPanel, openUpdatesPanel, updateActivity } from "./dialogs.js";
+import { dropdown, updateActivity } from "./dialogs.js";
 import { renderHelpMode, refreshHelp } from "./help-mode.js";
-import { initPlugins, openPluginsPanel, pluginKinds, openPluginPane } from "./plugins.js";
-import { openMarketplace } from "./marketplace.js";
+import { initPlugins } from "./plugins.js";
 import { initChatPolish } from "./chat-polish.js";
+import { openSettings, closeSettings, settingsOpen, refreshSettings } from "./settings.js";
+import { noteUpdate } from "./update-popup.js";
 
 const app = document.getElementById("app");
 let mode = "code";
 let activity = [];
-let update = null;
+let seenActivity = 0;
 
 function setTheme(theme) {
   document.documentElement.dataset.theme = theme;
   store.info.theme = theme;
   retheme();
   fire("app:theme", theme);
+  // Windows draws the window buttons; give them this theme's colors.
+  requestAnimationFrame(() => {
+    const cs = getComputedStyle(document.documentElement);
+    const color = toHex(cs.getPropertyValue("--strip-bg")) || (theme === "dark" ? "#111111" : "#ffffff");
+    const symbolColor = toHex(cs.getPropertyValue("--ink")) || (theme === "dark" ? "#e4e4e7" : "#3f3f46");
+    window.jagents.titlebarColors({ color, symbolColor }).catch(() => {});
+  });
 }
 
-function topbarMarkup() {
-  return (
-    '<div class="brand"><img class="brand-mark" src="icon.svg" alt="" width="22" height="22">JAgents</div>' +
-    '<div class="seg mode-seg" role="tablist" aria-label="Mode">' +
-    '<button role="tab" data-mode="code">' + icon("grid", 15) + "Code</button>" +
-    '<button role="tab" data-mode="threads">' + icon("chat", 15) + "Threads</button>" +
-    '<button role="tab" data-mode="help" title="Guide to the JAgents MCP">' + icon("help", 15) + "Help</button></div>" +
-    '<button class="folder-pill" data-folder title="Working folder for new agents">' + icon("folder", 15) + '<span data-cwd></span></button>' +
-    '<span class="spacer"></span>' +
-    '<div class="code-actions">' +
-    '<button class="btn sm primary add-pane" data-menu-anchor data-add-pane title="Add a terminal or chat" aria-label="Add a terminal or chat">' + icon("plus", 16) + "</button>" +
-    '<div class="seg layout-seg" aria-label="Layout">' +
-    '<button data-layout="grid" title="Even grid">' + icon("grid", 15) + "</button>" +
-    '<button data-layout="columns" title="Side by side">' + icon("columns", 15) + "</button>" +
-    '<button data-layout="rows" title="Stacked">' + icon("rows", 15) + "</button></div></div>" +
-    '<div class="plugin-top" data-plugin-top></div>' +
-    '<button class="hub-pill" data-market title="Agent marketplace: install more agents">' + icon("store", 15) + "<span>Agents</span></button>" +
-    '<button class="hub-pill" data-hub title="MCP hub">' + icon("hub", 15) + '<span data-hub-label>MCP hub</span></button>' +
-    '<button class="version-pill" data-updates title="Version and updates">' + icon("update", 14) + '<span data-version></span></button>' +
-    '<button class="icon-btn" data-theme-toggle title="Toggle theme"></button>'
-  );
+// CSS colors (oklch included) as #rrggbb, through a canvas.
+function toHex(value) {
+  const v = String(value || "").trim();
+  if (!v) return "";
+  const c = document.createElement("canvas").getContext("2d");
+  c.fillStyle = "#000";
+  c.fillStyle = v;
+  c.fillRect(0, 0, 1, 1);
+  const [r, g, b] = c.getImageData(0, 0, 1, 1).data;
+  return "#" + [r, g, b].map((n) => n.toString(16).padStart(2, "0")).join("");
 }
+on("set-theme", (theme) => {
+  setTheme(theme);
+  window.jagents.setSetting("theme", theme);
+});
 
-function paintTopbar() {
-  for (const b of app.querySelectorAll("[data-mode]")) b.classList.toggle("on", b.dataset.mode === mode);
-  for (const b of app.querySelectorAll("[data-layout]")) b.classList.toggle("on", b.dataset.layout === getLayout());
-  app.querySelector(".code-actions").hidden = mode !== "code";
-  const cwd = store.info.cwd || "";
-  app.querySelector("[data-cwd]").textContent = cwd.replace(/^.*[\\/](?=[^\\/]+[\\/]?$)/, "") || cwd;
-  app.querySelector("[data-folder]").title = "Working folder for new agents: " + cwd;
-  app.querySelector("[data-hub-label]").textContent = store.info.hubAttach ? "MCP hub on" : "MCP hub off";
-  app.querySelector("[data-version]").textContent = "v" + (store.info.version || "");
-  app.querySelector("[data-updates]").title = update && update.applied ? "Update installed. Restart to run " + update.applied : update && update.available ? update.latest + " is available" : "Version and updates";
-  paintUpdateCard();
-  app.querySelector("[data-theme-toggle]").innerHTML = icon(store.info.theme === "dark" ? "sun" : "moon", 16);
-}
-
-// The Updates line in the sidebar dock: running version, latest release, and
-// the next step (check, install, restart). The line itself opens the full
-// Updates panel.
-function paintUpdateCard() {
-  const sum = app.querySelector("[data-update-summary]");
-  if (!sum) return;
-  const u = update || { current: store.info.version };
-  const busy = u.checking || u.applying;
-  sum.textContent = "v" + (u.current || "") + " · " + (u.applying ? (u.step || "Installing " + u.latest) + "…" : u.checking ? "Checking…" : u.applied ? u.applied + " installed, restart" : u.available ? u.latest + " available" : u.error ? "Check failed" : u.latest ? "Up to date" : "Not checked");
-  sum.title = u.error || sum.textContent;
-  sum.classList.toggle("warn-text", Boolean(u.error));
-  const act = u.applied
-    ? '<button type="button" class="btn xs primary" data-update-act="restart">Restart</button>'
-    : u.available
-      ? '<button type="button" class="btn xs primary" data-update-act="apply"' + (busy ? " disabled" : "") + ">" + (u.applying ? '<span class="spinner sm"></span>' : "") + "Install</button>"
-      : '<button type="button" class="icon-btn dock-btn" data-update-act="check" title="Check for updates" aria-label="Check for updates"' + (busy ? " disabled" : "") + ">" + (u.checking ? '<span class="spinner sm"></span>' : icon("restart", 13)) + "</button>";
-  app.querySelector("[data-update-actions]").innerHTML = act;
+function paintModes() {
+  for (const b of app.querySelectorAll(".mode-seg [data-mode]")) b.classList.toggle("on", b.dataset.mode === mode);
 }
 
 function setMode(next) {
   mode = next;
+  closeSettings();
+  document.body.dataset.mode = next;
   window.jagents.setSetting("mode", next);
   app.querySelector("[data-code-side]").hidden = next !== "code";
   app.querySelector("[data-thread-side]").hidden = next !== "threads";
@@ -89,93 +63,167 @@ function setMode(next) {
   app.querySelector("[data-thread-main]").hidden = next !== "threads";
   app.querySelector("[data-help-side]").hidden = next !== "help";
   app.querySelector("[data-help-main]").hidden = next !== "help";
-  app.querySelector("[data-plugin-card]").hidden = next === "help";
   if (next === "help") refreshHelp();
-  paintTopbar();
+  paintModes();
   if (next === "code") window.dispatchEvent(new Event("resize"));
 }
 
-// Code-mode sidebar: every agent the hub knows, subagents nested under the
-// agent that spawned them, then the agent-to-agent activity feed.
-function paintAgents() {
-  const box = app.querySelector("[data-agents]");
+// ---- Projects -------------------------------------------------------------
+
+const keyOf = (dir) => String(dir || "").replace(/[\\/]+$/, "").replace(/\//g, "\\").toLowerCase();
+
+function parentDir(dir) {
+  const d = String(dir || "").replace(/[\\/]+$/, "").replace(/\//g, "\\");
+  const i =Math.max(d.lastIndexOf("\\"), d.lastIndexOf("/"));
+  return i > 0 ? d.slice(0, i) : d;
+}
+
+function paintProjects() {
+  const box = app.querySelector("[data-projects]");
   if (!box) return;
-  const list = store.hubAgents;
-  const ids = new Set(list.map((a) => a.id));
-  const roots = list.filter((a) => !a.parentId || !ids.has(a.parentId));
-  const row = (a, depth) =>
-    '<button class="agent-item" data-agent="' + esc(a.handle) + '" style="--depth:' + depth + '">' +
-    (depth ? '<span class="tree">' + icon("subagent", 12) + "</span>" : "") +
-    harnessIcon(a.provider, 16) +
-    '<span class="grow"><span class="t">' + esc(a.handle) + '</span><span class="s">' + esc(a.kind === "terminal" ? a.name : a.title || a.name) + "</span></span>" +
-    (a.mcp ? '<span class="mini-hub" title="Has jagents MCP tools">' + icon("hub", 12) + "</span>" : "") +
-    "</button>";
-  const walk = (a, depth) => row(a, depth) + list.filter((c) => c.parentId === a.id).map((c) => walk(c, depth + 1)).join("");
-  box.innerHTML = roots.length ? roots.map((a) => walk(a, 0)).join("") : '<p class="nav-empty">No agents running.</p>';
-  const actBox = app.querySelector("[data-side-activity]");
-  actBox.innerHTML = activity.length
-    ? activity
-        .slice(-8)
-        .reverse()
-        .map((e) => '<div class="side-act"><b>' + esc(e.from) + "</b> " + (e.type === "message" ? "→" : e.type === "spawn" ? "spawned" : e.type === "handoff" ? "handed off to" : esc(e.type)) + " <b>" + esc(e.to) + "</b>" + (e.text ? '<span class="act-text">' + esc(e.text.slice(0, 90)) + "</span>" : "") + "</div>")
+  const counts = projectCounts();
+  const active = keyOf(store.info.cwd);
+  const list = store.projects || [];
+  const html = list.length
+    ? list
+        .map((p) => {
+          const c = counts.get(keyOf(p.path));
+          const on = keyOf(p.path) === active;
+          return (
+            '<button type="button" class="project' + (on ? " on" : "") + '" data-project="' + esc(p.path) + '" title="' + esc(p.path) + '"' + (on ? ' aria-current="true"' : "") + ">" +
+            '<span class="project-ic">' + icon("folder", 15) + "</span>" +
+            '<span class="project-text"><span class="project-name">' + esc(p.name) + '</span><span class="project-path">' + esc(parentDir(p.path)) + "</span></span>" +
+            (c && c.count ? '<span class="project-count' + (c.busy ? " live" : "") + '" title="' + c.count + (c.count === 1 ? " agent" : " agents") + (c.busy ? ", " + c.busy + " running" : "") + '"><i></i>' + c.count + "</span>" : "") +
+            "</button>"
+          );
+        })
         .join("")
-    : '<p class="nav-empty">Messages, spawns, and handoffs between agents show here.</p>';
+    : '<p class="nav-empty">Add a folder to start agents in it.</p>';
+  if (box._html !== html) {
+    box._html = html;
+    box.innerHTML = html;
+  }
 }
 
-async function refreshHubAgents() {
+async function refreshProjects(list) {
   try {
-    store.hubAgents = await window.jagents.hub.agents();
-    paintAgents();
-    fire("hub-agents", store.hubAgents);
+    store.projects = list || (await window.jagents.projects.list());
+    const active = store.projects.find((p) => p.active);
+    if (active && keyOf(active.path) !== keyOf(store.info.cwd)) {
+      store.info.cwd = active.path;
+      showProject();
+    }
   } catch {
-    /* app closing */
+    /* closing */
+  }
+  paintProjects();
+  fire("projects", store.projects);
+}
+
+async function switchProject(dir) {
+  if (keyOf(dir) === keyOf(store.info.cwd)) {
+    if (mode !== "code") setMode("code");
+    return;
+  }
+  try {
+    store.projects = await window.jagents.projects.activate(dir);
+    store.info.cwd = dir;
+    if (mode !== "code") setMode("code");
+    showProject();
+    paintProjects();
+    window.dispatchEvent(new Event("resize"));
+  } catch (error) {
+    toast(errorText(error));
   }
 }
 
-function paintBanner() {
-  const b = app.querySelector("[data-hub-banner]");
+async function addProject() {
+  try {
+    const list = await window.jagents.projects.add();
+    if (!list) return;
+    const active = list.find((p) => p.active);
+    store.projects = list;
+    if (active) {
+      store.info.cwd = active.path;
+      if (mode !== "code") setMode("code");
+      showProject();
+    }
+    paintProjects();
+  } catch (error) {
+    toast(errorText(error));
+  }
+}
+
+function projectMenu(anchor, dir) {
+  const p = (store.projects || []).find((x) => keyOf(x.path) === keyOf(dir));
+  if (!p) return;
+  const count = (projectCounts().get(keyOf(dir)) || { count: 0 }).count;
+  dropdown(
+    anchor,
+    [
+      { section: p.name },
+      { label: "Open", icon: '<span class="menu-ic">' + icon("folder", 16) + "</span>", onPick: () => switchProject(p.path) },
+      { label: "Show in Explorer", icon: '<span class="menu-ic">' + icon("external", 16) + "</span>", onPick: () => window.jagents.openPath(p.path).catch((e) => toast(errorText(e))) },
+      { label: "Rename…", icon: '<span class="menu-ic">' + icon("pencil", 16) + "</span>", onPick: () => renameProject(p) },
+      { label: "Remove from list", desc: count ? "Close its " + count + (count === 1 ? " agent" : " agents") + " first" : "The folder stays on disk", icon: '<span class="menu-ic">' + icon("trash", 16) + "</span>", disabled: count > 0, onPick: () => window.jagents.projects.remove(p.path).then(refreshProjects).catch((e) => toast(errorText(e))) },
+    ],
+    { width: 260 },
+  );
+}
+
+function renameProject(p) {
+  const row = app.querySelector('[data-project="' + CSS.escape(p.path) + '"] .project-name');
+  if (!row) return;
+  const input = document.createElement("input");
+  input.className = "project-rename";
+  input.value = p.name;
+  input.setAttribute("aria-label", "Project name");
+  row.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = async (ok) => {
+    if (done) return;
+    done = true;
+    if (ok && input.value.trim() && input.value.trim() !== p.name) {
+      try {
+        store.projects = await window.jagents.projects.rename(p.path, input.value.trim());
+      } catch (error) {
+        toast(errorText(error));
+      }
+    }
+    app.querySelector("[data-projects]")._html = "";
+    paintProjects();
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") finish(true);
+    if (e.key === "Escape") finish(false);
+    e.stopPropagation();
+  });
+  input.addEventListener("blur", () => finish(true));
+  input.addEventListener("click", (e) => e.stopPropagation());
+}
+
+// ---- Activity (agent-to-agent messages) in the dock -----------------------
+
+function paintActivityBadge() {
+  const b = app.querySelector("[data-activity-badge]");
   if (!b) return;
-  b.hidden = Boolean(store.info.hubChosen);
-  if (b.hidden) return;
-  b.innerHTML =
-    icon("hub", 18) +
-    '<div class="grow"><b>Let these agents see each other?</b> The JAgents MCP hub lets Claude Code, Codex and chat agents list and message each other, read each other\'s work, spawn subagents, and hand off context.</div>' +
-    '<button class="btn sm primary" data-banner="on">Connect agents</button><button class="btn sm ghost" data-banner="details">Details</button><button class="btn sm ghost" data-banner="off">Not now</button>';
+  const n = Math.max(0, activity.length - seenActivity);
+  b.hidden = n === 0;
+  b.textContent = n > 9 ? "9+" : String(n);
 }
 
-// The + menu: every way to add a pane to the split. Installed agents first;
-// native chats (Claude Code through the Agent SDK) lead the chat list.
-function addMenu(anchor) {
-  const byAvail = (a, b) => Number(b.available) - Number(a.available);
-  const items = [{ section: "Terminal" }];
-  for (const t of store.terminalAgents.slice().sort(byAvail)) items.push({ label: t.name, desc: t.available ? t.description : t.install, icon: harnessIcon(t.id, 18), disabled: !t.available, badge: t.available ? "" : "Not installed", onPick: () => addTerminal(t.id) });
-  const both = store.terminalAgents.filter((t) => (t.id === "claude" || t.id === "codex") && t.available);
-  if (both.length === 2) items.push({ label: "Claude Code + Codex", desc: "Two terminals, split evenly", icon: harnessIcon("codex", 18), onPick: async () => { await addTerminal("claude"); await addTerminal("codex"); } });
-  items.push({ section: "Chat" });
-  const chats = store.acpAgents.slice().sort((a, b) => byAvail(a, b) || Number(Boolean(b.native)) - Number(Boolean(a.native)));
-  for (const a of chats) items.push({ label: a.name, desc: a.available ? (a.native ? "Native, through the Claude Agent SDK" : "ACP agent") : a.install, icon: harnessIcon(a.id, 18), disabled: !a.available, badge: a.available ? (a.native ? "Native" : "") : "Not installed", onPick: () => addChat(a.id) });
-  items.push({ label: "Get more agents…", desc: "Install agents from the marketplace", icon: '<span class="menu-ic">' + icon("store", 18) + "</span>", onPick: () => openMarketplace() });
-  const open = new Set(store.panes.filter((p) => p.kind === "chat").map((p) => p.chatId));
-  const threads = store.chats.filter((c) => !open.has(c.id)).slice(0, 5);
-  if (threads.length) {
-    items.push({ section: "Open a thread" });
-    for (const c of threads) items.push({ label: c.title, desc: c.handle, icon: harnessIcon(c.harnessId, 18), onPick: () => addChat("", c.id) });
-  }
-  const kinds = pluginKinds();
-  if (kinds.length) {
-    items.push({ section: "From plugins" });
-    for (const k of kinds) items.push({ label: k.title, desc: k.description || "From the " + k.pluginId + " plugin", icon: '<span class="menu-ic">' + (String(k.icon || "").trim().startsWith("<svg") ? k.icon : icon(k.icon || "puzzle", 18)) + "</span>", onPick: () => openPluginPane(k.key) });
-  }
-  dropdown(anchor, items, { width: 340, alignRight: true });
+function activityMenu(anchor) {
+  seenActivity = activity.length;
+  paintActivityBadge();
+  const verb = (e) => (e.type === "message" ? "→" : e.type === "spawn" ? "spawned" : e.type === "handoff" ? "handed off to" : e.type);
+  const items = [{ section: "Agent activity" }];
+  if (!activity.length) items.push({ label: "Nothing yet", desc: "Messages, spawns and handoffs between agents show here.", disabled: true });
+  for (const e of activity.slice(-12).reverse())
+    items.push({ label: e.from + " " + verb(e) + " " + e.to, desc: (e.text || "").slice(0, 120), icon: '<span class="menu-ic">' + icon(e.type === "spawn" ? "subagent" : e.type === "handoff" ? "handoff" : "hub", 16) + "</span>", onPick: () => focusAgent(e.to) || toast(e.to + " is not open.") });
+  dropdown(anchor, items, { width: 340, up: true });
 }
-
-// A notification or a subagent card asked to show a chat: its Code pane when
-// one is open on screen, otherwise the thread.
-on("open-chat", (chatId) => {
-  if (mode === "code" && focusAgent(chatId)) return;
-  setMode("threads");
-  openThread(chatId);
-});
 
 function onEvent({ type, payload }) {
   fire("app:" + type, payload);
@@ -196,136 +244,190 @@ function onEvent({ type, payload }) {
   else if (type === "panes-changed") {
     syncPanes(payload);
     refreshHubAgents();
-  } else if (type === "chats-changed") refreshChats();
+  } else if (type === "projects-changed") refreshProjects(payload);
+  else if (type === "chats-changed") refreshChats();
   else if (type === "hub-activity") {
     activity = payload;
-    paintAgents();
+    paintActivityBadge();
     updateActivity(payload);
   } else if (type === "update-status") {
-    update = payload;
-    paintTopbar();
+    store.update = payload;
+    noteUpdate(payload);
+    fire("update", payload);
   } else if (type === "usage") noteUsage(payload);
   else if (type === "toast") toast(payload.text);
 }
 
+async function refreshHubAgents() {
+  try {
+    store.hubAgents = await window.jagents.hub.agents();
+    fire("hub-agents", store.hubAgents);
+  } catch {
+    /* app closing */
+  }
+}
+
+function paintBanner() {
+  const b = app.querySelector("[data-hub-banner]");
+  if (!b) return;
+  b.hidden = Boolean(store.info.hubChosen);
+  if (b.hidden) return;
+  b.innerHTML =
+    icon("hub", 18) +
+    '<div class="grow"><b>Let these agents see each other?</b> The JAgents MCP hub lets Claude Code, Codex and chat agents list and message each other, read each other\'s work, spawn subagents, and hand off context.</div>' +
+    '<button class="btn sm primary" data-banner="on">Connect agents</button><button class="btn sm ghost" data-banner="details">Details</button><button class="btn sm ghost" data-banner="off">Not now</button>';
+}
+
+// A notification or a subagent card asked to show a chat: its tab when one is
+// open, otherwise the thread.
+on("open-chat", (chatId) => {
+  if (focusAgent(chatId)) {
+    if (mode !== "code") setMode("code");
+    return;
+  }
+  setMode("threads");
+  openThread(chatId);
+});
+on("switch-project", (dir) => switchProject(dir));
+on("open-help", (section) => {
+  setMode("help");
+  const el = document.getElementById("help-" + (section || "workspace"));
+  if (el) el.scrollIntoView({ block: "start" });
+});
+on("set-mode", (m) => setMode(m));
+on("project-counts", () => paintProjects());
+
+function sidebarWidth(px) {
+  const w = Math.min(420, Math.max(200, Math.round(px)));
+  document.documentElement.style.setProperty("--side-w", w + "px");
+  return w;
+}
+
+// Room for the window buttons Windows draws over the top-right corner.
+function fitWindowControls() {
+  const wco = navigator.windowControlsOverlay;
+  if (!wco || !wco.visible) return document.documentElement.style.setProperty("--wco-w", "0px");
+  const r = wco.getTitlebarAreaRect();
+  document.documentElement.style.setProperty("--wco-w", Math.max(0, Math.round(window.innerWidth - r.right)) + "px");
+}
+if (navigator.windowControlsOverlay) navigator.windowControlsOverlay.addEventListener("geometrychange", fitWindowControls);
+window.addEventListener("resize", fitWindowControls);
+
 async function boot() {
+  fitWindowControls();
   store.info = await window.jagents.appInfo();
+  store.projects = store.info.projects || [];
   setTheme(store.info.theme);
   await Promise.all([refreshAgents(), refreshChats()]);
   mode = ["threads", "help"].includes(store.info.mode) ? store.info.mode : "code";
+  if (store.info.sidebarWidth) sidebarWidth(store.info.sidebarWidth);
   app.innerHTML =
-    '<header class="topbar">' + topbarMarkup() + "</header>" +
     '<div class="body">' +
     '<aside class="sidebar">' +
-    '<div data-code-side class="side-pane"><p class="nav-label">Agents</p><div class="agent-list" data-agents></div><div class="plugin-side" data-plugin-side hidden></div><p class="nav-label">Activity</p><div class="side-activity" data-side-activity></div></div>' +
+    '<div class="side-top"><div class="seg mode-seg" role="tablist" aria-label="Mode">' +
+    '<button role="tab" data-mode="code">' + icon("grid", 14) + "Code</button>" +
+    '<button role="tab" data-mode="threads">' + icon("chat", 14) + "Threads</button></div></div>" +
+    '<div data-code-side class="side-pane">' +
+    '<div class="side-head"><p class="nav-label">Projects</p><button type="button" class="icon-btn side-add" data-project-add title="Add a project folder" aria-label="Add a project folder">' + icon("plus", 15) + "</button></div>" +
+    '<div class="project-list" data-projects role="list"></div>' +
+    '<div class="plugin-side" data-plugin-side hidden></div></div>' +
     '<div data-thread-side class="side-pane" hidden></div>' +
     '<div data-help-side class="side-pane" hidden></div>' +
-    // One dock at the bottom of the sidebar: Usage, Updates and Plugins, a
-    // line or two each. (.sidebar-updates stays as the hook plugins insert
-    // their sidebar sections above.)
-    '<section class="side-dock sidebar-updates" aria-label="Usage, updates and plugins">' +
-    '<div class="dock-usage" data-usage>' +
-    '<div class="dock-row">' + icon("usage", 14) + '<button type="button" class="dock-main" data-usage-open title="Usage for every agent"><b>Usage</b><span class="dock-sub" data-usage-summary>Checking</span></button>' +
-    '<button type="button" class="icon-btn dock-btn" data-usage-refresh title="Check usage now" aria-label="Check usage now">' + icon("restart", 13) + "</button></div>" +
-    '<button type="button" class="usage-rows" data-usage-open data-usage-rows title="Usage for every agent"></button></div>' +
-    '<div class="dock-row">' + icon("update", 14) + '<button type="button" class="dock-main" data-update-act="details" title="Version and updates"><b>Updates</b><span class="dock-sub" data-update-summary>Loading</span></button><span class="dock-act" data-update-actions></span></div>' +
-    '<div class="dock-row" data-plugin-card>' + icon("puzzle", 14) + '<button type="button" class="dock-main" data-plugins title="Manage plugins"><b>Plugins</b><span class="dock-sub" data-plugin-summary>Loading</span></button></div>' +
+    // The dock: activity, usage, settings and plugin buttons, then usage bars.
+    // (.sidebar-updates stays as the hook plugins insert sidebar sections above.)
+    '<section class="side-dock sidebar-updates" aria-label="Activity, usage and settings">' +
+    '<div class="dock-icons">' +
+    '<button type="button" class="dock-icon" data-menu-anchor data-activity title="Agent activity" aria-label="Agent activity">' + icon("tree", 15) + '<span class="dock-badge" data-activity-badge hidden></span></button>' +
+    '<button type="button" class="dock-icon" data-usage-open title="Usage for every agent" aria-label="Usage">' + icon("usage", 15) + "</button>" +
+    '<button type="button" class="dock-icon" data-settings title="Settings" aria-label="Settings">' + icon("gear", 15) + '<span class="dock-badge dot" data-settings-badge hidden></span></button>' +
+    '<span class="plugin-top" data-plugin-top></span>' +
+    '<span class="spacer"></span>' +
+    '<button type="button" class="dock-icon" data-usage-refresh title="Check usage now" aria-label="Check usage now">' + icon("restart", 14) + "</button></div>" +
+    '<div class="dock-usage" data-usage><button type="button" class="usage-rows" data-usage-open data-usage-rows title="Usage for every agent"></button><p class="dock-sub" data-usage-summary></p></div>' +
     "</section>" +
+    '<div class="side-resize" data-side-resize role="separator" aria-orientation="vertical" aria-label="Resize sidebar"></div>' +
     "</aside>" +
-    '<main class="main"><div class="code-mode" data-code-main></div><div class="thread-mode" data-thread-main hidden></div><div class="help-mode" data-help-main hidden></div></main>' +
+    '<main class="main"><div class="code-mode" data-code-main></div><div class="thread-mode" data-thread-main hidden></div><div class="help-mode" data-help-main hidden></div><div class="settings-page" data-settings-main hidden></div></main>' +
     "</div>";
   renderCodeMode(app.querySelector("[data-code-main]"));
   renderThreadMode(app.querySelector("[data-thread-side]"), app.querySelector("[data-thread-main]"), {
     splitThread: async (chatId) => {
+      const chat = store.chats.find((c) => c.id === chatId);
+      if (chat && chat.cwd && keyOf(chat.cwd) !== keyOf(store.info.cwd)) await switchProject(chat.cwd);
       await addChat("", chatId);
       setMode("code");
       setTimeout(() => focusAgent(chatId), 250);
     },
   });
   renderHelpMode(app.querySelector("[data-help-side]"), app.querySelector("[data-help-main]"));
-  initUsage(app.querySelector("[data-usage]"));
-  on("open-help", (section) => {
-    setMode("help");
-    const el = document.getElementById("help-" + (section || "overview"));
-    if (el) el.scrollIntoView({ block: "start" });
-  });
+  initUsage(app.querySelector(".side-dock"));
   syncPanes(await window.jagents.panes.list());
   activity = await window.jagents.hub.activity();
+  seenActivity = activity.length;
   setMode(mode);
+  paintProjects();
   paintBanner();
   refreshHubAgents();
   setInterval(refreshHubAgents, 2000);
   window.jagents.updates.state().then((u) => {
-    update = u;
-    paintTopbar();
+    store.update = u;
+    noteUpdate(u);
+    fire("update", u);
   }).catch(() => {});
   window.jagents.onEvent(onEvent);
   initChatPolish();
   initPlugins().catch((error) => toast("Plugins could not load: " + errorText(error)));
   on("hub", () => {
-    paintTopbar();
     paintBanner();
+    refreshSettings();
+  });
+  on("update", (u) => {
+    const dot = app.querySelector("[data-settings-badge]");
+    if (dot) dot.hidden = !(u && (u.available || u.applied));
+  });
+
+  // The sidebar's right edge resizes it.
+  app.querySelector("[data-side-resize]").addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    const side = app.querySelector(".sidebar");
+    const start = e.clientX;
+    const w0 = side.getBoundingClientRect().width;
+    let w = w0;
+    document.body.classList.add("resizing-cols");
+    const move = (ev) => {
+      w = sidebarWidth(w0 + ev.clientX - start);
+      window.dispatchEvent(new Event("resize"));
+    };
+    const up = () => {
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", up);
+      document.body.classList.remove("resizing-cols");
+      window.jagents.setSetting("ui.sidebarWidth", w).catch(() => {});
+    };
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
+  });
+
+  app.addEventListener("contextmenu", (e) => {
+    const p = e.target.closest("[data-project]");
+    if (!p) return;
+    e.preventDefault();
+    projectMenu(p, p.dataset.project);
   });
 
   app.addEventListener("click", async (e) => {
     const t = e.target;
-    const m = t.closest("[data-mode]");
+    const m = t.closest(".mode-seg [data-mode]");
     if (m) return setMode(m.dataset.mode);
-    const l = t.closest("[data-layout]");
-    if (l) {
-      setLayout(l.dataset.layout);
-      return paintTopbar();
-    }
-    if (t.closest("[data-add-pane]")) return addMenu(t.closest("[data-add-pane]"));
-    if (t.closest("[data-hub]")) return openHubPanel();
-    if (t.closest("[data-market]")) return openMarketplace();
-    if (t.closest("[data-updates]")) return openUpdatesPanel(false).catch((error) => toast(errorText(error)));
-    const ua = t.closest("[data-update-act]");
-    if (ua) {
-      const act = ua.dataset.updateAct;
-      try {
-        if (act === "details") await openUpdatesPanel(false);
-        else if (act === "check") await window.jagents.updates.check();
-        else if (act === "apply") await window.jagents.updates.apply();
-        else if (act === "restart") await window.jagents.updates.restart();
-      } catch (error) {
-        toast(errorText(error));
-      }
-      return;
-    }
-    if (t.closest("[data-plugins]")) return openPluginsPanel();
-    if (t.closest("[data-theme-toggle]")) {
-      const next = store.info.theme === "dark" ? "light" : "dark";
-      setTheme(next);
-      window.jagents.setSetting("theme", next);
-      return paintTopbar();
-    }
-    if (t.closest("[data-folder]")) {
-      try {
-        const dir = await window.jagents.pickFolder();
-        if (dir) {
-          store.info.cwd = dir;
-          paintTopbar();
-          toast("New agents start in " + dir);
-        }
-      } catch (error) {
-        toast(errorText(error));
-      }
-      return;
-    }
-    const agent = t.closest("[data-agent]");
-    if (agent) {
-      const a = store.hubAgents.find((x) => x.handle === agent.dataset.agent);
-      if (a && !focusAgent(a.handle) && a.kind === "chat") {
-        setMode("threads");
-        openThread(a.id);
-      }
-      return;
-    }
+    const p = t.closest("[data-project]");
+    if (p) return switchProject(p.dataset.project);
+    if (t.closest("[data-project-add]")) return addProject();
+    if (t.closest("[data-activity]")) return activityMenu(t.closest("[data-activity]"));
+    if (t.closest("[data-settings]")) return settingsOpen() ? closeSettings() : openSettings();
     const banner = t.closest("[data-banner]");
     if (banner) {
       const v = banner.dataset.banner;
-      if (v === "details") return openHubPanel();
+      if (v === "details") return openSettings("hub");
       store.info.hubChosen = true;
       await window.jagents.setSetting("hub.chosen", true);
       if (v === "on") {
@@ -336,7 +438,7 @@ async function boot() {
       fire("hub", store.info);
     }
   });
-  paintTopbar();
+  paintModes();
 }
 
 boot()

@@ -106,16 +106,19 @@ function apiFor(p, storage, cleanups) {
         return window.jagents.plugins.storageSet(id, String(key), value === undefined ? null : value);
       },
     },
+    // There is no top bar since v0.6: plugin buttons sit with the icons at the
+    // bottom of the sidebar, icon only, with the label as their tooltip.
     topbar: {
       button(opts) {
         const o = opts || {};
         const host = document.querySelector("[data-plugin-top]");
         const b = document.createElement("button");
-        b.className = o.label ? "btn sm ghost plugin-top-btn" : "icon-btn plugin-top-btn";
+        b.type = "button";
+        b.className = "dock-icon plugin-top-btn";
         b.dataset.plugin = id;
         b.title = String(o.title || o.label || p.name);
         b.setAttribute("aria-label", b.title);
-        b.innerHTML = iconHtml(o.icon, 16) + (o.label ? "<span>" + esc(o.label) + "</span>" : "");
+        b.innerHTML = iconHtml(o.icon, 15);
         if (o.onClick) b.addEventListener("click", guard(id, (e) => o.onClick(e, b)));
         if (host) host.appendChild(b);
         const remove = () => b.remove();
@@ -419,20 +422,14 @@ async function showCode(id) {
 
 export async function openPluginsPanel() {
   store.plugins = await window.jagents.plugins.list();
-  const m = modal(panelMarkup(), { wide: true });
+  let offState = () => {};
+  const m = modal(panelMarkup(), { wide: true, onClose: () => offState() });
   m.el.classList.add("plugins-panel");
   const repaint = () => {
     if (!m.el.isConnected) return;
     m.el.innerHTML = panelMarkup();
   };
-  const offState = on("plugins", repaint);
-  const watcher = new MutationObserver(() => {
-    if (!m.el.isConnected) {
-      offState();
-      watcher.disconnect();
-    }
-  });
-  watcher.observe(document.body, { childList: true });
+  offState = on("plugins", repaint);
   const run = async (btn, fn) => {
     if (btn) btn.disabled = true;
     try {

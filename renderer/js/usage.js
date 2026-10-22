@@ -76,7 +76,8 @@ function paint() {
   if (!box) return;
   const sum = box.querySelector("[data-usage-summary]");
   const rows = box.querySelector("[data-usage-rows]");
-  box.querySelector("[data-usage-refresh]").disabled = busy;
+  const rb = box.querySelector("[data-usage-refresh]");
+  if (rb) rb.disabled = busy;
   box.classList.toggle("busy", busy);
   if (!data) {
     sum.textContent = "Checking";
@@ -95,6 +96,10 @@ function paint() {
   sum.hidden = !s;
   sum.classList.toggle("warn-text", Boolean(issues.length));
   sum.title = issues.map((p) => p.name + ": " + (p.message || "unavailable")).join("\n");
+}
+
+export function openUsagePanel() {
+  return details();
 }
 
 function details() {
