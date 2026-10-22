@@ -139,8 +139,17 @@ export function openNewTabPicker(anchor, opts) {
   const width = Math.min(340, window.innerWidth - 16);
   el.style.width = width + "px";
   el.style.left = Math.max(8, Math.min(box.left, window.innerWidth - width - 8)) + "px";
-  el.style.top = box.bottom + 6 + "px";
-  el.style.maxHeight = Math.max(220, window.innerHeight - box.bottom - 14) + "px";
+  // Opens toward the side with more room, so the agent list is never pushed
+  // off the bottom of the window by a button low on the screen.
+  const below = window.innerHeight - box.bottom - 14;
+  const above = box.top - 14;
+  if (below >= 360 || below >= above) {
+    el.style.top = box.bottom + 6 + "px";
+    el.style.maxHeight = Math.max(160, below) + "px";
+  } else {
+    el.style.bottom = window.innerHeight - box.top + 6 + "px";
+    el.style.maxHeight = Math.max(160, above) + "px";
+  }
 
   input.addEventListener("input", paint);
   list.addEventListener("click", (e) => {
