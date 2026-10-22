@@ -518,19 +518,16 @@ function moreMenu(anchor, groupId) {
 }
 
 function addFromPicker(anchor, groupId) {
-  const tabs = projectTabs()
-    .map((id) => panes.get(id))
-    .filter(Boolean)
-    .map((entry) => ({ id: entry.pane.id, title: tabTitle(entry.pane, entry), detail: [entry.pane.name, entry.pane.handle].filter(Boolean).join(" "), icon: tabIcon(entry.pane, 14) }));
   openNewTabPicker(anchor, {
     cwd: store.info.cwd,
-    tabs,
     onPick: async (choice) => {
-      if (choice.kind === "switch") return activate(choice.id, true);
       intoGroup(groupId);
       if (choice.kind === "terminal") await addTerminal(choice.id);
       else if (choice.kind === "chat") await addChat(choice.id, choice.chatId);
-      else if (choice.kind === "plugin") await openPluginPane(choice.key, { state: choice.state, title: choice.title });
+      else if (choice.kind === "pair") {
+        await addTerminal("claude");
+        await addTerminal("codex");
+      } else if (choice.kind === "plugin") await openPluginPane(choice.key, { state: choice.state, title: choice.title });
     },
   });
 }

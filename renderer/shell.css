@@ -219,39 +219,11 @@ html[data-theme="dark"] .switch { background: oklch(1 0 0 / 0.14); }
 .split[data-dir="column"] > .group-split { height: 1px; cursor: row-resize; }
 .split[data-dir="column"] > .group-split::after { inset: -3px 0; }
 
-/* ---------- New-tab menu (the "+"), after Orca's ---------- */
-.ntp { position: fixed; z-index: 70; display: flex; flex-direction: column; padding: 4px; border-radius: 11px; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; scrollbar-color: color-mix(in oklch, var(--muted) 34%, transparent) transparent; border: 1px solid oklch(0.9 0 0 / 0.8); background: rgba(255, 255, 255, 0.82); backdrop-filter: blur(40px); color: #000; box-shadow: 0 16px 36px rgba(0, 0, 0, 0.24); font-size: 12px; -webkit-app-region: no-drag; transform-origin: top left; animation: ntp-in 0.15s ease; }
-html[data-theme="dark"] .ntp { border-color: rgba(255, 255, 255, 0.14); background: rgba(0, 0, 0, 0.72); color: #fff; box-shadow: 0 16px 34px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.04); }
-.ntp.closing { animation: ntp-out 0.15s ease forwards; pointer-events: none; }
-@keyframes ntp-in { from { opacity: 0; transform: translateY(-8px) scale(0.98); } }
-@keyframes ntp-out { to { opacity: 0; transform: scale(0.95); } }
-@media (prefers-reduced-motion: reduce) { .ntp, .ntp.closing { animation: none; } }
-.ntp-search { flex: none; display: flex; align-items: center; margin: 0 -4px; padding: 0 12px 4px; }
-.ntp-search input { width: 100%; height: 36px; padding: 4px 0; border: 0; border-radius: 0; background: transparent; color: var(--ink); font: inherit; font-size: 12px; line-height: 16px; outline: none; box-shadow: none; }
-.ntp-search input::placeholder { color: var(--muted); }
-.ntp-list { display: flex; flex-direction: column; }
-.ntp-sep { flex: none; height: 1px; margin: 3px 0; background: color-mix(in oklch, var(--line) 60%, transparent); }
-.ntp-row { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 6px 8px; border-radius: 7px; font-size: 12px; line-height: 20px; font-weight: 500; cursor: default; user-select: none; }
-.ntp-row.hi { background: rgba(0, 0, 0, 0.08); }
-html[data-theme="dark"] .ntp-row.hi { background: rgba(255, 255, 255, 0.14); }
-.ntp-row.disabled, .ntp-hit.disabled { opacity: 0.5; pointer-events: none; }
-.ntp-ic { flex: none; display: inline-grid; place-items: center; width: 16px; height: 16px; color: var(--muted); }
-.ntp-ic svg { display: block; }
-.ntp-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ntp-reason { flex: none; font-weight: 400; color: var(--muted); }
-.ntp-key { flex: none; margin-left: auto; font-size: 11px; color: color-mix(in oklch, var(--muted) 85%, transparent); }
-.ntp-foot, .ntp-empty { color: var(--muted); }
-.ntp-cli { flex: none; display: grid; place-items: center; width: 24px; height: 24px; margin: -2px -2px -2px 0; border-radius: 6px; opacity: 0; color: var(--muted); }
-.ntp-row.hi .ntp-cli, .ntp-cli.hi { opacity: 1; }
-.ntp-cli:hover, .ntp-cli.hi { background: rgba(0, 0, 0, 0.08); }
-html[data-theme="dark"] .ntp-cli:hover, html[data-theme="dark"] .ntp-cli.hi { background: rgba(255, 255, 255, 0.14); }
-.ntp-results { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; padding: 0 4px; }
-.ntp-hit { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 4px; border-radius: 7px; font-size: 11px; line-height: 20px; color: var(--muted); cursor: default; }
-.ntp-hit .ntp-ic { width: 14px; height: 14px; }
-.ntp-hit.hi { background: rgba(0, 0, 0, 0.08); color: var(--ink); }
-html[data-theme="dark"] .ntp-hit.hi { background: rgba(255, 255, 255, 0.14); }
-.ntp-hit-label { flex: none; max-width: 50%; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ntp-dot { flex: none; color: color-mix(in oklch, var(--muted) 70%, transparent); }
-.ntp-detail { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ntp-status { display: flex; align-items: center; min-height: 24px; padding: 0 4px; font-size: 11px; color: var(--muted); }
+/* ---------- The "+" add list: title and search pinned, the list scrolls ---------- */
+.news-menu.add-menu { padding: 0; gap: 0; overflow: hidden; -webkit-app-region: no-drag; }
+.add-menu-head { flex: none; border-bottom: 1px solid var(--line); }
+.add-menu-title { margin: 0; padding: 10px 14px 0; font-size: 13px; font-weight: 600; color: var(--ink); }
+.add-menu-head .menu-search { position: static; margin: 0; padding: 8px 14px 10px; border: 0; background: transparent; }
+.add-menu-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; padding: 6px; }
+.add-menu-empty { margin: 10px 8px; color: var(--muted); font-size: 12.5px; }
 .ai-agent-logo { flex: none; }
