@@ -2,6 +2,20 @@
 
 A desktop workspace for coding agents. Run Claude Code, Codex, Devin, Cursor, Gemini and other agents side by side in terminals and chats. The built-in `jagents` MCP server lets them see each other, send messages, read each other's work, start subagents, and hand off context.
 
+## Install on Windows
+
+Open PowerShell and run:
+
+```powershell
+irm https://raw.githubusercontent.com/Josephivgi/JAgents/main/install.ps1 | iex
+```
+
+It downloads the latest release from GitHub, adds it to the Start Menu, and pins it to the taskbar. No administrator rights are needed, and Windows does not show the "Windows protected your PC" warning. To install every JSystems app (Simple Recorder, JAgents, JPerformance, JServer) at once:
+
+```powershell
+$env:JSYSTEMS_APPS='all'; irm https://raw.githubusercontent.com/Josephivgi/JAgents/main/install.ps1 | iex
+```
+
 ## Run
 
 ```
