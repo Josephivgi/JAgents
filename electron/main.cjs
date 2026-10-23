@@ -518,6 +518,7 @@ app.whenReady().then(async () => {
   });
   ws = createWorkspace({ db, dataRoot: DATA_ROOT, ptyHost, acpHost: acp, emit: broadcast, hubFiles, pluginMcp: () => plugins.agentMcp() });
   workspace = ws;
+  openProjectArg(process.argv);
   hub = createHub({ workspace, ptyHost, acpHost: acp, plugins, dataRoot: DATA_ROOT, emit: broadcast, notify, restartApp });
   await hub.start();
   plugins.start({ hubCall: (name, args) => hub.call(name, args, null), onToolsChanged: () => hub.toolsChanged() });
@@ -547,17 +548,36 @@ app.whenReady().then(async () => {
   setInterval(autoCheck, 6 * 60 * 60 * 1000);
 });
 
+// `--project=<folder>` (the CLI's Desktop button) opens that folder as the
+// active project, on first launch or in the window that is already running.
+function openProjectArg(argv) {
+  const arg = (argv || []).find((a) => String(a).startsWith("--project="));
+  if (!arg || !workspace) return;
+  try {
+    workspace.addProject(path.resolve(arg.slice("--project=".length)));
+  } catch (error) {
+    log("--project ignored: " + (error.message || error));
+  }
+}
+
 // Opening JAgents again shows the running one. Before startup finishes there
 // is no window yet; it opens and comes forward on its own then.
-app.on("second-instance", () => {
+app.on("second-instance", (_event, argv) => {
   log("second launch: showing the running window");
+  openProjectArg(argv);
   if (!mainWindow || mainWindow.isDestroyed()) {
     if (started) createWindow();
     return;
   }
+  if (mainWindow.webContents.isCrashed()) mainWindow.reload();
   if (mainWindow.isMinimized()) mainWindow.restore();
+  // Windows keeps a background app from taking focus; topmost for a moment
+  // brings the window over the terminal that asked for it.
+  mainWindow.setAlwaysOnTop(true);
   mainWindow.show();
   mainWindow.focus();
+  app.focus({ steal: true });
+  mainWindow.setAlwaysOnTop(false);
 });
 
 // A dead GPU process can leave the window blank until it repaints.

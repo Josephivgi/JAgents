@@ -9,6 +9,9 @@
     "url": "https://github.com/Josephivgi/JAgents.git"
   },
   "main": "electron/main.cjs",
+  "bin": {
+    "jagents": "cli/jagents.cjs"
+  },
   "scripts": {
     "start": "electron .",
     "test": "node --test --test-concurrency=1 \"test/*.test.js\"",
