@@ -1,119 +1,176 @@
-# Installs the JAgents terminal app (the `jagents` command) from the latest
-# GitHub release:
-#
-#   irm https://raw.githubusercontent.com/Josephivgi/JAgents/main/install.ps1 | iex
-#
-# It downloads the release's app package (JAgents-<tag>.tar.gz), puts it in
-# %LOCALAPPDATA%\JAgents-Terminal\app, installs what the terminal app needs
-# (node-pty, @xterm/headless), and adds %LOCALAPPDATA%\JAgents-Terminal\bin to
-# your user PATH. Run it again to update. Needs Node.js 22 or newer.
-#
-# JAGENTS_HOME installs somewhere else. JAGENTS_SOURCE installs a local
-# package instead of downloading one. JAGENTS_NO_PATH=1 leaves PATH alone.
+<#
+  JSystems installer: installs the latest release of JSystems apps straight
+  from GitHub Releases and pins them to the Windows taskbar. The same file
+  is in each app's repo; on its own it installs that repo's app.
 
+    This app:      irm https://raw.githubusercontent.com/Josephivgi/JAgents/main/install.ps1 | iex
+    Every app:     $env:JSYSTEMS_APPS='all'; irm <same url> | iex
+    Some apps:     $env:JSYSTEMS_APPS='JAgents,JServer'; irm <same url> | iex
+    Skip pinning:  $env:JSYSTEMS_NOPIN='1'
+    Skip the JAgents terminal app:  $env:JSYSTEMS_NOTERMINAL='1'
+
+  Per user, no admin. Downloads are made with PowerShell, so Windows does
+  not mark them as "from the internet" and SmartScreen does not stop them.
+#>
+# Runs in its own scope so irm | iex leaves the caller's session unchanged.
 & {
-  $ErrorActionPreference = 'Stop'
-  $ProgressPreference = 'SilentlyContinue'
-  [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-  $repo = 'Josephivgi/JAgents'
+$ThisApp = 'JAgents'
 
-  function Fail($message) {
-    Write-Host "JAgents install failed: $message" -ForegroundColor Red
-    throw $message
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+
+$Owner = 'Josephivgi'
+$Programs = Join-Path $env:LOCALAPPDATA 'Programs'
+$StartMenu = [Environment]::GetFolderPath('Programs')
+
+# Kind 'setup': an NSIS setup run with /S. Kind 'exe': a single portable exe.
+$Apps = @(
+  @{ Name = 'Simple Recorder'; Repo = 'simple-recorder'; Asset = 'SimpleRecorder-Setup.exe'; Kind = 'setup'; Exe = 'Simple Recorder.exe' }
+  @{ Name = 'JAgents';         Repo = 'JAgents';         Asset = 'JAgents-Setup.exe';        Kind = 'setup'; Exe = 'JAgents.exe' }
+  @{ Name = 'JPerformance';    Repo = 'JPerformance';    Asset = 'JPerformance.exe';         Kind = 'exe';   Exe = 'JPerformance.exe' }
+  @{ Name = 'JServer';         Repo = 'JServer';         Asset = 'JServer.exe';              Kind = 'exe';   Exe = 'JServer.exe' }
+)
+$want = if ($env:JSYSTEMS_APPS) { $env:JSYSTEMS_APPS -split ',' | ForEach-Object { $_.Trim() } } else { @($ThisApp) }
+if ($want -notcontains 'all') { $Apps = @($Apps | Where-Object { $want -contains $_.Name -or $want -contains $_.Repo }) }
+$NoPin = [bool]$env:JSYSTEMS_NOPIN
+$NoTerminal = [bool]$env:JSYSTEMS_NOTERMINAL
+# The variables last for the whole PowerShell session; clear them so a later run starts clean.
+Remove-Item Env:JSYSTEMS_APPS, Env:JSYSTEMS_NOPIN, Env:JSYSTEMS_NOTERMINAL -ErrorAction SilentlyContinue
+
+function Get-Release($app) {
+  $rel = Invoke-RestMethod "https://api.github.com/repos/$Owner/$($app.Repo)/releases/latest" -Headers @{ 'User-Agent' = 'jsystems-install' }
+  $asset = $rel.assets | Where-Object name -eq $app.Asset | Select-Object -First 1
+  if (-not $asset) { throw "$($app.Asset) is missing from $($app.Repo) $($rel.tag_name)" }
+  [pscustomobject]@{ Tag = $rel.tag_name; Url = $asset.browser_download_url; Digest = $asset.digest }
+}
+
+function Save-Asset($release, $dest) {
+  Invoke-WebRequest $release.Url -OutFile $dest -UseBasicParsing -Headers @{ 'User-Agent' = 'jsystems-install' }
+  # GitHub publishes a sha256 for each asset; refuse a download that does not match.
+  if ($release.Digest -match '^sha256:(.+)$') {
+    $hash = (Get-FileHash $dest -Algorithm SHA256).Hash
+    if ($hash -ne $Matches[1]) { throw "checksum mismatch for $(Split-Path $dest -Leaf)" }
   }
+  Unblock-File $dest
+}
 
-  $root = if ($env:JAGENTS_HOME) { $env:JAGENTS_HOME } else { Join-Path $env:LOCALAPPDATA 'JAgents-Terminal' }
+function New-Shortcut($lnk, $target) {
+  $ws = New-Object -ComObject WScript.Shell
+  $sc = $ws.CreateShortcut($lnk)
+  $sc.TargetPath = $target
+  $sc.WorkingDirectory = Split-Path $target
+  $sc.IconLocation = "$target,0"
+  $sc.Save()
+}
 
-  if (-not (Get-Command node -ErrorAction SilentlyContinue)) { Fail 'Node.js is not installed. Get version 22 or newer from https://nodejs.org, then run this again.' }
-  $major = [int](node -p "process.versions.node.split('.')[0]")
-  if ($major -lt 22) { Fail "Node.js $(node -v) is too old. Install version 22 or newer from https://nodejs.org." }
-  if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { Fail 'npm is missing. It comes with Node.js from https://nodejs.org.' }
-
-  if ($env:JAGENTS_SOURCE) {
-    $package = $env:JAGENTS_SOURCE
-    $tag = 'local package'
-  } else {
-    Write-Host 'Finding the latest JAgents release...'
-    $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest" -Headers @{ 'User-Agent' = 'jagents-install' }
-    $tag = $release.tag_name
-    $asset = $release.assets | Where-Object { $_.name -like 'JAgents-*.tar.gz' } | Select-Object -First 1
-    if (-not $asset) { Fail "Release $tag has no app package." }
-    $package = Join-Path $env:TEMP $asset.name
-    Write-Host "Downloading JAgents $tag..."
-    Invoke-WebRequest $asset.browser_download_url -OutFile $package -UseBasicParsing
-  }
-
-  New-Item -ItemType Directory -Force $root | Out-Null
-  $stage = Join-Path $root 'staging'
-  if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
-  New-Item -ItemType Directory $stage | Out-Null
-  # Windows' own tar: Git's (when it is first on PATH) reads C: as a host name.
-  $tarExe = Join-Path $env:SystemRoot 'System32\tar.exe'
-  if (-not (Test-Path $tarExe)) { $tarExe = 'tar' }
-  & $tarExe -xzf $package -C $stage
-  if ($LASTEXITCODE) { Fail "Could not unpack $package." }
-  $src = Join-Path $stage 'JAgents'
-  if (-not (Test-Path (Join-Path $src 'cli\jagents.cjs'))) {
-    Remove-Item $stage -Recurse -Force
-    Fail "JAgents $tag has no terminal app yet."
-  }
-
-  Write-Host 'Installing the terminal app''s packages...'
-  Push-Location (Join-Path $src 'cli')
+function Install-App($app) {
+  $release = Get-Release $app
+  Write-Host "  $($app.Name) $($release.Tag)" -NoNewline
+  $tmp = Join-Path ([IO.Path]::GetTempPath()) ("jsystems-" + [guid]::NewGuid())
+  New-Item -ItemType Directory $tmp | Out-Null
   try {
-    npm install --omit=dev --no-audit --no-fund --loglevel=error
-    $code = $LASTEXITCODE
-  } finally {
-    Pop-Location
-  }
-  if ($code) { Fail 'npm install failed. The output above says why.' }
-
-  # A running jagents keeps its folder in use (node-pty's DLL is loaded), so
-  # each install gets a new one. current.txt is written last: open windows
-  # watch it and move to the new folder once it is complete.
-  $name = 'app-' + (($tag -replace '[^\w.-]', '-') + '-' + (Get-Date -Format 'yyyyMMddHHmmss'))
-  $app = Join-Path $root $name
-  Move-Item $src $app
-  Remove-Item $stage -Recurse -Force
-  if (-not $env:JAGENTS_SOURCE) { Remove-Item $package -Force -ErrorAction SilentlyContinue }
-  Set-Content (Join-Path $root 'current.txt') $app -Encoding Ascii -NoNewline
-
-  # Older folders, and the single app folder from before versioned installs.
-  # An open window still runs node-pty from its folder and marks it with
-  # .running\<pid>; such a folder stays whole until the next install.
-  function InUse($dir) {
-    $marks = Join-Path $dir '.running'
-    if (-not (Test-Path $marks)) { return $false }
-    foreach ($m in Get-ChildItem $marks -File) {
-      $p = Get-Process -Id ([int]$m.Name) -ErrorAction SilentlyContinue
-      if ($p -and $p.ProcessName -eq 'node') { return $true }
+    $file = Join-Path $tmp $app.Asset
+    Save-Asset $release $file
+    if ($app.Kind -eq 'setup') {
+      # WaitForExit, not -Wait: the setup opens the app when it finishes, and
+      # -Wait would also wait for the app to close. /S setups show no window.
+      $p = Start-Process $file -ArgumentList '/S' -PassThru
+      $p.WaitForExit()
+      if ($p.ExitCode -ne 0) { throw "setup exited with code $($p.ExitCode). Close $($app.Name) and run this again." }
+    } else {
+      $dir = Join-Path $Programs $app.Name
+      New-Item -ItemType Directory $dir -Force | Out-Null
+      $exe = Join-Path $dir $app.Exe
+      try { Copy-Item $file $exe -Force }
+      catch { throw "$($app.Exe) is in use. Close $($app.Name) (and its background recorder) and run this again." }
+      New-Shortcut (Join-Path $StartMenu "$($app.Name).lnk") $exe
     }
+    Write-Host '  installed' -ForegroundColor Green
+    return $true
+  } catch {
+    Write-Host "  failed: $($_.Exception.Message)" -ForegroundColor Red
     return $false
+  } finally {
+    Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
   }
-  Get-ChildItem $root -Directory | Where-Object { ($_.Name -eq 'app' -or $_.Name -like 'app-*') -and $_.FullName -ne $app } | ForEach-Object {
-    if (-not (InUse $_.FullName)) {
-      try { Remove-Item $_.FullName -Recurse -Force -ErrorAction Stop } catch { }
+}
+
+# Windows 11 has no public "pin to taskbar" call for desktop apps. The supported
+# route is a taskbar layout file set by user policy: Explorer reads it when it
+# starts and adds the listed Start Menu shortcuts to the taskbar. Existing pins
+# stay, and anything pinned this way can still be unpinned by hand.
+function Set-TaskbarPins($names) {
+  $key = 'HKCU:\Software\Policies\Microsoft\Windows\Explorer'
+  $layout = Join-Path $env:LOCALAPPDATA 'JSystems\TaskbarLayout.xml'
+  $current = (Get-ItemProperty $key -ErrorAction SilentlyContinue).StartLayoutFile
+  if ($current -and $current -ne $layout) {
+    Write-Host "  skipped: another taskbar layout policy is already set ($current)" -ForegroundColor Yellow
+    return
+  }
+  # Keep apps pinned by an earlier run, so -Only never unpins the others.
+  $all = @($names)
+  if (Test-Path $layout) {
+    $all += ([xml](Get-Content $layout -Raw)).SelectNodes("//*[local-name()='DesktopApp']") |
+      ForEach-Object { [IO.Path]::GetFileNameWithoutExtension($_.DesktopApplicationLinkPath) }
+  }
+  $all = $all | Where-Object { Test-Path (Join-Path $StartMenu "$_.lnk") } | Sort-Object -Unique
+  $pins = ($all | ForEach-Object {
+    "        <taskbar:DesktopApp DesktopApplicationLinkPath=""%APPDATA%\Microsoft\Windows\Start Menu\Programs\$_.lnk"" />"
+  }) -join "`r`n"
+  New-Item -ItemType Directory (Split-Path $layout) -Force | Out-Null
+  @"
+<?xml version="1.0" encoding="utf-8"?>
+<LayoutModificationTemplate
+    xmlns="http://schemas.microsoft.com/Start/2014/LayoutModification"
+    xmlns:defaultlayout="http://schemas.microsoft.com/Start/2014/FullDefaultLayout"
+    xmlns:start="http://schemas.microsoft.com/Start/2014/StartLayout"
+    xmlns:taskbar="http://schemas.microsoft.com/Start/2014/TaskbarLayout"
+    Version="1">
+  <CustomTaskbarLayoutCollection>
+    <defaultlayout:TaskbarLayout>
+      <taskbar:TaskbarPinList>
+$pins
+      </taskbar:TaskbarPinList>
+    </defaultlayout:TaskbarLayout>
+  </CustomTaskbarLayoutCollection>
+</LayoutModificationTemplate>
+"@ | Set-Content $layout -Encoding UTF8
+  New-Item $key -Force | Out-Null
+  Set-ItemProperty $key StartLayoutFile $layout -Type ExpandString
+  Set-ItemProperty $key LockedStartLayout 1 -Type DWord
+  # Explorer applies the layout when it starts; this briefly redraws the taskbar.
+  Get-Process explorer -ErrorAction SilentlyContinue | Stop-Process -Force
+  Start-Sleep -Seconds 2
+  if (-not (Get-Process explorer -ErrorAction SilentlyContinue)) { Start-Process explorer.exe }
+  Write-Host "  $($all -join ', ') added to the taskbar layout. If one is missing, sign out and back in." -ForegroundColor Green
+}
+
+Write-Host 'Installing JSystems apps from GitHub Releases'
+$done = @()
+foreach ($app in $Apps) { if (Install-App $app) { $done += $app.Name } }
+
+# JAgents also has a terminal app (the jagents command), installed by
+# install-terminal.ps1. It needs Node.js 22 or newer; without it the desktop
+# app is still installed and this says how to add the terminal app later.
+if ($done -contains 'JAgents' -and -not $NoTerminal) {
+  Write-Host 'Installing the JAgents terminal app'
+  $major = if (Get-Command node -ErrorAction SilentlyContinue) { [int](node -p "process.versions.node.split('.')[0]") } else { 0 }
+  if ($major -lt 22) {
+    Write-Host '  skipped: it needs Node.js 22 or newer from https://nodejs.org. Run this again after installing it.' -ForegroundColor Yellow
+  } else {
+    try {
+      Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/$Owner/JAgents/main/install-terminal.ps1" -Headers @{ 'User-Agent' = 'jsystems-install' })
+    } catch {
+      Write-Host "  failed: $($_.Exception.Message)" -ForegroundColor Red
     }
   }
+}
 
-  $bin = Join-Path $root 'bin'
-  New-Item -ItemType Directory -Force $bin | Out-Null
-  Set-Content (Join-Path $bin 'jagents.cmd') "@node `"$app\cli\jagents.cjs`" %*" -Encoding Ascii
-
-  if ($env:JAGENTS_NO_PATH -ne '1') {
-    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $parts = @($userPath -split ';' | Where-Object { $_ })
-    if ($parts -notcontains $bin) {
-      [Environment]::SetEnvironmentVariable('Path', (($parts + $bin) -join ';'), 'User')
-      Write-Host "Added $bin to your PATH."
-    }
-    if (($env:Path -split ';') -notcontains $bin) { $env:Path = "$env:Path;$bin" }
-  }
-
-  Write-Host ''
-  node (Join-Path $app 'cli\jagents.cjs') --version
-  Write-Host ''
-  Write-Host 'Run  jagents  to start. New terminals pick up the PATH change.' -ForegroundColor Green
-  Write-Host 'Open jagents windows switch to this version on their own.'
-  Write-Host 'Run  jagents install-desktop  for the desktop app.'
+if ($done -and -not $NoPin) {
+  Write-Host 'Pinning to the taskbar'
+  Set-TaskbarPins $done
+}
+if (-not $Apps) { Write-Host 'No app matched JSYSTEMS_APPS. Use all, or names like JAgents,JServer.' -ForegroundColor Red }
+Write-Host "Done. $($done.Count) of $($Apps.Count) apps installed."
 }

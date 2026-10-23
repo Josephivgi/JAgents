@@ -31,7 +31,7 @@ const pkg = require(path.join(APP_ROOT, "package.json"));
 const { listTerminalAgents } = require(path.join(APP_ROOT, "lib", "agents"));
 const desk = require("./desktop.cjs");
 
-const INSTALL_PS1 = "https://raw.githubusercontent.com/" + desk.REPO + "/main/install.ps1";
+const INSTALL_PS1 = "https://raw.githubusercontent.com/" + desk.REPO + "/main/install-terminal.ps1";
 const ESC = "\x1b";
 const CSI = ESC + "[";
 
@@ -137,7 +137,7 @@ if (argv[0] === "install-desktop") {
 }
 if (argv[0] === "update") {
   if (process.platform !== "win32") {
-    process.stderr.write("jagents update runs install.ps1, which is for Windows.\n");
+    process.stderr.write("jagents update runs install-terminal.ps1, which is for Windows.\n");
     process.exit(1);
   }
   const ps = spawn("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "irm " + INSTALL_PS1 + " | iex"], { stdio: "inherit", windowsHide: true });
@@ -163,7 +163,7 @@ if (!process.stdin.isTTY || !process.stdout.isTTY) {
 
 // ---- the host -------------------------------------------------------------
 
-// cli/node_modules when installed by install.ps1, the app's own in a checkout.
+// cli/node_modules when installed by install-terminal.ps1, the app's own in a checkout.
 // Loaded once: the panes' programs belong to these copies for the session.
 const pty = require("node-pty");
 const { Terminal } = require("@xterm/headless");
@@ -263,7 +263,7 @@ function watchCode() {
   }
 }
 
-// An install (install.ps1) puts each version in its own folder next to this
+// An install (install-terminal.ps1) puts each version in its own folder next to this
 // one and writes that folder's path to current.txt last. A running window
 // moves to it: the old folder stays in use until this window closes.
 const CURRENT = path.join(path.dirname(APP_ROOT), "current.txt");
@@ -277,7 +277,7 @@ function readCurrent() {
 }
 if (fs.existsSync(CURRENT)) {
   // This window runs node-pty from APP_ROOT for as long as it is open; the
-  // mark tells install.ps1 to leave the folder alone.
+  // mark tells install-terminal.ps1 to leave the folder alone.
   const mark = path.join(APP_ROOT, ".running", String(process.pid));
   try {
     fs.mkdirSync(path.dirname(mark), { recursive: true });

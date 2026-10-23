@@ -1,7 +1,7 @@
 {
   "name": "jagents-terminal",
   "private": true,
-  "description": "What the jagents terminal app needs on its own. install.ps1 installs these; a checkout uses the app's node_modules.",
+  "description": "What the jagents terminal app needs on its own. install-terminal.ps1 installs these; a checkout uses the app's node_modules.",
   "dependencies": {
     "@xterm/headless": "^6.0.0",
     "node-pty": "^1.1.0"
