@@ -80,7 +80,19 @@ Section "Install"
   unlocked:
 
   ; The updater rewrites resources\app; start it clean so no old files linger.
-  RMDir /r "$INSTDIR\resources\app"
+  ; Deleting 5,000+ old files took about 15 seconds, so the old folder is
+  ; renamed aside (instant) and deleted after JAgents has started. If it cannot
+  ; be renamed, it is deleted here as before.
+  StrCpy $R3 ""
+  RMDir /r "$INSTDIR\resources\app.old"
+  IfFileExists "$INSTDIR\resources\app\*.*" 0 fresh
+    ClearErrors
+    Rename "$INSTDIR\resources\app" "$INSTDIR\resources\app.old"
+    IfErrors 0 +3
+      RMDir /r "$INSTDIR\resources\app"
+      Goto fresh
+    StrCpy $R3 "$INSTDIR\resources\app.old"
+  fresh:
   DetailPrint "Installing ${APP} ${VERSION}..."
   InitPluginsDir
   SetOutPath "$PLUGINSDIR"
@@ -118,6 +130,8 @@ Section "Install"
 
   Exec '"$INSTDIR\JAgents.exe"'
   done:
+  StrCmp $R3 "" +2
+    RMDir /r "$R3"
 SectionEnd
 
 Section "Uninstall"
