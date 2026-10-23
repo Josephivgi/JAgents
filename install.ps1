@@ -7,7 +7,6 @@
     Every app:     $env:JSYSTEMS_APPS='all'; irm <same url> | iex
     Some apps:     $env:JSYSTEMS_APPS='JAgents,JServer'; irm <same url> | iex
     Skip pinning:  $env:JSYSTEMS_NOPIN='1'
-    Skip the JAgents terminal app:  $env:JSYSTEMS_NOTERMINAL='1'
 
   Per user, no admin. Downloads are made with PowerShell, so Windows does
   not mark them as "from the internet" and SmartScreen does not stop them.
@@ -34,15 +33,22 @@ $Apps = @(
 $want = if ($env:JSYSTEMS_APPS) { $env:JSYSTEMS_APPS -split ',' | ForEach-Object { $_.Trim() } } else { @($ThisApp) }
 if ($want -notcontains 'all') { $Apps = @($Apps | Where-Object { $want -contains $_.Name -or $want -contains $_.Repo }) }
 $NoPin = [bool]$env:JSYSTEMS_NOPIN
-$NoTerminal = [bool]$env:JSYSTEMS_NOTERMINAL
 # The variables last for the whole PowerShell session; clear them so a later run starts clean.
-Remove-Item Env:JSYSTEMS_APPS, Env:JSYSTEMS_NOPIN, Env:JSYSTEMS_NOTERMINAL -ErrorAction SilentlyContinue
+Remove-Item Env:JSYSTEMS_APPS, Env:JSYSTEMS_NOPIN -ErrorAction SilentlyContinue
 
 function Get-Release($app) {
-  $rel = Invoke-RestMethod "https://api.github.com/repos/$Owner/$($app.Repo)/releases/latest" -Headers @{ 'User-Agent' = 'jsystems-install' }
-  $asset = $rel.assets | Where-Object name -eq $app.Asset | Select-Object -First 1
-  if (-not $asset) { throw "$($app.Asset) is missing from $($app.Repo) $($rel.tag_name)" }
-  [pscustomobject]@{ Tag = $rel.tag_name; Url = $asset.browser_download_url; Digest = $asset.digest }
+  # Newest published release that has the file. A brand-new release can be
+  # missing it for a few minutes while GitHub Actions builds the setup.
+  $all = Invoke-RestMethod "https://api.github.com/repos/$Owner/$($app.Repo)/releases?per_page=10" -Headers @{ 'User-Agent' = 'jsystems-install' }
+  $all = @($all | Where-Object { -not $_.draft -and -not $_.prerelease })
+  foreach ($rel in $all) {
+    $asset = $rel.assets | Where-Object name -eq $app.Asset | Select-Object -First 1
+    if ($asset) {
+      if ($rel.tag_name -ne $all[0].tag_name) { Write-Host "  ($($all[0].tag_name) is still being built, using $($rel.tag_name))" -NoNewline }
+      return [pscustomobject]@{ Tag = $rel.tag_name; Url = $asset.browser_download_url; Digest = $asset.digest }
+    }
+  }
+  throw "no release of $($app.Repo) has $($app.Asset)"
 }
 
 function Save-Asset($release, $dest) {
@@ -149,23 +155,6 @@ $pins
 Write-Host 'Installing JSystems apps from GitHub Releases'
 $done = @()
 foreach ($app in $Apps) { if (Install-App $app) { $done += $app.Name } }
-
-# JAgents also has a terminal app (the jagents command), installed by
-# install-terminal.ps1. It needs Node.js 22 or newer; without it the desktop
-# app is still installed and this says how to add the terminal app later.
-if ($done -contains 'JAgents' -and -not $NoTerminal) {
-  Write-Host 'Installing the JAgents terminal app'
-  $major = if (Get-Command node -ErrorAction SilentlyContinue) { [int](node -p "process.versions.node.split('.')[0]") } else { 0 }
-  if ($major -lt 22) {
-    Write-Host '  skipped: it needs Node.js 22 or newer from https://nodejs.org. Run this again after installing it.' -ForegroundColor Yellow
-  } else {
-    try {
-      Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/$Owner/JAgents/main/install-terminal.ps1" -Headers @{ 'User-Agent' = 'jsystems-install' })
-    } catch {
-      Write-Host "  failed: $($_.Exception.Message)" -ForegroundColor Red
-    }
-  }
-}
 
 if ($done -and -not $NoPin) {
   Write-Host 'Pinning to the taskbar'
