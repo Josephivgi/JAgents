@@ -48,6 +48,37 @@ function fileVersion(version) {
   return nums.slice(0, 4).join(".");
 }
 
+// Installed size in KB for the Add-or-Remove-Programs entry, measured here so
+// the setup does not have to count thousands of files on the user's PC.
+function dirSizeKB(dir) {
+  let bytes = 0;
+  const walk = (d) => {
+    for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+      const full = path.join(d, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile()) bytes += fs.statSync(full).size;
+    }
+  };
+  walk(dir);
+  return Math.ceil(bytes / 1024);
+}
+
+// Type declarations and source maps are never loaded at runtime but were about
+// 40% of the files in node_modules, and each file costs the setup time to
+// write and Windows Defender time to scan.
+function pruneForSetup(dir) {
+  let removed = 0;
+  const walk = (d) => {
+    for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+      const full = path.join(d, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (/\.d\.[cm]?ts$|\.map$/.test(entry.name)) { fs.rmSync(full); removed += 1; }
+    }
+  };
+  if (fs.existsSync(dir)) walk(dir);
+  return removed;
+}
+
 function buildSetup(tagArg) {
   const tag = tagArg || "v" + JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version;
   const makensis = findMakensis(process.env);
@@ -58,29 +89,58 @@ function buildSetup(tagArg) {
   run("git", ["rev-parse", "--verify", "refs/tags/" + tag]);
   const version = JSON.parse(run("git", ["show", tag + ":package.json"])).version;
 
+  // Each step prints when it starts and how long it took, so a build in a
+  // terminal or the Actions log shows where it is.
+  const started = Date.now();
+  const STEPS = 6;
+  let stepNo = 0;
+  const step = (label, fn) => {
+    stepNo += 1;
+    const t0 = Date.now();
+    process.stdout.write("[" + stepNo + "/" + STEPS + "] " + label + "...");
+    const result = fn();
+    console.log(" " + ((Date.now() - t0) / 1000).toFixed(1) + "s");
+    return result;
+  };
+
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "jagents-setup-"));
   try {
     const stage = path.join(work, "JAgents");
-    fs.cpSync(runtime, stage, { recursive: true });
-    fs.renameSync(path.join(stage, "electron.exe"), path.join(stage, "JAgents.exe"));
-    fs.rmSync(path.join(stage, "resources", "default_app.asar"), { force: true });
+    const app = path.join(stage, "resources", "app");
+    const tar = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe");
+    const tarCmd = fs.existsSync(tar) ? tar : "tar";
+    step("Copying the Electron runtime", () => {
+      fs.cpSync(runtime, stage, { recursive: true });
+      fs.renameSync(path.join(stage, "electron.exe"), path.join(stage, "JAgents.exe"));
+      fs.rmSync(path.join(stage, "resources", "default_app.asar"), { force: true });
+    });
 
     // The tagged source, unpacked with Windows' own tar (see lib/updater.js).
-    const app = path.join(stage, "resources", "app");
-    run("git", ["archive", "--format=tar", "--prefix=app/", "-o", path.join(work, "app.tar"), tag]);
-    const tar = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe");
-    run(fs.existsSync(tar) ? tar : "tar", ["-xf", "../../app.tar"], path.join(stage, "resources"));
+    step("Exporting " + tag + " source", () => {
+      run("git", ["archive", "--format=tar", "--prefix=app/", "-o", path.join(work, "app.tar"), tag]);
+      run(tarCmd, ["-xf", "../../app.tar"], path.join(stage, "resources"));
+    });
     const npmCli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
     const npm = fs.existsSync(npmCli) ? [process.execPath, [npmCli]] : ["npm", []];
-    run(npm[0], npm[1].concat(["ci", "--omit=dev", "--no-audit", "--no-fund"]), app);
+    step("Installing production packages (npm ci)", () => {
+      run(npm[0], npm[1].concat(["ci", "--omit=dev", "--no-audit", "--no-fund"]), app);
+      pruneForSetup(path.join(app, "node_modules"));
+    });
 
-    const icon = applyIcon(path.join(stage, "JAgents.exe"), path.join(app, "build", "icon.ico"));
-    if (!icon.ok) throw new Error("The app icon could not be written: " + icon.error);
+    step("Setting the app icon", () => {
+      const icon = applyIcon(path.join(stage, "JAgents.exe"), path.join(app, "build", "icon.ico"));
+      if (!icon.ok) throw new Error("The app icon could not be written: " + icon.error);
+    });
+
+    const sizeKB = dirSizeKB(stage);
+    const payload = path.join(work, "payload.tar.gz");
+    step("Packing " + Math.round(sizeKB / 1024) + " MB into one archive", () => run(tarCmd, ["-czf", payload, "-C", stage, "."]));
 
     const out = path.join(root, "dist", SETUP_NAME);
     fs.mkdirSync(path.dirname(out), { recursive: true });
     fs.rmSync(out, { force: true });
-    execFileSync(makensis, ["/V2", "/DVERSION=" + version, "/DVIVERSION=" + fileVersion(version), "/DSTAGE=" + stage, "/DOUTFILE=" + out, "/DICON=" + path.join(app, "build", "icon.ico"), path.join(__dirname, "installer.nsi")], { stdio: "inherit", timeout: 900000, windowsHide: true });
+    step("Writing " + SETUP_NAME, () => execFileSync(makensis, ["/V2", "/DVERSION=" + version, "/DVIVERSION=" + fileVersion(version), "/DPAYLOAD=" + payload, "/DOUTFILE=" + out, "/DICON=" + path.join(app, "build", "icon.ico"), "/DSIZEKB=" + sizeKB, path.join(__dirname, "installer.nsi")], { stdio: ["ignore", "ignore", "inherit"], timeout: 900000, windowsHide: true }));
+    console.log("Built in " + Math.round((Date.now() - started) / 1000) + "s");
     return { path: out, size: fs.statSync(out).size };
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
@@ -97,4 +157,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { buildSetup, fileVersion, findMakensis, SETUP_NAME };
+module.exports = { buildSetup, dirSizeKB, fileVersion, findMakensis, pruneForSetup, SETUP_NAME };

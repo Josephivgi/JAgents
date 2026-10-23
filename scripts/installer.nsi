@@ -1,20 +1,25 @@
 ; JAgents setup: one .exe a person downloads and double-clicks.
 ; Built by scripts/pack-setup.cjs:
-;   makensis /DVERSION=0.3.0 /DVIVERSION=0.3.0.0 /DSTAGE=<layout> /DOUTFILE=<exe> /DICON=<ico> installer.nsi
+;   makensis /DVERSION=0.3.0 /DVIVERSION=0.3.0.0 /DPAYLOAD=<app.tar.gz> /DOUTFILE=<exe> /DICON=<ico> /DSIZEKB=<kb> installer.nsi
 ;
-; STAGE is the installed layout (JAgents.exe, resources\app). It goes to
-; %LOCALAPPDATA%\Programs\JAgents with Start Menu and Desktop shortcuts and an
-; Add-or-Remove-Programs entry. Per user, no admin. App data in
-; %APPDATA%\JAgents is never touched, by install or uninstall.
+; PAYLOAD is the installed layout (JAgents.exe, resources\app) as one .tar.gz.
+; It is unpacked to %LOCALAPPDATA%\Programs\JAgents with Start Menu and Desktop
+; shortcuts and an Add-or-Remove-Programs entry. Per user, no admin. App data
+; in %APPDATA%\JAgents is never touched, by install or uninstall.
+;
+; One archive instead of thousands of files: makensis packed the loose files
+; on one CPU core for 15+ minutes, and the setup took minutes to write them.
+; Windows' own tar.exe (Windows 10 1803 and later) unpacks it in seconds.
 
 Unicode true
-SetCompressor /SOLID lzma
+; The payload is already gzip-compressed.
+SetCompress off
 RequestExecutionLevel user
 
 !include "FileFunc.nsh"
 
-!ifndef STAGE
-  !error "Pass /DSTAGE=<staged install layout>"
+!ifndef PAYLOAD
+  !error "Pass /DPAYLOAD=<install layout as .tar.gz>"
 !endif
 !ifndef VERSION
   !define VERSION "0.0.0"
@@ -77,8 +82,19 @@ Section "Install"
   ; The updater rewrites resources\app; start it clean so no old files linger.
   RMDir /r "$INSTDIR\resources\app"
   DetailPrint "Installing ${APP} ${VERSION}..."
+  InitPluginsDir
+  SetOutPath "$PLUGINSDIR"
+  File "/oname=app.tar.gz" "${PAYLOAD}"
+  CreateDirectory "$INSTDIR"
+  nsExec::ExecToLog '"$SYSDIR\tar.exe" -xzf "$PLUGINSDIR\app.tar.gz" -C "$INSTDIR"'
+  Pop $0
+  Delete "$PLUGINSDIR\app.tar.gz"
   SetOutPath "$INSTDIR"
-  File /r "${STAGE}\*.*"
+  StrCmp $0 "0" unpacked
+    MessageBox MB_ICONSTOP|MB_OK "${APP} could not be unpacked (tar exit $0).$\r$\n$\r$\nClose ${APP} if it is open, then run this setup again." /SD IDOK
+    SetErrorLevel 1
+    Quit
+  unpacked:
   WriteUninstaller "$INSTDIR\Uninstall JAgents.exe"
   StrCmp $R2 "1" done
 
@@ -94,8 +110,11 @@ Section "Install"
   WriteRegStr HKCU "${UNKEY}" "QuietUninstallString" '"$INSTDIR\Uninstall JAgents.exe" /S'
   WriteRegDWORD HKCU "${UNKEY}" "NoModify" 1
   WriteRegDWORD HKCU "${UNKEY}" "NoRepair" 1
-  ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
-  WriteRegDWORD HKCU "${UNKEY}" "EstimatedSize" $0
+  ; Measured by pack-setup.cjs when the setup is built. Counting the 9000+
+  ; installed files here with GetSize took minutes on a real install.
+  !ifdef SIZEKB
+    WriteRegDWORD HKCU "${UNKEY}" "EstimatedSize" ${SIZEKB}
+  !endif
 
   Exec '"$INSTDIR\JAgents.exe"'
   done:
