@@ -98,10 +98,12 @@ function toggle(attr, on, label) {
 
 function generalHtml() {
   const t = store.info.theme;
+  const tabs = Number(store.info.pageTabs) || 3;
   return (
     '<h2 class="set-h">General</h2>' +
     '<div class="set-card">' +
     row("Theme", "Colors for the whole window, terminals included.", '<div class="seg" role="radiogroup" aria-label="Theme"><button type="button" role="radio" aria-checked="' + (t === "dark") + '" class="' + (t === "dark" ? "on" : "") + '" data-set-theme="dark">' + icon("moon", 14) + 'Dark</button><button type="button" role="radio" aria-checked="' + (t === "light") + '" class="' + (t === "light" ? "on" : "") + '" data-set-theme="light">' + icon("sun", 14) + "Light</button></div>") +
+    row("Page tabs shown", "How many page tabs (Code, Threads and any a plugin adds) fit at the top of the sidebar. More than that scroll sideways.", '<div class="seg" role="radiogroup" aria-label="Page tabs shown">' + [2, 3, 4].map((n) => '<button type="button" role="radio" aria-checked="' + (n === tabs) + '" class="' + (n === tabs ? "on" : "") + '" data-set-page-tabs="' + n + '">' + n + "</button>").join("") + "</div>") +
     row("New agents start in", "The open project's folder. Pick a project in the sidebar to change it.", '<span class="mono small set-path" title="' + esc(store.info.cwd || "") + '">' + esc(store.info.cwd || "") + "</span>") +
     row("Agents see each other", "The JAgents MCP hub gives terminal agents tools to list, message and hand off to other agents.", toggle("data-set-hub", Boolean(store.info.hubAttach), "MCP hub")) +
     "</div>"
@@ -214,6 +216,13 @@ async function onClick(e) {
   const th = t.closest("[data-set-theme]");
   if (th) {
     fire("set-theme", th.dataset.setTheme);
+    return show("general");
+  }
+  const pt = t.closest("[data-set-page-tabs]");
+  if (pt) {
+    store.info.pageTabs = Number(pt.dataset.setPageTabs);
+    await window.jagents.setSetting("ui.pageTabs", store.info.pageTabs);
+    fire("page-tabs");
     return show("general");
   }
   const sw = t.closest("[data-set-hub]");

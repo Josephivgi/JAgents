@@ -48,6 +48,56 @@ on("set-theme", (theme) => {
   window.jagents.setSetting("theme", theme);
 });
 
+// Page tabs: at most pageTabs() share the strip; more scroll sideways, with a
+// thin scrollbar under them. Tabs plugins add to the strip (Subagents, the
+// Plugins page) are fitted the same way whenever they arrive.
+const pageTabs = () => Math.min(6, Math.max(1, Math.round(Number(store.info.pageTabs)) || 3));
+let fitQueued = false;
+
+function fitModes() {
+  fitQueued = false;
+  const seg = app.querySelector(".mode-seg");
+  if (!seg) return;
+  // A plugin tab that left out role or type still lines up with the others.
+  for (const t of seg.children) {
+    if (!t.getAttribute("role")) t.setAttribute("role", "tab");
+    if (t.tagName === "BUTTON" && !t.getAttribute("type")) t.setAttribute("type", "button");
+  }
+  const shown = Array.from(seg.children).filter((t) => !t.hidden && t.getAttribute("role") === "tab").length;
+  if (seg.style.getPropertyValue("--page-tabs") !== String(pageTabs())) seg.style.setProperty("--page-tabs", String(pageTabs()));
+  seg.classList.toggle("scroll-x", shown > pageTabs());
+  // Four or more tabs side by side leave no room for icons.
+  seg.classList.toggle("tight", Math.min(shown, pageTabs()) > 3);
+  const on = seg.querySelector('[role="tab"].on');
+  if (on && seg.classList.contains("scroll-x")) {
+    const a = on.offsetLeft - seg.scrollLeft;
+    if (a < 0 || a + on.offsetWidth > seg.clientWidth) seg.scrollTo({ left: on.offsetLeft - 2 });
+  }
+}
+
+const queueFit = () => {
+  if (fitQueued) return;
+  fitQueued = true;
+  requestAnimationFrame(fitModes);
+};
+
+function watchModes() {
+  const seg = app.querySelector(".mode-seg");
+  new MutationObserver(queueFit).observe(seg, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "hidden"] });
+  // The mouse wheel scrolls the tabs sideways.
+  seg.addEventListener(
+    "wheel",
+    (e) => {
+      if (!seg.classList.contains("scroll-x") || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+      e.preventDefault();
+      seg.scrollLeft += e.deltaY;
+    },
+    { passive: false },
+  );
+  on("page-tabs", queueFit);
+  queueFit();
+}
+
 function paintModes() {
   for (const b of app.querySelectorAll(".mode-seg [data-mode]")) b.classList.toggle("on", b.dataset.mode === mode);
 }
@@ -439,6 +489,7 @@ async function boot() {
     }
   });
   paintModes();
+  watchModes();
 }
 
 boot()

@@ -32,6 +32,15 @@ html[data-theme="dark"] {
 .side-top .mode-seg [role="tab"]:hover { color: var(--ink); }
 .side-top .mode-seg [role="tab"].on { background: var(--canvas); color: var(--ink); box-shadow: 0 1px 2px oklch(0 0 0 / 0.18); }
 .side-top .mode-seg [role="tab"][hidden] { display: none; }
+/* More page tabs than --page-tabs (app.js fitModes): each takes its share of
+   the strip and the rest scroll sideways, with a thin scrollbar under them. */
+.side-top .mode-seg.scroll-x { overflow-x: auto; overflow-y: hidden; scroll-snap-type: x proximity; scroll-padding-inline: 2px; padding-bottom: 0; }
+.side-top .mode-seg.scroll-x [role="tab"] { flex: 0 0 calc((100% - (var(--page-tabs) - 1) * 2px) / var(--page-tabs)); text-overflow: ellipsis; scroll-snap-align: start; }
+.side-top .mode-seg.scroll-x [role="tab"] svg, .side-top .mode-seg.tight [role="tab"] svg { display: none; }
+.side-top .mode-seg.tight [role="tab"] { text-overflow: ellipsis; }
+.side-top .mode-seg.scroll-x::-webkit-scrollbar { height: 4px; }
+.side-top .mode-seg.scroll-x::-webkit-scrollbar-thumb { background: color-mix(in oklch, var(--muted) 40%, transparent); border-radius: 4px; }
+.side-top .mode-seg.scroll-x::-webkit-scrollbar-thumb:hover { background: color-mix(in oklch, var(--muted) 65%, transparent); }
 
 [data-code-side] { overflow: hidden; }
 [data-code-side] .side-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 8px 4px 8px; }

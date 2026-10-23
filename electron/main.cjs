@@ -223,7 +223,7 @@ function registerIpc() {
     }
     return settled;
   }
-  handle("app-info", () => ({ dataRoot: DATA_ROOT, hubDir: HOME_DIR, theme: theme(), cwd: workspace.cwdDefault(), hubAttach: workspace.hubOn(), hubChosen: db.getSetting("hub.chosen", false), mode: db.getSetting("mode", "code"), version: updater.state().current, mcpAutoUpdate: db.getSetting("mcp.autoUpdate", true), mcpAutoInstall: db.getSetting("mcp.autoInstall", false), layout: db.getSetting("layout", "grid"), threadCurrent: db.getSetting("thread.current", ""), threadSettled: settledThreads(), threadSettledFolded: Boolean(db.getSetting("thread.settledFolded", false)), platform: process.platform, updateAuto: db.getSetting("update.auto", true) !== false, updateSnooze: db.getSetting("update.snooze", null), groups: db.getSetting("ui.groups", null), sidebarWidth: db.getSetting("ui.sidebarWidth", 0), sidebarHidden: Boolean(db.getSetting("ui.sidebarHidden", false)), projects: workspace.projects() }));
+  handle("app-info", () => ({ dataRoot: DATA_ROOT, hubDir: HOME_DIR, theme: theme(), cwd: workspace.cwdDefault(), hubAttach: workspace.hubOn(), hubChosen: db.getSetting("hub.chosen", false), mode: db.getSetting("mode", "code"), version: updater.state().current, mcpAutoUpdate: db.getSetting("mcp.autoUpdate", true), mcpAutoInstall: db.getSetting("mcp.autoInstall", false), layout: db.getSetting("layout", "grid"), threadCurrent: db.getSetting("thread.current", ""), threadSettled: settledThreads(), threadSettledFolded: Boolean(db.getSetting("thread.settledFolded", false)), platform: process.platform, updateAuto: db.getSetting("update.auto", true) !== false, updateSnooze: db.getSetting("update.snooze", null), groups: db.getSetting("ui.groups", null), pageTabs: db.getSetting("ui.pageTabs", 3), sidebarWidth: db.getSetting("ui.sidebarWidth", 0), sidebarHidden: Boolean(db.getSetting("ui.sidebarHidden", false)), projects: workspace.projects() }));
   // The page sends its colors so the window buttons match the theme.
   handle("titlebar-colors", (colors) => {
     if (!mainWindow || !colors || process.platform === "darwin") return false;
@@ -235,7 +235,7 @@ function registerIpc() {
     return true;
   });
   handle("set-setting", (key, value) => {
-    const allowed = ["update.auto", "update.snooze", "ui.sidebarWidth", "ui.groups", "ui.sidebarHidden", "theme", "mode", "layout", "hub.attach", "hub.chosen", "thread.current", "thread.settled", "thread.settledFolded", "ui.sidebar", "mcp.autoUpdate", "mcp.autoInstall", "help.section"];
+    const allowed = ["update.auto", "update.snooze", "ui.sidebarWidth", "ui.groups", "ui.pageTabs", "ui.sidebarHidden", "theme", "mode", "layout", "hub.attach", "hub.chosen", "thread.current", "thread.settled", "thread.settledFolded", "ui.sidebar", "mcp.autoUpdate", "mcp.autoInstall", "help.section"];
     if (!allowed.includes(key)) throw new Error("Unknown setting " + key);
     db.setSetting(key, value);
     return true;
