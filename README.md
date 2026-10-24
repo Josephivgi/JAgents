@@ -26,6 +26,38 @@ irm https://raw.githubusercontent.com/Josephivgi/JAgents/main/install-terminal.p
 
 Then run `jagents`, or `jagents claude` to open with Claude Code in the first tab. `jagents --list` shows the agents it found, and `jagents update` updates it.
 
+### Terminal plugins and MCP
+
+Press **Ctrl+B, then e** or click **Plugins** in the sidebar.
+Create an example plugin, run plugin commands, enable or disable plugins, undo
+edits, or enter safe mode. Plugins reload when their files change. Run
+`jagents plugins` to find their folder, and `jagents plugins docs` for the API.
+Terminal plugins use `main.cjs` and the desktop plugin lifecycle, with
+`ctx.terminal` for panes, commands, events and saved theme/sidebar settings.
+Desktop renderer modules and CSS do not run in the terminal app.
+
+The dedicated **jagents-terminal** MCP lets agents manage plugins, open and
+split panes, read screens, send input, rename/focus/close panes, change settings,
+run plugin commands, and reload the UI without stopping running terminals.
+Plugins can also add their own MCP servers and tools.
+
+Claude Code and Codex panes connect automatically at launch. For other MCP
+clients, merge the output of `jagents mcp-config` into their MCP configuration.
+`jagents mcp` runs the stdio server directly. Keep a JAgents terminal window open.
+Externally configured clients use the most recently opened window; panes
+launched inside JAgents always use their own window.
+
+Plugins execute **trusted Node.js code with your user's permissions**, not a
+sandbox. Only install code you trust. Agent tool access is not permission to
+make unrequested changes or discard running work. Start with
+`JAGENTS_SAFE_MODE=1` if a plugin breaks startup.
+
+Terminal state is stored separately in `%APPDATA%\JAgents-Terminal\jagents.db`
+and `plugins` (Linux: `$XDG_DATA_HOME/JAgents-Terminal`, default
+`~/.local/share/JAgents-Terminal`). `JAGENTS_TERMINAL_DATA` overrides that root.
+The terminal hub lives under `~/.jagents/terminal`; it never replaces the
+desktop hub or loads desktop plugins.
+
 ## Run
 
 ```

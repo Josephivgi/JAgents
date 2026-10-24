@@ -43,11 +43,15 @@ let quitting = false;
 
 // ---- panes and layout -----------------------------------------------------
 
-function newPane(agent, cols, rows, name) {
-  const spec = terminalSpawnSpec(agent.id);
+function newPane(agent, cols, rows, name, folder = cwd) {
+  const base = terminalSpawnSpec(agent.id);
+  const paneId = ++seq;
+  const spec = host.runtime ? host.runtime.paneSpec(agent.id, base, paneId) : base;
   const term = new Terminal({ cols, rows, scrollback: 5000, allowProposedApi: true });
-  const pane = { kind: "pane", id: ++seq, agent, name: name || defaultName(agent), term, proc: null, rect: { x: 0, y: 1, w: cols, h: rows }, exited: null };
-  pane.proc = pty.spawn(spec.command, spec.args, { name: "xterm-256color", cols, rows, cwd, env: Object.assign({}, process.env, spec.env || {}) });
+  const pane = { kind: "pane", id: paneId, agent, cwd: folder, name: name || defaultName(agent), term, proc: null, rect: { x: 0, y: 1, w: cols, h: rows }, exited: null };
+  try {
+    pane.proc = pty.spawn(spec.command, spec.args, { name: "xterm-256color", cols, rows, cwd: folder, env: Object.assign({}, process.env, spec.env || {}) });
+  } catch (error) { term.dispose(); throw error; }
   wire(pane);
   return pane;
 }
@@ -59,10 +63,12 @@ function wire(pane) {
   pane.subs = [
     pane.proc.onData((d) => {
       term.write(d);
+      host.runtime?.emit("terminal-data", { id: pane.id, data: d });
       schedule();
     }),
     pane.proc.onExit(({ exitCode }) => {
       pane.exited = exitCode;
+      host.runtime?.emit("terminal-exit", { id: pane.id, exitCode });
       term.write("\r\n\x1b[2m[" + agent.name + " exited" + (exitCode ? " with code " + exitCode : "") + ". Press Enter to close.]\x1b[0m");
       schedule();
     }),
@@ -155,23 +161,27 @@ function relayout() {
   if (t) layout(t.root, contentRect());
 }
 
-function addTab(agent, name) {
+function addTab(agent, name, folder) {
   const r = contentRect();
-  const pane = newPane(agent, r.w, r.h, name);
+  const pane = newPane(agent, r.w, r.h, name, folder);
   tabs.push({ root: pane, focus: pane });
   active = tabs.length - 1;
   relayout();
+  host.runtime?.emit("terminal-opened", paneInfo(pane));
+  return pane;
 }
 
-function split(agent, dir, name) {
+function split(agent, dir, name, folder) {
   const t = tab();
-  if (!t) return addTab(agent, name);
+  if (!t) return addTab(agent, name, folder);
   const old = t.focus;
-  const pane = newPane(agent, Math.max(1, Math.floor(old.rect.w / 2)), Math.max(1, Math.floor(old.rect.h / 2)), name);
+  const pane = newPane(agent, Math.max(1, Math.floor(old.rect.w / 2)), Math.max(1, Math.floor(old.rect.h / 2)), name, folder);
   const node = { kind: "split", dir, a: old, b: pane };
   t.root = replace(t.root, old, node);
   t.focus = pane;
   relayout();
+  host.runtime?.emit("terminal-opened", paneInfo(pane));
+  return pane;
 }
 
 function replace(node, from, to) {
@@ -214,6 +224,7 @@ function closePane(pane) {
     if (active >= tabs.length) active = tabs.length - 1;
   } else if (t.focus === pane) t.focus = panesOf(t.root)[0];
   relayout();
+  host.runtime?.emit("terminal-closed", { id: pane.id });
   if (!tabs.length) openPicker("tab", true);
   schedule();
 }
@@ -260,6 +271,7 @@ function openPicker(mode, required) {
 function pickerItems(o) {
   const q = o.query.toLowerCase();
   const list = q ? o.all.filter((it) => it.label.toLowerCase().includes(q) || it.hint.includes(q)) : o.all.slice();
+  if (o.mode === "plugins") return list;
   list.push({ label: "Open in JAgents Desktop", hint: "↗", desktop: "open" });
   list.push({ label: "Install JAgents Desktop", hint: "↓", desktop: "install" });
   return list;
@@ -269,6 +281,10 @@ function pick(item) {
   const o = overlay;
   if (!item) return;
   overlay = null;
+  if (item.run) {
+    Promise.resolve().then(item.run).catch((error) => flash(String(error.message || error), "danger"));
+    return schedule();
+  }
   if (item.desktop) {
     // Cancelling the install card brings back a required picker.
     const back = () => !tabs.length && !overlay && openPicker("tab", true);
@@ -308,11 +324,93 @@ function renamePane(pane) {
     pane.name,
     (name) => {
       pane.name = name;
+      host.runtime?.emit("terminal-renamed", paneInfo(pane));
       schedule();
     },
     null,
     pane.agent.name,
   );
+}
+
+function openPlugins() {
+  const runtime = host.runtime;
+  if (!runtime) return flash("Plugins are unavailable until JAgents is restarted.", "warn");
+  const state = runtime.plugins.list();
+  const all = [
+    { label: state.safeMode ? "Resume plugins" : "Safe mode: disable plugins", hint: "safe", run: () => { runtime.plugins.setSafeMode(!state.safeMode); openPlugins(); } },
+    { label: "Create example plugin", hint: "new", run: async () => {
+      let n = 1;
+      while (state.plugins.some((p) => p.id === "my-plugin-" + n)) n++;
+      await runtime.call("write_plugin", { id: "my-plugin-" + n, name: "My plugin " + n, files: { "main.cjs": 'exports.activate = (ctx) => {\n  ctx.terminal.commands.register({ id: "hello", label: "Say hello", handler: () => ctx.notify("Hello from my terminal plugin") });\n};\n' } });
+      openPlugins();
+    } },
+  ];
+  for (const command of runtime.commands()) all.push({ label: command.label, hint: command.plugin, run: () => runtime.call("run_command", { id: command.id }) });
+  for (const plugin of state.plugins) {
+    all.push({
+      label: (plugin.enabled ? "Disable " : "Enable ") + plugin.name,
+      hint: plugin.errors.main || plugin.errors.mcp ? "error" : plugin.enabled ? "on" : "off",
+      run: async () => { await runtime.call("set_plugin_enabled", { id: plugin.id, enabled: !plugin.enabled }); openPlugins(); },
+    });
+    if (plugin.undoable) all.push({ label: "Undo " + plugin.name, hint: "undo", run: async () => { await runtime.call("undo_plugin", { id: plugin.id }); openPlugins(); } });
+  }
+  overlay = { kind: "picker", mode: "plugins", all, query: "", index: 0, required: false };
+  schedule();
+}
+
+function pluginsChanged() {
+  if (overlay?.mode !== "plugins") return;
+  const previous = overlay;
+  openPlugins();
+  overlay.query = previous.query;
+  overlay.index = Math.max(0, Math.min(previous.index, pickerItems(overlay).length - 1));
+}
+
+function paneInfo(pane) {
+  return { id: pane.id, name: pane.name, provider: pane.agent.id, cwd: pane.cwd || cwd, pid: pane.proc.pid, exited: pane.exited, focused: tab()?.focus === pane };
+}
+
+function control(action, args = {}) {
+  if (action === "list") return allPanes().map(paneInfo);
+  if (action === "open") {
+    if (args.name !== undefined && (typeof args.name !== "string" || !args.name.trim() || args.name.length > 80 || /[\x00-\x1f\x7f]/.test(args.name))) throw new Error("name must be 1-80 characters without control characters.");
+    const provider = args.provider || "shell";
+    const agent = listTerminalAgents().find((a) => a.id === provider);
+    if (!agent?.available) throw new Error("Terminal provider is not installed: " + provider);
+    if (args.mode && !["tab", "right", "down"].includes(args.mode)) throw new Error("mode must be tab, right or down.");
+    const folder = args.cwd ? path.resolve(String(args.cwd)) : cwd;
+    const pane = args.mode === "right" || args.mode === "down" ? split(agent, args.mode === "right" ? "row" : "col", args.name, folder) : addTab(agent, args.name, folder);
+    overlay = null;
+    schedule();
+    return paneInfo(pane);
+  }
+  const pane = allPanes().find((p) => String(p.id) === String(args.id));
+  if (!pane) throw new Error("No terminal pane " + args.id);
+  if (action === "read") {
+    const lines = args.lines === undefined ? 120 : Number(args.lines);
+    if (!Number.isInteger(lines) || lines < 1 || lines > 2000) throw new Error("lines must be an integer from 1 to 2000.");
+    return new Promise((resolve) => pane.term.write("", () => {
+      const buffer = pane.term.buffer.active;
+      const text = [];
+      for (let i = Math.max(0, buffer.length - lines); i < buffer.length; i++) text.push(buffer.getLine(i)?.translateToString(true) || "");
+      resolve({ id: pane.id, text: text.join("\n") });
+    }));
+  }
+  if (action === "write") {
+    if (pane.exited !== null) throw new Error("This terminal has exited.");
+    if (typeof args.text !== "string") throw new Error("text must be a string.");
+    pane.proc.write(args.text + (args.enter ? "\r" : ""));
+    return { written: true, id: pane.id };
+  }
+  if (action === "rename") {
+    if (typeof args.name !== "string" || !args.name.trim() || args.name.length > 80 || /[\x00-\x1f\x7f]/.test(args.name)) throw new Error("name must be 1-80 characters without control characters.");
+    pane.name = args.name.trim();
+    host.runtime?.emit("terminal-renamed", paneInfo(pane));
+  } else if (action === "focus") focusPane(pane);
+  else if (action === "close") { closePane(pane); return { closed: pane.id }; }
+  else throw new Error("Unknown terminal action: " + action);
+  schedule();
+  return paneInfo(pane);
 }
 
 // The desktop install in progress, {step, pct}, or null. It lives in the
@@ -401,6 +499,7 @@ function desktopInstalled() {
 
 function toggleSidebar() {
   sidebar = !sidebar;
+  host.runtime?.settings({ sidebar });
   prevRows = [];
   relayout();
   schedule();
@@ -439,6 +538,7 @@ const KEYS = [
   ["1-9", "Go to tab"],
   ["x", "Close terminal"],
   ["s", "Show or hide the sidebar"],
+  ["e", "Plugins and plugin commands"],
   ["d", "Open JAgents Desktop"],
   ["i", "Install or reinstall JAgents Desktop"],
   ["q", "Quit"],
@@ -463,6 +563,15 @@ const T = {
   warn: "235;178;95",
   danger: "233;120;113",
 };
+const DEFAULT_THEME = { ...T };
+
+function applySettings(settings) {
+  sidebar = settings.sidebar !== false;
+  Object.assign(T, DEFAULT_THEME, settings.theme || {});
+  prevRows = [];
+  relayout();
+  schedule();
+}
 
 function style(fg, bg, bold) {
   return "0" + (bold ? ";1" : "") + (fg ? ";38;2;" + T[fg] : "") + (bg ? ";48;2;" + T[bg] : "");
@@ -673,6 +782,7 @@ function drawSidebar(f) {
     hits.push({ x0: 0, x1: w, y, run });
     y++;
   };
+  action("◇  Plugins", openPlugins);
   action("+  New terminal", () => openPicker("tab"));
   if (tab()) {
     action("→  Split right", () => openPicker("right"));
@@ -815,9 +925,9 @@ function drawOverlay(f) {
   // Agent picker: type to filter, arrows and Enter, or click.
   const items = pickerItems(o);
   if (o.index >= items.length) o.index = items.length - 1;
-  const title = o.mode === "right" ? "Split right" : o.mode === "down" ? "Split down" : "New terminal";
+  const title = o.mode === "plugins" ? "Plugins" : o.mode === "right" ? "Split right" : o.mode === "down" ? "Split down" : "New terminal";
   const listH = Math.min(items.length, Math.max(3, f.h - 14));
-  const b = drawCard(f, 52, listH + 8, title, "pick an agent");
+  const b = drawCard(f, 52, listH + 8, title, o.mode === "plugins" ? "commands, on/off and undo" : "pick an agent");
   fill(f, b.x, b.y, b.w, style("ink", "well"));
   if (o.query) {
     const end = put(f, b.x + 1, b.y, o.query, style("ink", "well"));
@@ -836,7 +946,8 @@ function drawOverlay(f) {
       put(f, b.x + 1, y, it.label + " " + it.hint, style("accent", rowBg, true));
     } else {
       put(f, b.x + 1, y, clip(it.label, b.w - 16), style(on ? "ink" : "muted", rowBg, on));
-      put(f, b.x + b.w - 1 - it.hint.length, y, it.hint, style("faint", rowBg));
+      const shownHint = clip(it.hint, 13);
+      put(f, b.x + b.w - 1 - shownHint.length, y, shownHint, style("faint", rowBg));
     }
     hits.push({ x0: b.x - 1, x1: b.x + b.w + 1, y, run: () => pick(it) });
   }
@@ -992,6 +1103,7 @@ function onPrefixKey(k) {
   if (k === "i") return install();
   if (k === ",") return t && renamePane(t.focus);
   if (k === "s") return toggleSidebar();
+  if (k === "e") return openPlugins();
   if (k === "q") {
     overlay = { kind: "confirm" };
     return schedule();
@@ -1145,6 +1257,11 @@ function start(h) {
   pty = h.pty;
   Terminal = h.Terminal;
   stopped = false;
+  if (h.runtime) {
+    const settings = h.runtime.settings();
+    Object.assign(T, DEFAULT_THEME, settings.theme || {});
+    sidebar = settings.sidebar !== false;
+  }
   const s = h.state;
   if (s.tabs) {
     tabs = s.tabs;
@@ -1154,12 +1271,14 @@ function start(h) {
     installing = s.installing || null;
     modes = s.modes || modes;
     for (const p of allPanes()) wire(p);
+    h.runtime?.activate();
     prevRows = [];
     relayout();
     if (!tabs.length) openPicker("tab", true);
     if (h.reloaded) flash("JAgents reloaded with the new code (" + pkg.version + "). Your terminals kept running.", "ok");
     return schedule();
   }
+  h.runtime?.activate();
   const argv = h.argv || [];
   const first = argv[0] && listTerminalAgents().find((a) => a.id === argv[0] || a.name.toLowerCase() === argv.join(" ").toLowerCase());
   if (argv[0] && !first) flash("No terminal agent called " + argv[0] + ". jagents --list shows them.", "danger");
@@ -1179,4 +1298,4 @@ function stop() {
   Object.assign(host.state, { tabs, active, sidebar, seq, installing, modes });
 }
 
-module.exports = { start, stop, onInput, onResize, flash, schedule, installDone };
+module.exports = { start, stop, onInput, onResize, flash, schedule, installDone, control, applySettings, pluginsChanged };

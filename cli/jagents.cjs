@@ -38,6 +38,30 @@ const CSI = ESC + "[";
 // ---- command line ---------------------------------------------------------
 
 const argv = process.argv.slice(2);
+if (argv[0] === "terminal") argv.shift();
+if (argv[0] === "mcp") {
+  require("../mcp/jagents-terminal-mcp.cjs");
+  return;
+}
+if (argv[0] === "mcp-config") {
+  process.stdout.write(JSON.stringify(require("./terminal-runtime.cjs").mcpConfig(), null, 2) + "\n");
+  return;
+}
+if (argv[0] === "plugins") {
+  if (argv[1] === "docs") {
+    process.stdout.write(require("./plugin-docs.cjs"));
+    return;
+  }
+  if (argv[1]) {
+    process.stderr.write("Use jagents plugins to list plugins, or jagents plugins docs for the API. Manage plugins with Ctrl+B e or the terminal MCP.\n");
+    process.exitCode = 1;
+    return;
+  }
+  const runtime = require("./terminal-runtime.cjs").createRuntime({ ui: () => null });
+  try { process.stdout.write(JSON.stringify(runtime.plugins.list(), null, 2) + "\n"); }
+  finally { runtime.stop(); }
+  return;
+}
 if (argv.includes("--help") || argv.includes("-h")) {
   process.stdout.write(
     [
@@ -54,10 +78,14 @@ if (argv.includes("--help") || argv.includes("-h")) {
       "                       open jagents windows switch to it on their own",
       "  jagents --list       list terminal agents",
       "  jagents --version    show versions",
+      "  jagents plugins      list terminal plugins (plugins docs prints the API)",
+      "  jagents mcp          dedicated terminal MCP server over stdio",
+      "  jagents mcp-config   print an MCP client connection entry",
       "",
       "Inside: click tabs, the sidebar and buttons, or press Ctrl+B then a key.",
       "Ctrl+B ? lists the keys.",
-      "For chats, subagents and agents that message each other, use the desktop app.",
+      "Ctrl+B e opens Plugins. Claude Code and Codex panes get terminal MCP tools.",
+      "For chats and ACP subagents, use the desktop app.",
       "",
     ].join("\n"),
   );
@@ -179,6 +207,8 @@ const host = {
   reloaded: false,
   ui: () => ui,
   quit,
+  reload: () => reload(root),
+  runtime: null,
 };
 
 function restoreScreen() {
@@ -299,7 +329,10 @@ if (fs.existsSync(CURRENT)) {
   });
 }
 
-process.on("exit", restoreScreen);
+process.on("exit", () => {
+  host.runtime?.stop();
+  restoreScreen();
+});
 process.on("uncaughtException", (error) => {
   restoreScreen();
   process.stderr.write("jagents: " + (error.stack || error) + "\n");
@@ -310,9 +343,16 @@ process.on("uncaughtException", (error) => {
 out.write(CSI + "?1049h" + ESC + "]0;JAgents" + "\x07" + CSI + "2J" + CSI + "?1003h" + CSI + "?1006h");
 process.stdin.setRawMode(true);
 process.stdin.resume();
-process.stdin.on("data", (chunk) => ui.onInput(chunk));
-out.on("resize", () => ui.onResize());
+process.stdin.on("data", (chunk) => ui?.onInput(chunk));
+out.on("resize", () => ui?.onResize());
 
-ui = loadUi(root);
-ui.start(host);
-watchCode();
+host.runtime = require("./terminal-runtime.cjs").createRuntime(host, { deferPlugins: true });
+host.runtime.start().then(() => {
+  ui = loadUi(root);
+  ui.start(host);
+  watchCode();
+}).catch((error) => {
+  restoreScreen();
+  process.stderr.write("jagents: " + firstLine(error) + "\n");
+  process.exit(1);
+});

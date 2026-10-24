@@ -165,7 +165,8 @@ If a plugin breaks the window, Ctrl+Shift+F12 turns every plugin off (safe mode)
 and reloads; the Plugins panel turns them back on.
 `;
 
-function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, builtinDir, getWindow, permissions }) {
+function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, builtinDir, getWindow, permissions, context, docs = DOCS, renderer = true, retire = true, reservedServers = [] }) {
+  const reserved = RESERVED_SERVERS.concat(reservedServers);
   const dir = path.join(dataRoot, "plugins");
   const historyDir = path.join(dir, ".history");
   const trashDir = path.join(dir, ".trash");
@@ -178,7 +179,7 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, buil
 
   fs.mkdirSync(dir, { recursive: true });
   try {
-    fs.writeFileSync(path.join(dir, "README.md"), DOCS);
+    fs.writeFileSync(path.join(dir, "README.md"), docs);
   } catch {
     /* read-only data folder; plugin_docs still works */
   }
@@ -233,7 +234,8 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, buil
 
   function readManifest(id) {
     try {
-      return JSON.parse(fs.readFileSync(path.join(rootOf(id), "plugin.json"), "utf8"));
+      const manifest = JSON.parse(fs.readFileSync(path.join(rootOf(id), "plugin.json"), "utf8"));
+      return manifest && typeof manifest === "object" && !Array.isArray(manifest) ? manifest : {};
     } catch {
       return {};
     }
@@ -364,7 +366,7 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, buil
   // Every enabled plugin's outside servers, servers running inside JAgents, and
   // blocked tools. Server names are unique; the first plugin to claim one wins.
   function agentMcp() {
-    const taken = new Set(RESERVED_SERVERS);
+    const taken = new Set(reserved);
     const external = [];
     const inApp = [];
     const disabled = new Set();
@@ -378,8 +380,8 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, buil
           problems.push("MCP server name " + JSON.stringify(name) + (taken.has(name) ? " is already used" : " is not allowed (letters, digits, _ and -)"));
           continue;
         }
-        if (!spec || !spec.command) {
-          problems.push("MCP server " + name + " has no command");
+        if (!spec || typeof spec.command !== "string" || !spec.command || (spec.args !== undefined && !Array.isArray(spec.args))) {
+          problems.push("MCP server " + name + " needs a command and an args array");
           continue;
         }
         taken.add(name);
@@ -473,7 +475,7 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, buil
       mcp: {
         server(name, opts) {
           const n = String(name || "");
-          if (!SERVER_RE.test(n) || RESERVED_SERVERS.includes(n)) throw new Error("MCP server names are letters, digits, _ and - (and not jagents): " + JSON.stringify(name));
+          if (!SERVER_RE.test(n) || reserved.includes(n)) throw new Error("MCP server name is invalid or reserved: " + JSON.stringify(name));
           const srv = { name: n, description: String((opts && opts.description) || ""), tools: new Map() };
           entry.servers.set(n, srv);
           return {
@@ -488,13 +490,19 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, buil
       },
     };
     try {
+      if (context) Object.assign(ctx, context(ctx));
       fs.mkdirSync(dataDir, { recursive: true });
       const mod = require(file);
       const out = mod && typeof mod.activate === "function" ? mod.activate(ctx) : null;
       if (typeof out === "function") entry.dispose.push(out);
       if (mod && typeof mod.deactivate === "function") entry.dispose.push(() => mod.deactivate());
-      if (out && typeof out.then === "function") out.catch((e) => setError(id, "main", e));
+      if (out && typeof out.then === "function") out.catch((e) => {
+        if (mains.get(id) !== entry) return;
+        unloadMain(id);
+        setError(id, "main", e);
+      });
     } catch (error) {
+      unloadMain(id);
       setError(id, "main", error);
     }
   }
@@ -538,7 +546,7 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, buil
     else unloadMain(id);
     agentMcp();
     const now = exists ? info(id) : null;
-    const wants = Boolean(now && isOn(id) && (now.hasRenderer || now.hasCss));
+    const wants = Boolean(renderer && now && isOn(id) && (now.hasRenderer || now.hasCss));
     const waiting = wants && opts && opts.wait ? waitReport(id, 4000) : null;
     if (!wants) errors.set(id, Object.assign({}, errors.get(id), { renderer: "" }));
     emit("plugins-changed", { id, reason: (opts && opts.reason) || "changed" });
@@ -556,9 +564,16 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, buil
     const isNew = !fs.existsSync(root);
     const files = src.files && typeof src.files === "object" ? src.files : {};
     if (isNew && !Object.keys(files).length) throw new Error("A new plugin needs files (plugin.json, renderer.js, style.css or main.cjs).");
+    // Validate the entire edit before changing any files or creating history.
+    for (const [rel, content] of Object.entries(files)) {
+      insidePlugin(id, rel);
+      if (content !== null && typeof content !== "string") throw new Error(rel + " must be text or null.");
+      if (content !== null && Buffer.byteLength(content) > FILE_MAX) throw new Error(rel + " is over " + FILE_MAX / 1024 + " KB.");
+    }
     if (files["plugin.json"] != null) {
       try {
-        JSON.parse(String(files["plugin.json"]));
+        const manifest = JSON.parse(files["plugin.json"]);
+        if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new Error("Expected an object.");
       } catch (error) {
         throw new Error("plugin.json is not valid JSON: " + error.message);
       }
@@ -702,7 +717,6 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, buil
 
   // Edits made outside JAgents (an editor, an agent's own file tools) reload too.
   function watch() {
-    const timers = new Map();
     try {
       watcher = fs.watch(dir, { recursive: true }, (_event, file) => {
         const id = String(file || "").split(/[\\/]/)[0];
@@ -723,9 +737,11 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, buil
     }
   }
 
+  const timers = new Map();
+
   function start(opts) {
     hubCall = opts && opts.hubCall;
-    retireBuiltIn();
+    if (retire) retireBuiltIn();
     seedBundled();
     for (const id of BUILTIN.concat(ids())) loadMain(id);
     agentMcp();
@@ -734,6 +750,8 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, buil
 
   function stop() {
     if (watcher) watcher.close();
+    for (const timer of timers.values()) clearTimeout(timer);
+    timers.clear();
     for (const id of Array.from(mains.keys())) unloadMain(id);
   }
 
@@ -742,7 +760,7 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, buil
     return rootOf(checkId(id));
   }
 
-  return { dir, fileRoot, docs: DOCS, list, read, info, write, setEnabled, undo, remove, scaffold, report, invoke, agentMcp, appServerTools, callAppServer, setSafeMode, safeMode, start, stop };
+  return { dir, fileRoot, docs, list, read, info, write, setEnabled, undo, remove, scaffold, report, invoke, agentMcp, appServerTools, callAppServer, setSafeMode, safeMode, start, stop };
 }
 
 module.exports = { createPluginManager };
