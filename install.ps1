@@ -10,6 +10,11 @@
     Skip pinning:  $env:JSYSTEMS_NOPIN='1'
     Skip the JAgents terminal app:  $env:JSYSTEMS_NOTERMINAL='1'
 
+  Beta installer, which also offers apps still in beta testing (JMCP) and
+  takes pre-releases:
+                   irm https://raw.githubusercontent.com/Josephivgi/JAgents/main/install-beta.ps1 | iex
+  It sets $env:JSYSTEMS_BETA='1' and runs this file.
+
   Per user, no admin. Downloads are made with PowerShell, so Windows does
   not mark them as "from the internet" and SmartScreen does not stop them.
 #>
@@ -35,6 +40,13 @@ $Apps = @(
   @{ Name = 'JPerformance';    Repo = 'JPerformance';    Asset = 'JPerformance.exe';         Kind = 'exe';   Exe = 'JPerformance.exe'; About = 'tracks CPU, memory, disk and network use over 30 days' }
   @{ Name = 'JServer';         Repo = 'JServer';         Asset = 'JServer.exe';              Kind = 'exe';   Exe = 'JServer.exe'; About = 'watches the Linux servers in your SSH config' }
 )
+# The beta installer also offers apps still in beta testing. JMCP's setup has
+# the version in its file name, and its uninstall entry is named "JMCP <version>"
+# (JMCP 0.1.5: 644 MB written from a 206 MB setup).
+$Beta = [bool]$env:JSYSTEMS_BETA
+if ($Beta) {
+  $Apps += @{ Name = 'JMCP'; Repo = 'JMCP'; Asset = 'JMCP-Setup.exe'; AssetMatch = '^JMCP-Setup-[0-9][0-9A-Za-z.+-]*\.exe$'; Display = '^JMCP( |$)'; Kind = 'setup'; Exe = 'JMCP.exe'; WriteRatio = 3.2; About = 'gives every AI coding agent the same rules, memory, skills and a browser you can watch (beta)' }
+}
 # JSYSTEMS_APPS picks apps with no questions; without it the installer asks.
 $Ask = -not $env:JSYSTEMS_APPS
 if (-not $Ask) {
@@ -44,15 +56,16 @@ if (-not $Ask) {
 $NoPin = [bool]$env:JSYSTEMS_NOPIN
 $NoTerminal = [bool]$env:JSYSTEMS_NOTERMINAL
 # The variables last for the whole PowerShell session; clear them so a later run starts clean.
-Remove-Item Env:JSYSTEMS_APPS, Env:JSYSTEMS_NOPIN, Env:JSYSTEMS_NOTERMINAL -ErrorAction SilentlyContinue
+Remove-Item Env:JSYSTEMS_APPS, Env:JSYSTEMS_NOPIN, Env:JSYSTEMS_NOTERMINAL, Env:JSYSTEMS_BETA -ErrorAction SilentlyContinue
 
 function Get-Release($app) {
   # Newest published release that has the file. A brand-new release can be
   # missing it for a few minutes while GitHub Actions builds the setup.
   $all = Invoke-RestMethod "https://api.github.com/repos/$Owner/$($app.Repo)/releases?per_page=10" -Headers @{ 'User-Agent' = 'jsystems-install' }
-  $all = @($all | Where-Object { -not $_.draft -and -not $_.prerelease })
+  # The beta installer also takes pre-releases.
+  $all = @($all | Where-Object { -not $_.draft -and ($Beta -or -not $_.prerelease) })
   foreach ($rel in $all) {
-    $asset = $rel.assets | Where-Object name -eq $app.Asset | Select-Object -First 1
+    $asset = $rel.assets | Where-Object { $_.name -eq $app.Asset -or ($app.AssetMatch -and $_.name -match $app.AssetMatch) } | Select-Object -First 1
     if ($asset) {
       $note = if ($rel.tag_name -ne $all[0].tag_name) { "$($all[0].tag_name) is still being built, so this is $($rel.tag_name)" } else { '' }
       return [pscustomobject]@{ Tag = $rel.tag_name; Url = $asset.browser_download_url; Digest = $asset.digest; MB = [math]::Round($asset.size / 1MB); Note = $note }
@@ -133,7 +146,8 @@ function New-Shortcut($lnk, $target) {
 function Get-InstalledVersion($app) {
   if ($app.Kind -eq 'setup') {
     $entry = Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall -ErrorAction SilentlyContinue |
-      Get-ItemProperty -ErrorAction SilentlyContinue | Where-Object DisplayName -eq $app.Name | Select-Object -First 1
+      Get-ItemProperty -ErrorAction SilentlyContinue |
+      Where-Object { $_.DisplayName -eq $app.Name -or ($app.Display -and $_.DisplayName -match $app.Display) } | Select-Object -First 1
     if ($entry) { return [string]$entry.DisplayVersion }
     return ''
   }
@@ -142,9 +156,10 @@ function Get-InstalledVersion($app) {
   return ''
 }
 
-# One yes/no question per app. Enter means yes.
+# One yes/no question per app. Enter means yes, except for an app that is
+# already up to date: it can be reinstalled, and Enter means no.
 function Select-Apps($apps) {
-  Write-Host 'JSystems apps. Answer y or n for each one (Enter = yes).'
+  Write-Host 'JSystems apps. Answer y or n for each one.'
   Write-Host ''
   $picked = @()
   foreach ($app in $apps) {
@@ -156,10 +171,12 @@ function Select-Apps($apps) {
     Write-Host " ($status)"
     Write-Host "    $($app.About)"
     if ($app.Release.Note) { Write-Host "    $($app.Release.Note)" -ForegroundColor Yellow }
+    $current = $status -eq 'installed, up to date'
+    $question = if ($current) { "    Reinstall $($app.Name)? [y/N]" } elseif ($have) { "    Update $($app.Name)? [Y/n]" } else { "    Install $($app.Name)? [Y/n]" }
     do {
-      $answer = (Read-Host "    Install $($app.Name)? [Y/n]").Trim().ToLower()
+      $answer = (Read-Host $question).Trim().ToLower()
     } until ($answer -in '', 'y', 'yes', 'n', 'no')
-    if ($answer -in '', 'y', 'yes') { $picked += $app }
+    if ($answer -in 'y', 'yes' -or ($answer -eq '' -and -not $current)) { $picked += $app }
     Write-Host ''
   }
   return $picked
@@ -309,6 +326,7 @@ $pins
   Write-Host "  $($all -join ', ') added to the taskbar." -ForegroundColor Green
 }
 
+if ($Beta) { Write-Host 'JSystems beta installer: also offers apps in beta testing, and pre-releases.' -ForegroundColor Cyan; Write-Host '' }
 if ($Ask) {
   # Read-Host fails where nobody can answer (a hidden or -NonInteractive
   # PowerShell); install this repo's own app there, as before.
