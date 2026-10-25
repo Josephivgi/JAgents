@@ -43,10 +43,12 @@ $Apps = @(
 )
 # The beta installer also offers apps still in beta testing. JMCP's setup has
 # the version in its file name, and its uninstall entry is named "JMCP <version>"
-# (JMCP 0.1.5: 644 MB written from a 206 MB setup).
+# (JMCP 0.1.5: 644 MB written from a 206 MB setup). DataSkip: folders that are
+# not user data and that the setup never touches (JMCP's servers\ holds copies
+# of its own server code: about 7,500 files that made the backup take minutes).
 $Beta = [bool]$env:JSYSTEMS_BETA
 if ($Beta) {
-  $Apps += @{ Name = 'JMCP'; Repo = 'JMCP'; Asset = 'JMCP-Setup.exe'; AssetMatch = '^JMCP-Setup-[0-9][0-9A-Za-z.+-]*\.exe$'; Display = '^JMCP( |$)'; Kind = 'setup'; Data = @('%USERPROFILE%\.jmcp', '%APPDATA%\JMCP'); Exe = 'JMCP.exe'; WriteRatio = 3.2; About = 'gives every AI coding agent the same rules, memory, skills and a browser you can watch (beta)' }
+  $Apps += @{ Name = 'JMCP'; Repo = 'JMCP'; Asset = 'JMCP-Setup.exe'; AssetMatch = '^JMCP-Setup-[0-9][0-9A-Za-z.+-]*\.exe$'; Display = '^JMCP( |$)'; Kind = 'setup'; Data = @('%USERPROFILE%\.jmcp', '%APPDATA%\JMCP'); DataSkip = @('servers', 'probe', 'browser'); Exe = 'JMCP.exe'; WriteRatio = 3.2; About = 'gives every AI coding agent the same rules, memory, skills and a browser you can watch (beta)' }
 }
 # JSYSTEMS_APPS picks apps with no questions; without it the installer asks.
 $Ask = -not $env:JSYSTEMS_APPS
@@ -121,8 +123,10 @@ function Save-Asset($release, $dest) {
 
 # Bytes written to disk so far by a process and everything it started. The
 # setups run hidden, so this is what shows how far an install has got.
+# Listing processes takes over a second on a busy PC, so ask only for the
+# fields used, and only once per progress line.
 function Get-TreeWrites($rootId, $seen) {
-  $all = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+  $all = @(Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, WriteTransferCount -ErrorAction SilentlyContinue)
   $ids = @($rootId)
   do {
     $count = $ids.Count
@@ -217,13 +221,16 @@ function Backup-AppData($app) {
     if (-not (Test-Path $src)) { continue }
     $to = Join-Path $dest ("$i-" + (Split-Path $src -Leaf))
     $i++
-    robocopy $src $to /E /R:1 /W:1 /NFL /NDL /NJH /NJS /NP /XD @BackupSkip | Out-Null
+    $skip = @($BackupSkip) + @($app.DataSkip | Where-Object { $_ } | ForEach-Object { Join-Path $src $_ })
+    robocopy $src $to /E /R:1 /W:1 /NFL /NDL /NJH /NJS /NP /XD @skip | Out-Null
     if ($LASTEXITCODE -ge 8) { throw "could not back up $src (robocopy exit $LASTEXITCODE), so $($app.Name) was left as it was" }
     $saved += [pscustomobject]@{ From = $src; To = $to }
   }
   if ($saved) {
+    # rd with a \\?\ path also deletes folders deeper than 260 characters,
+    # which Remove-Item in Windows PowerShell 5.1 leaves half deleted.
     Get-ChildItem $root -Directory -Filter "$($app.Repo)-*" | Sort-Object Name -Descending | Select-Object -Skip 3 |
-      Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+      ForEach-Object { cmd /c rd /s /q "\\?\$($_.FullName)" 2>$null }
     Write-Host "    data backed up to $dest"
   }
   return $saved
@@ -260,13 +267,27 @@ function Install-App($app, $number, $count) {
       # runs, print how much of what it normally writes has been written.
       $saved = @()
       if ($Beta -and $app.Data -and (Get-InstalledVersion $app)) { $saved = @(Backup-AppData $app) }
+      # A setup of the same app left running by an earlier try (a closed
+      # window does not stop it) would fight this one, so wait for it first.
+      $leaf = Split-Path $file -Leaf
+      $earlier = @(Get-CimInstance Win32_Process -Property ProcessId, ExecutablePath -ErrorAction SilentlyContinue |
+        Where-Object { $_.ExecutablePath -like '*\jsystems-*\*' -and (Split-Path "$($_.ExecutablePath)" -Leaf) -eq $leaf })
+      foreach ($e in $earlier) {
+        $old = Get-Process -Id $e.ProcessId -ErrorAction SilentlyContinue
+        if (-not $old) { continue }
+        Write-Host "    an earlier $($app.Name) setup is still running, waiting for it to finish..." -ForegroundColor Yellow
+        while (-not $old.WaitForExit(5000)) { Write-Host "    still waiting ($([int]$clock.Elapsed.TotalSeconds)s so far)" }
+      }
       $p = Start-Process $file -ArgumentList '/S' -PassThru
+      # Unpacking a setup takes a lot of CPU. Below normal keeps the desktop
+      # and keyboard responsive while it runs.
+      try { $p.PriorityClass = [Diagnostics.ProcessPriorityClass]::BelowNormal } catch {}
       $expected = $app.WriteRatio * (Get-Item $file).Length
       $seen = @{}
       $tick = [Diagnostics.Stopwatch]::StartNew()
       while (-not $p.WaitForExit(500)) {
-        $written = Get-TreeWrites $p.Id $seen
         if ($tick.Elapsed.TotalSeconds -ge $ProgressEvery) {
+          $written = Get-TreeWrites $p.Id $seen
           $pct = if ($expected -gt 0) { [math]::Min(99, [int](100 * $written / $expected)) } else { 0 }
           Write-Host "    installing about $pct% ($([int]$clock.Elapsed.TotalSeconds)s so far)"
           $tick.Restart()
