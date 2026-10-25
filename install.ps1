@@ -278,10 +278,9 @@ function Install-App($app, $number, $count) {
         Write-Host "    an earlier $($app.Name) setup is still running, waiting for it to finish..." -ForegroundColor Yellow
         while (-not $old.WaitForExit(5000)) { Write-Host "    still waiting ($([int]$clock.Elapsed.TotalSeconds)s so far)" }
       }
+      # Normal priority: below normal made a JMCP setup take 452 s instead of
+      # 222 s on a busy PC.
       $p = Start-Process $file -ArgumentList '/S' -PassThru
-      # Unpacking a setup takes a lot of CPU. Below normal keeps the desktop
-      # and keyboard responsive while it runs.
-      try { $p.PriorityClass = [Diagnostics.ProcessPriorityClass]::BelowNormal } catch {}
       $expected = $app.WriteRatio * (Get-Item $file).Length
       $seen = @{}
       $tick = [Diagnostics.Stopwatch]::StartNew()
