@@ -327,13 +327,23 @@ function Set-TaskbarPins($names) {
     Write-Host "  skipped: another taskbar layout policy is already set ($current)" -ForegroundColor Yellow
     return
   }
-  # Keep apps pinned by an earlier run, so -Only never unpins the others.
-  $all = @($names)
+  # Keep apps pinned by an earlier run in the file, so they are never unpinned,
+  # but only the apps installed now are added or named. Apps answered "no"
+  # are not touched.
+  $old = @()
   if (Test-Path $layout) {
-    $all += ([xml](Get-Content $layout -Raw)).SelectNodes("//*[local-name()='DesktopApp']") |
-      ForEach-Object { [IO.Path]::GetFileNameWithoutExtension($_.DesktopApplicationLinkPath) }
+    $old = @(([xml](Get-Content $layout -Raw)).SelectNodes("//*[local-name()='DesktopApp']") |
+      ForEach-Object { [IO.Path]::GetFileNameWithoutExtension($_.DesktopApplicationLinkPath) })
   }
-  $all = $all | Where-Object { Test-Path (Join-Path $StartMenu "$_.lnk") } | Sort-Object -Unique
+  $names = @($names | Where-Object { Test-Path (Join-Path $StartMenu "$_.lnk") })
+  $policy = Get-ItemProperty $key -ErrorAction SilentlyContinue
+  $applied = $policy.StartLayoutFile -eq $layout -and $policy.LockedStartLayout -eq 1
+  $new = @($names | Where-Object { -not $applied -or $old -notcontains $_ })
+  if (-not $new) {
+    if ($names) { Write-Host "  $($names -join ', ') pinned by an earlier run, so the taskbar was left as it is." }
+    return
+  }
+  $all = @($old + $new) | Where-Object { Test-Path (Join-Path $StartMenu "$_.lnk") } | Sort-Object -Unique
   $pins = ($all | ForEach-Object {
     "        <taskbar:DesktopApp DesktopApplicationLinkPath=""%APPDATA%\Microsoft\Windows\Start Menu\Programs\$_.lnk"" />"
   }) -join "`r`n"
@@ -386,7 +396,7 @@ $pins
   Get-Process explorer -ErrorAction SilentlyContinue | Stop-Process -Force
   for ($i = 0; $i -lt 20 -and -not (Get-Process explorer -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 500 }
   if (-not (Get-Process explorer -ErrorAction SilentlyContinue)) { Start-Process explorer.exe }
-  Write-Host "  $($all -join ', ') added to the taskbar." -ForegroundColor Green
+  Write-Host "  $($new -join ', ') added to the taskbar." -ForegroundColor Green
 }
 
 if ($Beta) { Write-Host 'JSystems beta installer: also offers apps in beta testing, and pre-releases.' -ForegroundColor Cyan; Write-Host '' }
