@@ -35,8 +35,8 @@ $StartMenu = [Environment]::GetFolderPath('Programs')
 # measured on a full install (Simple Recorder 1.3.0: 1306 of 110 MB; JAgents
 # 0.6.2: 985 of 281 MB). The install percentage is written / expected.
 $Apps = @(
-  @{ Name = 'Simple Recorder'; Repo = 'simple-recorder'; Asset = 'SimpleRecorder-Setup.exe'; Kind = 'setup'; Exe = 'Simple Recorder.exe'; WriteRatio = 11.9; About = 'records your screen, a window or an area to MP4' }
-  @{ Name = 'JAgents';         Repo = 'JAgents';         Asset = 'JAgents-Setup.exe';        Kind = 'setup'; Exe = 'JAgents.exe'; WriteRatio = 3.5; About = 'runs coding agents like Claude Code and Codex side by side' }
+  @{ Name = 'Simple Recorder'; Repo = 'simple-recorder'; Asset = 'SimpleRecorder-Setup.exe'; Kind = 'setup'; Exe = 'Simple Recorder.exe'; WriteRatio = 11.9; Data = @('%APPDATA%\Simple Recorder'); About = 'records your screen, a window or an area to MP4' }
+  @{ Name = 'JAgents';         Repo = 'JAgents';         Asset = 'JAgents-Setup.exe';        Kind = 'setup'; Exe = 'JAgents.exe'; WriteRatio = 3.5; Data = @('%APPDATA%\JAgents'); About = 'runs coding agents like Claude Code and Codex side by side' }
   @{ Name = 'JPerformance';    Repo = 'JPerformance';    Asset = 'JPerformance.exe';         Kind = 'exe';   Exe = 'JPerformance.exe'; About = 'tracks CPU, memory, disk and network use over 30 days' }
   @{ Name = 'JServer';         Repo = 'JServer';         Asset = 'JServer.exe';              Kind = 'exe';   Exe = 'JServer.exe'; About = 'watches the Linux servers in your SSH config' }
 )
@@ -45,7 +45,7 @@ $Apps = @(
 # (JMCP 0.1.5: 644 MB written from a 206 MB setup).
 $Beta = [bool]$env:JSYSTEMS_BETA
 if ($Beta) {
-  $Apps += @{ Name = 'JMCP'; Repo = 'JMCP'; Asset = 'JMCP-Setup.exe'; AssetMatch = '^JMCP-Setup-[0-9][0-9A-Za-z.+-]*\.exe$'; Display = '^JMCP( |$)'; Kind = 'setup'; Exe = 'JMCP.exe'; WriteRatio = 3.2; About = 'gives every AI coding agent the same rules, memory, skills and a browser you can watch (beta)' }
+  $Apps += @{ Name = 'JMCP'; Repo = 'JMCP'; Asset = 'JMCP-Setup.exe'; AssetMatch = '^JMCP-Setup-[0-9][0-9A-Za-z.+-]*\.exe$'; Display = '^JMCP( |$)'; Kind = 'setup'; Data = @('%USERPROFILE%\.jmcp', '%APPDATA%\JMCP'); Exe = 'JMCP.exe'; WriteRatio = 3.2; About = 'gives every AI coding agent the same rules, memory, skills and a browser you can watch (beta)' }
 }
 # JSYSTEMS_APPS picks apps with no questions; without it the installer asks.
 $Ask = -not $env:JSYSTEMS_APPS
@@ -156,10 +156,10 @@ function Get-InstalledVersion($app) {
   return ''
 }
 
-# One yes/no question per app. Enter means yes, except for an app that is
-# already up to date: it can be reinstalled, and Enter means no.
+# One yes/no question per app. Enter means yes, except in the beta installer
+# for an app that is already up to date: it can be reinstalled, and Enter means no.
 function Select-Apps($apps) {
-  Write-Host 'JSystems apps. Answer y or n for each one.'
+  if ($Beta) { Write-Host 'JSystems apps. Answer y or n for each one.' } else { Write-Host 'JSystems apps. Answer y or n for each one (Enter = yes).' }
   Write-Host ''
   $picked = @()
   foreach ($app in $apps) {
@@ -171,8 +171,8 @@ function Select-Apps($apps) {
     Write-Host " ($status)"
     Write-Host "    $($app.About)"
     if ($app.Release.Note) { Write-Host "    $($app.Release.Note)" -ForegroundColor Yellow }
-    $current = $status -eq 'installed, up to date'
-    $question = if ($current) { "    Reinstall $($app.Name)? [y/N]" } elseif ($have) { "    Update $($app.Name)? [Y/n]" } else { "    Install $($app.Name)? [Y/n]" }
+    $current = $Beta -and $status -eq 'installed, up to date'
+    $question = if ($current) { "    Reinstall $($app.Name)? [y/N]" } elseif ($Beta -and $have) { "    Update $($app.Name)? [Y/n]" } else { "    Install $($app.Name)? [Y/n]" }
     do {
       $answer = (Read-Host $question).Trim().ToLower()
     } until ($answer -in '', 'y', 'yes', 'n', 'no')
@@ -180,6 +180,45 @@ function Select-Apps($apps) {
     Write-Host ''
   }
   return $picked
+}
+
+# Beta installer: before a setup replaces an installed app, copy the app's data
+# folders (Electron caches left out) to %LOCALAPPDATA%\JSystems\backups. If the
+# copy fails, the app is not touched. The newest 3 backups per app are kept.
+$BackupSkip = @('Cache', 'Code Cache', 'GPUCache', 'DawnCache', 'DawnGraphiteCache', 'DawnWebGPUCache')
+function Backup-AppData($app) {
+  $root = Join-Path $env:LOCALAPPDATA 'JSystems\backups'
+  $dest = Join-Path $root ("$($app.Repo)-" + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+  $saved = @()
+  $i = 0
+  foreach ($d in $app.Data) {
+    $src = [Environment]::ExpandEnvironmentVariables($d)
+    if (-not (Test-Path $src)) { continue }
+    $to = Join-Path $dest ("$i-" + (Split-Path $src -Leaf))
+    $i++
+    robocopy $src $to /E /R:1 /W:1 /NFL /NDL /NJH /NJS /NP /XD @BackupSkip | Out-Null
+    if ($LASTEXITCODE -ge 8) { throw "could not back up $src (robocopy exit $LASTEXITCODE), so $($app.Name) was left as it was" }
+    $saved += [pscustomobject]@{ From = $src; To = $to }
+  }
+  if ($saved) {
+    Get-ChildItem $root -Directory -Filter "$($app.Repo)-*" | Sort-Object Name -Descending | Select-Object -Skip 3 |
+      Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host "    data backed up to $dest"
+  }
+  return $saved
+}
+
+# After the setup: copy back any backed-up file that is now missing. Files
+# that are still there are left alone, so nothing newer is overwritten.
+function Restore-MissingData($saved) {
+  $restored = 0
+  foreach ($s in $saved) {
+    $out = robocopy $s.To $s.From /E /XC /XN /XO /R:1 /W:1 /NDL /NJH /NJS /NP
+    if ($LASTEXITCODE -ge 8) { Write-Host "    could not check $($s.From). Your backup is in $($s.To)" -ForegroundColor Yellow; continue }
+    $restored += @($out | Where-Object { $_ -match 'New File' }).Count
+  }
+  if ($restored) { Write-Host "    $restored data files were missing after the setup and were put back" -ForegroundColor Yellow }
+  else { Write-Host '    data checked: nothing was lost' }
 }
 
 function Install-App($app, $number, $count) {
@@ -198,6 +237,8 @@ function Install-App($app, $number, $count) {
       # Not -Wait: the setup opens the app when it finishes, and -Wait would
       # also wait for the app to close. /S setups show no window. While it
       # runs, print how much of what it normally writes has been written.
+      $saved = @()
+      if ($Beta -and $app.Data -and (Get-InstalledVersion $app)) { $saved = @(Backup-AppData $app) }
       $p = Start-Process $file -ArgumentList '/S' -PassThru
       $expected = $app.WriteRatio * (Get-Item $file).Length
       $seen = @{}
@@ -210,6 +251,7 @@ function Install-App($app, $number, $count) {
           $tick.Restart()
         }
       }
+      if ($saved) { Restore-MissingData $saved }
       if ($p.ExitCode -ne 0) { throw "setup exited with code $($p.ExitCode). Close $($app.Name) and run this again." }
     } else {
       $dir = Join-Path $Programs $app.Name
