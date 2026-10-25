@@ -13,7 +13,8 @@
   Beta installer, which also offers apps still in beta testing (JMCP) and
   takes pre-releases:
                    irm https://raw.githubusercontent.com/Josephivgi/JAgents/main/install-beta.ps1 | iex
-  It sets $env:JSYSTEMS_BETA='1' and runs this file.
+  It sets $env:JSYSTEMS_BETA='1' and runs this file. It opens each app it
+  installs; $env:JSYSTEMS_NOOPEN='1' leaves them closed.
 
   Per user, no admin. Downloads are made with PowerShell, so Windows does
   not mark them as "from the internet" and SmartScreen does not stop them.
@@ -55,8 +56,9 @@ if (-not $Ask) {
 }
 $NoPin = [bool]$env:JSYSTEMS_NOPIN
 $NoTerminal = [bool]$env:JSYSTEMS_NOTERMINAL
+$NoOpen = [bool]$env:JSYSTEMS_NOOPEN
 # The variables last for the whole PowerShell session; clear them so a later run starts clean.
-Remove-Item Env:JSYSTEMS_APPS, Env:JSYSTEMS_NOPIN, Env:JSYSTEMS_NOTERMINAL, Env:JSYSTEMS_BETA -ErrorAction SilentlyContinue
+Remove-Item Env:JSYSTEMS_APPS, Env:JSYSTEMS_NOPIN, Env:JSYSTEMS_NOTERMINAL, Env:JSYSTEMS_BETA, Env:JSYSTEMS_NOOPEN -ErrorAction SilentlyContinue
 
 function Get-Release($app) {
   # Newest published release that has the file. A brand-new release can be
@@ -154,6 +156,25 @@ function Get-InstalledVersion($app) {
   $exe = Join-Path (Join-Path $Programs $app.Name) $app.Exe
   if (Test-Path $exe) { $v = (Get-Item $exe).VersionInfo.ProductVersion; if ($v) { return $v } else { return 'yes' } }
   return ''
+}
+
+# Where an installed app's exe is: the setup's install folder (or the exe its
+# uninstall entry shows as its icon), or the folder a portable exe is copied to.
+function Get-AppExe($app) {
+  if ($app.Kind -eq 'setup') {
+    $entry = Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall -ErrorAction SilentlyContinue |
+      Get-ItemProperty -ErrorAction SilentlyContinue |
+      Where-Object { $_.DisplayName -eq $app.Name -or ($app.Display -and $_.DisplayName -match $app.Display) } | Select-Object -First 1
+    if (-not $entry) { return $null }
+    $paths = @()
+    if ($entry.InstallLocation) { $paths += Join-Path $entry.InstallLocation $app.Exe }
+    if ($entry.DisplayIcon) { $paths += ($entry.DisplayIcon -replace ',\s*-?\d+$', '').Trim('"') }
+    $exe = $paths | Where-Object { (Split-Path $_ -Leaf) -eq $app.Exe -and (Test-Path $_) } | Select-Object -First 1
+  } else {
+    $exe = Join-Path (Join-Path $Programs $app.Name) $app.Exe
+    if (-not (Test-Path $exe)) { $exe = $null }
+  }
+  return $exe
 }
 
 # One yes/no question per app. Enter means yes, except in the beta installer
@@ -412,6 +433,22 @@ if ($done -and -not $NoPin) {
   Write-Host 'Pinning to the taskbar'
   try { Set-TaskbarPins $done }
   catch { Write-Host "  skipped: $($_.Exception.Message) Pin the apps from the Start Menu." -ForegroundColor Yellow }
+}
+# Beta installer: open each app it installed, after the taskbar is redrawn.
+# Some setups open their app themselves, so an app already running is left alone.
+if ($Beta -and $done -and -not $NoOpen) {
+  Write-Host 'Opening the apps'
+  Start-Sleep -Seconds 3
+  foreach ($name in $done) {
+    $app = $Apps | Where-Object Name -eq $name | Select-Object -First 1
+    $exe = Get-AppExe $app
+    if (-not $exe) { Write-Host "  $name`: could not find $($app.Exe). Open it from the Start Menu." -ForegroundColor Yellow; continue }
+    # A background recorder (--collector) runs the same exe with no window.
+    $open = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -eq $exe -and $_.CommandLine -notmatch '--collector' })
+    if ($open) { Write-Host "  $name is already open"; continue }
+    try { Start-Process $exe -WorkingDirectory (Split-Path $exe); Write-Host "  opened $name" }
+    catch { Write-Host "  $name`: could not open it ($($_.Exception.Message))" -ForegroundColor Yellow }
+  }
 }
 if (-not $Apps) { Write-Host 'No app matched JSYSTEMS_APPS. Use all, or names like JAgents,JServer.' -ForegroundColor Red }
 Write-Host "Done. $($done.Count) of $($Apps.Count) apps installed in $([math]::Floor($total.Elapsed.TotalMinutes)) min $($total.Elapsed.Seconds) s."
