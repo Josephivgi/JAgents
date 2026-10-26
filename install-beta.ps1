@@ -1,6 +1,6 @@
 <#
-  JSystems beta installer: the same installer as install.ps1, with the apps
-  still in beta testing added (JMCP), and pre-releases when they are newer.
+  JSystems beta installer: the same installer as install.ps1, and it also
+  takes pre-releases when they are newer.
 
     Ask:           irm https://raw.githubusercontent.com/Josephivgi/JAgents/main/install-beta.ps1 | iex
     No questions:  $env:JSYSTEMS_APPS='all'; irm <same url> | iex

@@ -2,19 +2,19 @@
   JSystems installer: installs the latest release of JSystems apps straight
   from GitHub Releases and pins them to the Windows taskbar. The same file
   is in each app's repo. It asks yes or no for each app, then installs the
-  ones you picked.
+  ones you picked, then opens them. An app you already have can be updated
+  or reinstalled; its data is backed up first and checked afterwards.
 
     Ask:           irm https://raw.githubusercontent.com/Josephivgi/JAgents/main/install.ps1 | iex
     No questions:  $env:JSYSTEMS_APPS='all'; irm <same url> | iex
     Some apps:     $env:JSYSTEMS_APPS='JAgents,JServer'; irm <same url> | iex
     Skip pinning:  $env:JSYSTEMS_NOPIN='1'
     Skip the JAgents terminal app:  $env:JSYSTEMS_NOTERMINAL='1'
+    Leave the apps closed:  $env:JSYSTEMS_NOOPEN='1'
 
-  Beta installer, which also offers apps still in beta testing (JMCP) and
-  takes pre-releases:
+  Beta installer, which also takes pre-releases:
                    irm https://raw.githubusercontent.com/Josephivgi/JAgents/main/install-beta.ps1 | iex
-  It sets $env:JSYSTEMS_BETA='1' and runs this file. It opens each app it
-  installs; $env:JSYSTEMS_NOOPEN='1' leaves them closed.
+  It sets $env:JSYSTEMS_BETA='1' and runs this file.
 
   Per user, no admin. Downloads are made with PowerShell, so Windows does
   not mark them as "from the internet" and SmartScreen does not stop them.
@@ -40,16 +40,14 @@ $Apps = @(
   @{ Name = 'JAgents';         Repo = 'JAgents';         Asset = 'JAgents-Setup.exe';        Kind = 'setup'; Exe = 'JAgents.exe'; WriteRatio = 3.5; Data = @('%APPDATA%\JAgents'); About = 'runs coding agents like Claude Code and Codex side by side' }
   @{ Name = 'JPerformance';    Repo = 'JPerformance';    Asset = 'JPerformance.exe';         Kind = 'exe';   Exe = 'JPerformance.exe'; About = 'tracks CPU, memory, disk and network use over 30 days' }
   @{ Name = 'JServer';         Repo = 'JServer';         Asset = 'JServer.exe';              Kind = 'exe';   Exe = 'JServer.exe'; About = 'watches the Linux servers in your SSH config' }
+  @{ Name = 'JMCP'; Repo = 'JMCP'; Asset = 'JMCP-Setup.exe'; AssetMatch = '^JMCP-Setup-[0-9][0-9A-Za-z.+-]*\.exe$'; Display = '^JMCP( |$)'; Kind = 'setup'; Data = @('%USERPROFILE%\.jmcp', '%APPDATA%\JMCP'); DataSkip = @('servers', 'probe', 'browser'); Exe = 'JMCP.exe'; WriteRatio = 3.2; About = 'gives every AI coding agent the same rules, memory, skills and a browser you can watch' }
 )
-# The beta installer also offers apps still in beta testing. JMCP's setup has
-# the version in its file name, and its uninstall entry is named "JMCP <version>"
-# (JMCP 0.1.5: 644 MB written from a 206 MB setup). DataSkip: folders that are
-# not user data and that the setup never touches (JMCP's servers\ holds copies
-# of its own server code: about 7,500 files that made the backup take minutes).
+# JMCP's setup has the version in its file name, and its uninstall entry is
+# named "JMCP <version>" (JMCP 0.1.5: 644 MB written from a 206 MB setup).
+# DataSkip: folders that are not user data and that the setup never touches
+# (JMCP's servers\ holds copies of its own server code: about 7,500 files that
+# made the backup take minutes).
 $Beta = [bool]$env:JSYSTEMS_BETA
-if ($Beta) {
-  $Apps += @{ Name = 'JMCP'; Repo = 'JMCP'; Asset = 'JMCP-Setup.exe'; AssetMatch = '^JMCP-Setup-[0-9][0-9A-Za-z.+-]*\.exe$'; Display = '^JMCP( |$)'; Kind = 'setup'; Data = @('%USERPROFILE%\.jmcp', '%APPDATA%\JMCP'); DataSkip = @('servers', 'probe', 'browser'); Exe = 'JMCP.exe'; WriteRatio = 3.2; About = 'gives every AI coding agent the same rules, memory, skills and a browser you can watch (beta)' }
-}
 # JSYSTEMS_APPS picks apps with no questions; without it the installer asks.
 $Ask = -not $env:JSYSTEMS_APPS
 if (-not $Ask) {
@@ -204,10 +202,10 @@ function Get-AppExe($app) {
   return $exe
 }
 
-# One yes/no question per app. Enter means yes, except in the beta installer
-# for an app that is already up to date: it can be reinstalled, and Enter means no.
+# One yes/no question per app. Enter means yes, except for an app that is
+# already up to date: it can be reinstalled, and Enter means no.
 function Select-Apps($apps) {
-  if ($Beta) { Write-Host 'JSystems apps. Answer y or n for each one.' } else { Write-Host 'JSystems apps. Answer y or n for each one (Enter = yes).' }
+  Write-Host 'JSystems apps. Answer y or n for each one.'
   Write-Host ''
   $picked = @()
   foreach ($app in $apps) {
@@ -219,8 +217,8 @@ function Select-Apps($apps) {
     Write-Host " ($status)"
     Write-Host "    $($app.About)"
     if ($app.Release.Note) { Write-Host "    $($app.Release.Note)" -ForegroundColor Yellow }
-    $current = $Beta -and $status -eq 'installed, up to date'
-    $question = if ($current) { "    Reinstall $($app.Name)? [y/N]" } elseif ($Beta -and $have) { "    Update $($app.Name)? [Y/n]" } else { "    Install $($app.Name)? [Y/n]" }
+    $current = $status -eq 'installed, up to date'
+    $question = if ($current) { "    Reinstall $($app.Name)? [y/N]" } elseif ($have) { "    Update $($app.Name)? [Y/n]" } else { "    Install $($app.Name)? [Y/n]" }
     do {
       $answer = (Read-Host $question).Trim().ToLower()
     } until ($answer -in '', 'y', 'yes', 'n', 'no')
@@ -230,7 +228,7 @@ function Select-Apps($apps) {
   return $picked
 }
 
-# Beta installer: before a setup replaces an installed app, copy the app's data
+# Before a setup replaces an installed app, copy the app's data
 # folders (Electron caches left out) to %LOCALAPPDATA%\JSystems\backups. If the
 # copy fails, the app is not touched. The newest 3 backups per app are kept.
 $BackupSkip = @('Cache', 'Code Cache', 'GPUCache', 'DawnCache', 'DawnGraphiteCache', 'DawnWebGPUCache')
@@ -304,7 +302,7 @@ function Install-App($app, $number, $count) {
         }
       }
       $saved = @()
-      if ($Beta -and $app.Data -and (Get-InstalledVersion $app)) { $saved = @(Backup-AppData $app) }
+      if ($app.Data -and (Get-InstalledVersion $app)) { $saved = @(Backup-AppData $app) }
       # A setup of the same app left running by an earlier try (a closed
       # window does not stop it) would fight this one, so wait for it first.
       $leaf = Split-Path $file -Leaf
@@ -458,7 +456,7 @@ $pins
   Write-Host "  $($new -join ', ') added to the taskbar." -ForegroundColor Green
 }
 
-if ($Beta) { Write-Host 'JSystems beta installer: also offers apps in beta testing, and pre-releases.' -ForegroundColor Cyan; Write-Host '' }
+if ($Beta) { Write-Host 'JSystems beta installer: also offers pre-releases.' -ForegroundColor Cyan; Write-Host '' }
 if ($Ask) {
   # Read-Host fails where nobody can answer (a hidden or -NonInteractive
   # PowerShell); install this repo's own app there, as before.
@@ -503,9 +501,9 @@ if ($done -and -not $NoPin) {
   try { Set-TaskbarPins $done }
   catch { Write-Host "  skipped: $($_.Exception.Message) Pin the apps from the Start Menu." -ForegroundColor Yellow }
 }
-# Beta installer: open each app it installed, after the taskbar is redrawn.
+# Open each app it installed, after the taskbar is redrawn.
 # Some setups open their app themselves, so an app already running is left alone.
-if ($Beta -and $done -and -not $NoOpen) {
+if ($done -and -not $NoOpen) {
   Write-Host 'Opening the apps'
   Start-Sleep -Seconds 3
   foreach ($name in $done) {

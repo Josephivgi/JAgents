@@ -10,7 +10,7 @@ Open PowerShell and run:
 irm https://raw.githubusercontent.com/Josephivgi/JAgents/main/install.ps1 | iex
 ```
 
-It asks yes or no for each JSystems app (Simple Recorder, JAgents, JPerformance, JServer), then downloads the ones you picked from their latest GitHub release, adds them to the Start Menu, and pins them to the taskbar. No administrator rights are needed, and Windows does not show the "Windows protected your PC" warning. The first time, Windows asks once for permission to add taskbar pins. To install all of them with no questions:
+It asks yes or no for each JSystems app (Simple Recorder, JAgents, JPerformance, JServer, JMCP), then downloads the ones you picked from their latest GitHub release, adds them to the Start Menu, pins them to the taskbar, and opens them. An app you already have can be updated or reinstalled; its data is backed up first. No administrator rights are needed, and Windows does not show the "Windows protected your PC" warning. The first time, Windows asks once for permission to add taskbar pins. To install all of them with no questions:
 
 ```powershell
 $env:JSYSTEMS_APPS='all'; irm https://raw.githubusercontent.com/Josephivgi/JAgents/main/install.ps1 | iex
