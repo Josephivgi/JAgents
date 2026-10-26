@@ -28,7 +28,39 @@ document.addEventListener("visibilitychange", () => {
 
 export function routePtyData({ id, data }) {
   const v = views.get(id);
-  if (v) v.term.write(data);
+  if (!v) return;
+  v.term.write(data);
+  noteOutput(v);
+}
+
+// Whether the agent is working, for the tab: output that keeps coming for a
+// moment and is not the echo of typing or a redraw after a resize. Fires
+// "term-activity" with {id, busy, worked} (ms of work) when it changes.
+const ECHO_MS = 600;
+const BUSY_AFTER_MS = 800;
+const IDLE_AFTER_MS = 1600;
+
+function noteOutput(v) {
+  const now = Date.now();
+  if (!v.busy && (now < v.lastInput + ECHO_MS || now < v.quietUntil)) return;
+  if (!v.burstStart) v.burstStart = now;
+  clearTimeout(v.idleTimer);
+  v.idleTimer = setTimeout(() => {
+    const worked = v.busy ? Date.now() - v.burstStart : 0;
+    v.burstStart = 0;
+    if (!v.busy) return;
+    v.busy = false;
+    fire("term-activity", { id: v.pane.id, busy: false, worked });
+  }, IDLE_AFTER_MS);
+  if (!v.busy && now - v.burstStart >= BUSY_AFTER_MS) {
+    v.busy = true;
+    fire("term-activity", { id: v.pane.id, busy: true, worked: 0 });
+  }
+}
+
+export function terminalBusy(id) {
+  const v = views.get(id);
+  return Boolean(v && v.busy);
 }
 
 export function routePtyExit({ id, exitCode }) {
@@ -218,9 +250,16 @@ export class TerminalView {
       this.term.loadAddon(new window.Unicode11Addon.Unicode11Addon());
       this.term.unicode.activeVersion = "11";
     }
-    this.term.onData((data) => window.jagents.pty.write(pane.id, data));
+    this.lastInput = 0;
+    this.quietUntil = Date.now() + 3000; // the screen replays on attach
+    this.term.onData((data) => {
+      this.lastInput = Date.now();
+      window.jagents.pty.write(pane.id, data);
+    });
     this.term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
+      // Ctrl+Tab switches tabs (code-mode), not a key for the agent.
+      if (e.ctrlKey && e.key === "Tab") return false;
       const mod = e.ctrlKey || e.metaKey;
       if (mod && e.key.toLowerCase() === "c" && this.term.hasSelection()) {
         navigator.clipboard.writeText(this.term.getSelection());
@@ -301,7 +340,10 @@ export class TerminalView {
     const s = this.size();
     if (this.lastSize && this.lastSize.cols === s.cols && this.lastSize.rows === s.rows) return;
     this.lastSize = s;
-    if (this.attached) window.jagents.pty.resize(this.pane.id, s.cols, s.rows);
+    if (!this.attached) return;
+    // The agent redraws for the new size; that is not work.
+    this.quietUntil = Date.now() + 1200;
+    window.jagents.pty.resize(this.pane.id, s.cols, s.rows);
   }
 
   async attach() {
@@ -328,6 +370,7 @@ export class TerminalView {
     this.exitEl.hidden = true;
     this.term.reset();
     try {
+      this.quietUntil = Date.now() + 3000;
       await window.jagents.pty.restart(this.pane.id, this.size());
       fire("terminal-restarted", this.pane.id);
     } catch (error) {
@@ -349,6 +392,7 @@ export class TerminalView {
     clearTimeout(this.refitTimer);
     clearTimeout(this.refitLate);
     clearTimeout(this.webglRetry);
+    clearTimeout(this.idleTimer);
     views.delete(this.pane.id);
     this.ro.disconnect();
     this.term.dispose();

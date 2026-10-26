@@ -13,7 +13,7 @@
 import { esc, toast, errorText } from "./util.js";
 import { icon, harnessIcon } from "./icons.js";
 import { store, fire, on } from "./store.js";
-import { TerminalView } from "./terminal-view.js";
+import { TerminalView, terminalBusy } from "./terminal-view.js";
 import { ChatView } from "./chat-view.js";
 import { openHandoff, dropdown } from "./dialogs.js";
 import { PluginPaneView, pluginKindIcon, openPluginsFromPane, openPluginPane } from "./plugins.js";
@@ -164,21 +164,98 @@ function tabIcon(p, size) {
   return harnessIcon(p.provider, size || 15);
 }
 
+// A terminal tab reads "Claude Code  claude-1": the agent, then its handle
+// (what other agents call it) in a quieter style. A renamed one shows its name.
+function tabParts(p, entry) {
+  if (p.kind === "terminal" && !(p.title && p.title !== p.name)) return { name: p.name, sub: p.handle || "" };
+  return { name: tabTitle(p, entry), sub: "" };
+}
+
 function tabMarkup(id, g) {
   const entry = panes.get(id);
   if (!entry) return "";
   const p = entry.pane;
-  const st = entry.snap ? entry.snap.status : "";
-  const busy = st === "busy" || st === "starting";
-  const title = tabTitle(p, entry);
-  const tip = [title, p.handle, p.cwd].filter(Boolean).join("\n");
+  const { name, sub } = tabParts(p, entry);
+  const label = sub ? name + " · " + sub : name;
+  const on = g.active === id;
   return (
-    '<div class="tab' + (g.active === id ? " on" : "") + (entry.exited ? " exited" : "") + '" role="tab" aria-selected="' + (g.active === id) + '" tabindex="0" draggable="true" data-tab="' + esc(id) + '" title="' + esc(tip) + '">' +
-    (busy ? '<span class="tab-busy" aria-label="Working"></span>' : "") +
-    '<span class="tab-ic">' + tabIcon(p, 14) + "</span>" +
-    '<span class="tab-title">' + esc(title) + "</span>" +
-    '<button type="button" class="tab-x" data-tab-close="' + esc(id) + '" aria-label="Close ' + esc(title) + '" title="Close">' + icon("close", 13) + "</button></div>"
+    '<div class="tab' + (on ? " on" : "") + (p.kind === "terminal" ? " term" : "") + '" role="tab" aria-selected="' + on + '" tabindex="' + (on ? 0 : -1) + '" draggable="true" data-tab="' + esc(id) + '">' +
+    '<span class="tab-ic">' + tabIcon(p, 15) + "</span>" +
+    '<span class="tab-title"><span class="tab-name">' + esc(name) + "</span>" + (sub ? '<span class="tab-sub">' + esc(sub) + "</span>" : "") + "</span>" +
+    '<span class="tab-end"><span class="tab-state"></span>' +
+    '<button type="button" class="tab-x" data-tab-close="' + esc(id) + '" aria-label="Close ' + esc(label) + '" title="Close (middle click)" tabindex="-1">' + icon("close", 13) + "</button></span></div>"
   );
+}
+
+// What a tab shows on its right: working, finished while you were elsewhere,
+// waiting for your answer, or exited.
+const STATE_TEXT = { busy: "Working", done: "Finished, not looked at yet", ask: "Waiting for your answer", exited: "Exited" };
+
+function tabState(entry) {
+  if (entry.exited) return "exited";
+  const snap = entry.snap;
+  if (snap && snap.permissions && snap.permissions.length) return "ask";
+  if (snap ? snap.status === "busy" || snap.status === "starting" : terminalBusy(entry.pane.id)) return "busy";
+  return entry.done ? "done" : "";
+}
+
+// States change often (a terminal starts and stops printing), so they are set
+// on the tabs in place: a strip never rebuilds under the mouse or a drag.
+function paintTabStates() {
+  if (!groupsEl) return;
+  for (const tab of groupsEl.querySelectorAll("[data-tab]")) {
+    const entry = panes.get(tab.dataset.tab);
+    if (!entry) continue;
+    // Seen now (its project or group came into view).
+    if (entry.done && onScreen(entry.pane.id)) entry.done = false;
+    const st = tabState(entry);
+    if ((tab.dataset.state || "") !== st) {
+      if (st) tab.dataset.state = st;
+      else delete tab.dataset.state;
+    }
+    const { name, sub } = tabParts(entry.pane, entry);
+    const tip = [name + (st ? " (" + STATE_TEXT[st] + ")" : ""), sub, entry.pane.cwd].filter(Boolean).join("\n");
+    if (tab.title !== tip) tab.title = tip;
+  }
+}
+
+// On screen: the active tab of its group, in the open project, window showing.
+function onScreen(id) {
+  const g = groupOf(id);
+  return Boolean(g && g.active === id && !document.hidden);
+}
+
+function noteDone(entry) {
+  if (!onScreen(entry.pane.id)) entry.done = true;
+}
+
+on("term-activity", ({ id, busy, worked }) => {
+  const entry = panes.get(id);
+  if (!entry) return;
+  // A few seconds of output is work worth a dot; a short redraw is not.
+  if (!busy && worked >= 3000) noteDone(entry);
+  paintTabStates();
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) return;
+  for (const [id, entry] of panes) if (entry.done && onScreen(id)) entry.done = false;
+  paintTabStates();
+});
+
+// Keeps the active tab in view when a strip has more tabs than fit.
+function revealActive(strip) {
+  const tabs = strip.querySelector(".tabs");
+  const on = tabs && tabs.querySelector(".tab.on");
+  if (on) on.scrollIntoView({ block: "nearest", inline: "nearest" });
+  fadeEdges(tabs);
+}
+
+// Faded edges show there are more tabs to scroll to.
+function fadeEdges(tabs) {
+  if (!tabs) return;
+  tabs.classList.toggle("more-left", tabs.scrollLeft > 2);
+  tabs.classList.toggle("more-right", tabs.scrollLeft + tabs.clientWidth < tabs.scrollWidth - 2);
 }
 
 function stripMarkup(g, last) {
@@ -254,6 +331,9 @@ function render() {
     if (strip._html !== html) {
       strip._html = html;
       strip.innerHTML = html;
+      const tabs = strip.querySelector(".tabs");
+      tabs.addEventListener("scroll", () => fadeEdges(tabs), { passive: true });
+      requestAnimationFrame(() => revealActive(strip));
     }
     const body = gel.querySelector(".group-body");
     for (const id of g.tabs) {
@@ -272,6 +352,7 @@ function render() {
   // Panes of other projects wait out of sight.
   const shown = new Set(s.groups.flatMap((g) => g.tabs));
   for (const [id, entry] of panes) if (!shown.has(id) && entry.el.parentNode !== park) park.appendChild(entry.el);
+  paintTabStates();
   fire("app:layout");
   fire("code-tabs");
 }
@@ -293,6 +374,8 @@ function activate(paneId, focus) {
   const g = groupOf(paneId);
   if (!g) return false;
   g.active = paneId;
+  const seen = panes.get(paneId);
+  if (seen) seen.done = false;
   state[activeKey()].focused = g.id;
   save();
   render();
@@ -317,9 +400,12 @@ function mount(pane) {
       compact: true,
       placeholder: "Message " + (pane.handle || "the agent"),
       onChange: (snap) => {
-        const before = entry.snap ? entry.snap.status + entry.snap.title : "";
+        const sig = (x) => (x ? x.status + "|" + x.title + "|" + ((x.permissions && x.permissions.length) || 0) : "");
+        const before = sig(entry.snap);
+        const wasBusy = Boolean(entry.snap && (entry.snap.status === "busy" || entry.snap.status === "starting"));
         entry.snap = snap;
-        if (before !== snap.status + snap.title) {
+        if (before !== sig(snap)) {
+          if (wasBusy && snap.status !== "busy" && snap.status !== "starting") noteDone(entry);
           render();
           fire("project-counts");
         }
@@ -497,7 +583,7 @@ function closeGroup(groupId) {
   render();
 }
 
-function moreMenu(anchor, groupId) {
+function moreMenu(anchor, groupId, atTab) {
   const s = state[activeKey()];
   const g = s.groups.find((x) => x.id === groupId);
   const entry = g && g.active ? panes.get(g.active) : null;
@@ -526,7 +612,7 @@ function moreMenu(anchor, groupId) {
     items.push({ label: "Even sizes", icon: '<span class="menu-ic">' + icon("grid", 16) + "</span>", onPick: () => { even(s.tree); save(); render(); } });
     items.push({ label: "Merge this group", desc: "Its tabs join the group beside it", icon: '<span class="menu-ic">' + icon("minimize", 16) + "</span>", onPick: () => closeGroup(g.id) });
   }
-  dropdown(anchor, items, { width: 280, alignRight: true });
+  dropdown(anchor, items, { width: 280, alignRight: !atTab });
 }
 
 function addFromPicker(anchor, groupId) {
@@ -635,10 +721,22 @@ export function renderCodeMode(el) {
     if (!tab) return;
     e.preventDefault();
     activate(tab.dataset.tab, false);
-    const g = tab.closest("[data-group]");
-    const more = g && g.querySelector("[data-group-more]");
-    if (more) moreMenu(more, g.dataset.group);
+    // The strip was rebuilt; open the menu under the new tab element.
+    const g = tab.closest("[data-group]") || groupsEl.querySelector('[data-group="' + CSS.escape((groupOf(tab.dataset.tab) || {}).id || "") + '"]');
+    const now = g && g.querySelector('[data-tab="' + CSS.escape(tab.dataset.tab) + '"]');
+    if (now) moreMenu(now, g.dataset.group, true);
   });
+  // A mouse wheel scrolls a crowded strip sideways.
+  el.addEventListener(
+    "wheel",
+    (e) => {
+      const tabs = e.target.closest && e.target.closest(".tabs");
+      if (!tabs || tabs.scrollWidth <= tabs.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+      e.preventDefault();
+      tabs.scrollLeft += e.deltaY;
+    },
+    { passive: false },
+  );
   el.addEventListener("auxclick", (e) => {
     const tab = e.button === 1 && e.target.closest("[data-tab]");
     if (tab) closePane(tab.dataset.tab);
@@ -649,9 +747,12 @@ export function renderCodeMode(el) {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       activate(tab.dataset.tab, true);
-    } else if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
-      const sib = e.key === "ArrowRight" ? tab.nextElementSibling : tab.previousElementSibling;
-      if (sib) sib.focus();
+    } else if (e.key === "ArrowRight" || e.key === "ArrowLeft" || e.key === "Home" || e.key === "End") {
+      e.preventDefault();
+      const all = Array.from(tab.parentElement.children);
+      const i = all.indexOf(tab);
+      const next = e.key === "Home" ? all[0] : e.key === "End" ? all[all.length - 1] : all[i + (e.key === "ArrowRight" ? 1 : -1)];
+      if (next) next.focus();
     } else if (e.key === "Delete") closePane(tab.dataset.tab);
   });
   el.addEventListener("mousedown", (e) => {
@@ -711,7 +812,24 @@ export function renderCodeMode(el) {
     moveTab(id, g.dataset.group, tab && tab.dataset.tab !== id ? tab.dataset.tab : "");
   });
 
-  new ResizeObserver(() => fire("app:layout")).observe(groupsEl);
+  // Ctrl+Tab and Ctrl+Shift+Tab (or Ctrl+PageDown and PageUp) go through the
+  // focused group's tabs, from anywhere in Code mode.
+  document.addEventListener("keydown", (e) => {
+    if (!e.ctrlKey || e.altKey || e.metaKey || !root.offsetParent) return;
+    const fwd = e.key === "Tab" ? !e.shiftKey : e.key === "PageDown" ? true : e.key === "PageUp" ? false : null;
+    if (fwd === null || document.querySelector(".modal-back, .settings-page:not([hidden])")) return;
+    const s = state[activeKey()];
+    const g = s && (s.groups.find((x) => x.id === s.focused) || s.groups[0]);
+    if (!g || g.tabs.length < 2) return;
+    e.preventDefault();
+    const i = g.tabs.indexOf(g.active);
+    activate(g.tabs[(i + (fwd ? 1 : -1) + g.tabs.length) % g.tabs.length], true);
+  });
+
+  new ResizeObserver(() => {
+    fire("app:layout");
+    for (const t of groupsEl.querySelectorAll(".tabs")) fadeEdges(t);
+  }).observe(groupsEl);
   on("hub-agents", () => render());
   on("plugin-kinds", () => render());
   render();
