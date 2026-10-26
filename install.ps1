@@ -123,8 +123,30 @@ function Save-Asset($release, $dest) {
 
 # Bytes written to disk so far by a process and everything it started. The
 # setups run hidden, so this is what shows how far an install has got.
+# Windows slows down hidden background processes to save power ("power
+# throttling"). A silent setup has no window, so it got slowed: the same JMCP
+# setup took 2.5 times more CPU time on some runs. This turns that off for one
+# process (SetProcessInformation, ProcessPowerThrottling, EXECUTION_SPEED).
+try {
+  Add-Type -ErrorAction Stop @'
+using System; using System.Runtime.InteropServices;
+public static class JSystemsPower {
+  [StructLayout(LayoutKind.Sequential)] struct State { public uint Version; public uint ControlMask; public uint StateMask; }
+  [DllImport("kernel32.dll")] static extern bool SetProcessInformation(IntPtr process, int infoClass, ref State info, uint size);
+  public static bool NoThrottle(IntPtr process) {
+    var s = new State { Version = 1, ControlMask = 1, StateMask = 0 };
+    return SetProcessInformation(process, 4, ref s, (uint)Marshal.SizeOf(typeof(State)));
+  }
+}
+'@
+} catch {}
+function Disable-Throttle($id) {
+  try { $h = (Get-Process -Id $id -ErrorAction Stop).Handle; [void][JSystemsPower]::NoThrottle($h) } catch {}
+}
+
 # Listing processes takes over a second on a busy PC, so ask only for the
-# fields used, and only once per progress line.
+# fields used, and only once per progress line. Processes the setup starts
+# (like the old version's uninstaller) get power throttling turned off too.
 function Get-TreeWrites($rootId, $seen) {
   $all = @(Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, WriteTransferCount -ErrorAction SilentlyContinue)
   $ids = @($rootId)
@@ -134,6 +156,7 @@ function Get-TreeWrites($rootId, $seen) {
   } while ($ids.Count -gt $count)
   foreach ($p in $all | Where-Object { $ids -contains $_.ProcessId }) {
     $key = [string]$p.ProcessId
+    if (-not $seen.ContainsKey($key)) { Disable-Throttle $p.ProcessId }
     if (-not $seen.ContainsKey($key) -or $seen[$key] -lt [double]$p.WriteTransferCount) { $seen[$key] = [double]$p.WriteTransferCount }
   }
   ($seen.Values | Measure-Object -Sum).Sum
@@ -265,6 +288,21 @@ function Install-App($app, $number, $count) {
       # Not -Wait: the setup opens the app when it finishes, and -Wait would
       # also wait for the app to close. /S setups show no window. While it
       # runs, print how much of what it normally writes has been written.
+      # Close the app before the backup and the setup. An open app keeps files
+      # locked, which made the backup take 30 s, and the setup's own wait for
+      # the app to close took 20 to 70 s. Ask nicely, then end what is left after 5 s.
+      $exe = Get-AppExe $app
+      if ($exe) {
+        $dir = Split-Path $exe
+        $running = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($dir + '\', [StringComparison]::OrdinalIgnoreCase) })
+        if ($running) {
+          Write-Host "    closing $($app.Name)..."
+          $running | Where-Object { $_.MainWindowHandle -ne 0 } | ForEach-Object { [void]$_.CloseMainWindow() }
+          $until = (Get-Date).AddSeconds(5)
+          while ((Get-Date) -lt $until -and @($running | Where-Object { -not $_.HasExited }).Count) { Start-Sleep -Milliseconds 250 }
+          $running | Where-Object { -not $_.HasExited } | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
+        }
+      }
       $saved = @()
       if ($Beta -and $app.Data -and (Get-InstalledVersion $app)) { $saved = @(Backup-AppData $app) }
       # A setup of the same app left running by an earlier try (a closed
@@ -281,6 +319,7 @@ function Install-App($app, $number, $count) {
       # Normal priority: below normal made a JMCP setup take 452 s instead of
       # 222 s on a busy PC.
       $p = Start-Process $file -ArgumentList '/S' -PassThru
+      Disable-Throttle $p.Id
       $expected = $app.WriteRatio * (Get-Item $file).Length
       $seen = @{}
       $tick = [Diagnostics.Stopwatch]::StartNew()
