@@ -12,10 +12,12 @@
 
 const { Terminal } = require("@xterm/headless");
 const { SerializeAddon } = require("@xterm/addon-serialize");
+const { Unicode11Addon } = require("@xterm/addon-unicode11");
 
 const SCROLLBACK = 8000;
 const FLUSH_MS = 12;
 const BUSY_WINDOW_MS = 1500;
+const WINDOWS_PTY = process.platform === "win32" ? { backend: "conpty", buildNumber: Number(require("node:os").release().split(".")[2]) || undefined } : undefined;
 
 function nodePtySpawn(opts) {
   const pty = require("node-pty");
@@ -45,9 +47,13 @@ function createPtyHost({ emit, spawn }) {
   // Output goes out only after the mirror has parsed it, so a snapshot taken
   // at any point holds exactly what was already sent and nothing is drawn twice.
   function track(id, proc, cols, rows, seed) {
-    const mirror = new Terminal({ cols, rows, scrollback: SCROLLBACK, allowProposedApi: true });
+    // Same character widths and resize behavior as the panes' xterm, so the
+    // snapshot a pane redraws from lines up with what the agent drew.
+    const mirror = new Terminal({ cols, rows, scrollback: SCROLLBACK, allowProposedApi: true, windowsPty: WINDOWS_PTY });
     const serializer = new SerializeAddon();
     mirror.loadAddon(serializer);
+    mirror.loadAddon(new Unicode11Addon());
+    mirror.unicode.activeVersion = "11";
     const t = { id, proc, mirror, serializer, pending: "", flushTimer: null, lastOutputAt: 0, startedAt: Date.now(), exited: false, exitCode: null, listeners: new Set() };
     terms.set(id, t);
     const ready = seed ? new Promise((r) => mirror.write(seed, r)) : Promise.resolve();
@@ -225,6 +231,9 @@ function createPtyHost({ emit, spawn }) {
     clearTimeout(t.flushTimer);
     try {
       if (!t.exited) t.proc.kill();
+      // An exited terminal still has an entry in the pty daemon; without
+      // this, Restart failed there with "Terminal ... already exists".
+      else if (t.proc.forget) t.proc.forget();
     } catch {
       /* already gone */
     }

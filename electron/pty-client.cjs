@@ -86,6 +86,7 @@ async function connectPtyHost({ emit, dataRoot }) {
       write: (data) => send({ op: "write", id, data: String(data) }),
       resize: (cols, rows) => send({ op: "resize", id, cols, rows }),
       kill: () => send({ op: "kill", id }),
+      forget: () => send({ op: "kill", id }),
       onData: (fn) => p.dataFns.push(fn),
       onExit: (fn) => p.exitFns.push(fn),
     };

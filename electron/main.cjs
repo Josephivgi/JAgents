@@ -35,6 +35,8 @@ const VENDOR = {
   "xterm.js": path.join(APP_ROOT, "node_modules", "@xterm", "xterm", "lib", "xterm.js"),
   "xterm.css": path.join(APP_ROOT, "node_modules", "@xterm", "xterm", "css", "xterm.css"),
   "addon-fit.js": path.join(APP_ROOT, "node_modules", "@xterm", "addon-fit", "lib", "addon-fit.js"),
+  "addon-webgl.js": path.join(APP_ROOT, "node_modules", "@xterm", "addon-webgl", "lib", "addon-webgl.js"),
+  "addon-unicode11.js": path.join(APP_ROOT, "node_modules", "@xterm", "addon-unicode11", "lib", "addon-unicode11.js"),
   // Chat markdown: parser, sanitizer, code highlighting (ES modules).
   "marked.js": path.join(APP_ROOT, "node_modules", "marked", "lib", "marked.esm.js"),
   "purify.js": path.join(APP_ROOT, "node_modules", "dompurify", "dist", "purify.es.mjs"),
@@ -69,6 +71,9 @@ if (process.platform === "win32" && "NO_COLOR" in process.env) {
 app.setName("JAgents");
 // Some sandboxed or remote sessions crash the GPU process; this falls back to software rendering.
 if (process.env.JAGENTS_DISABLE_GPU === "1") app.disableHardwareAcceleration();
+// Each terminal pane draws with its own WebGL context, and Chromium's default
+// cap of 16 would drop the oldest ones in a big grid.
+app.commandLine.appendSwitch("max-active-webgl-contexts", "64");
 const DATA_ROOT = process.env.JAGENTS_DATA_ROOT ? path.resolve(process.env.JAGENTS_DATA_ROOT) : path.join(app.getPath("appData"), "JAgents");
 // Before the rebrand the data folder was "Relay ADE"; copy it once.
 // Relay ADE data comes in only when the user presses "Get data from legacy
@@ -154,6 +159,11 @@ function registerProtocol() {
   });
 }
 
+// Windows build number, so the terminals know how ConPTY redraws on resize.
+function osBuild() {
+  return process.platform === "win32" ? Number(require("node:os").release().split(".")[2]) || 0 : 0;
+}
+
 function theme() {
   return db.getSetting("theme", "dark") === "light" ? "light" : "dark";
 }
@@ -223,7 +233,7 @@ function registerIpc() {
     }
     return settled;
   }
-  handle("app-info", () => ({ dataRoot: DATA_ROOT, hubDir: HOME_DIR, theme: theme(), cwd: workspace.cwdDefault(), hubAttach: workspace.hubOn(), hubChosen: db.getSetting("hub.chosen", false), mode: db.getSetting("mode", "code"), version: updater.state().current, mcpAutoUpdate: db.getSetting("mcp.autoUpdate", true), mcpAutoInstall: db.getSetting("mcp.autoInstall", false), layout: db.getSetting("layout", "grid"), threadCurrent: db.getSetting("thread.current", ""), threadSettled: settledThreads(), threadSettledFolded: Boolean(db.getSetting("thread.settledFolded", false)), platform: process.platform, updateAuto: db.getSetting("update.auto", true) !== false, updateSnooze: db.getSetting("update.snooze", null), groups: db.getSetting("ui.groups", null), pageTabs: db.getSetting("ui.pageTabs", 3), sidebarWidth: db.getSetting("ui.sidebarWidth", 0), sidebarHidden: Boolean(db.getSetting("ui.sidebarHidden", false)), projects: workspace.projects() }));
+  handle("app-info", () => ({ dataRoot: DATA_ROOT, hubDir: HOME_DIR, theme: theme(), cwd: workspace.cwdDefault(), hubAttach: workspace.hubOn(), hubChosen: db.getSetting("hub.chosen", false), mode: db.getSetting("mode", "code"), version: updater.state().current, mcpAutoUpdate: db.getSetting("mcp.autoUpdate", true), mcpAutoInstall: db.getSetting("mcp.autoInstall", false), layout: db.getSetting("layout", "grid"), threadCurrent: db.getSetting("thread.current", ""), threadSettled: settledThreads(), threadSettledFolded: Boolean(db.getSetting("thread.settledFolded", false)), platform: process.platform, osBuild: osBuild(), updateAuto: db.getSetting("update.auto", true) !== false, updateSnooze: db.getSetting("update.snooze", null), groups: db.getSetting("ui.groups", null), pageTabs: db.getSetting("ui.pageTabs", 3), sidebarWidth: db.getSetting("ui.sidebarWidth", 0), sidebarHidden: Boolean(db.getSetting("ui.sidebarHidden", false)), projects: workspace.projects() }));
   // The page sends its colors so the window buttons match the theme.
   handle("titlebar-colors", (colors) => {
     if (!mainWindow || !colors || process.platform === "darwin") return false;

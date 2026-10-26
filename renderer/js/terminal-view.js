@@ -4,7 +4,7 @@
 
 import { esc } from "./util.js";
 import { icon } from "./icons.js";
-import { on } from "./store.js";
+import { on, fire, store } from "./store.js";
 
 const views = new Map(); // paneId -> TerminalView
 
@@ -19,7 +19,10 @@ function refitAll() {
 on("app:layout", refitAll);
 window.addEventListener("resize", refitAll);
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) refitAll();
+  if (document.hidden) return;
+  refitAll();
+  // The GPU canvas may have dropped its last frame while hidden; redraw it.
+  for (const v of views.values()) if (v.webgl) v.term.refresh(0, v.term.rows - 1);
 });
 
 export function routePtyData({ id, data }) {
@@ -32,19 +35,50 @@ export function routePtyExit({ id, exitCode }) {
   if (v) v.showExit(exitCode);
 }
 
-function cssVar(name) {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+function isDark() {
+  return document.documentElement.dataset.theme === "dark";
 }
 
+// All 16 ANSI colors: the bright ones used to fall back to xterm's defaults,
+// which clashed with the rest of the palette.
 function xtermTheme() {
-  const dark = document.documentElement.dataset.theme === "dark";
-  return dark
-    ? { background: "#15171c", foreground: "#e3e5ea", cursor: "#c7b8ff", cursorAccent: "#15171c", selectionBackground: "#4b4370", black: "#1d2027", brightBlack: "#5c6370", red: "#ef7d7d", green: "#7fd1a0", yellow: "#e8c46e", blue: "#82aaff", magenta: "#c89cff", cyan: "#7fd6e0", white: "#d8dbe2", brightWhite: "#ffffff" }
-    : { background: "#fbfbfd", foreground: "#2a2d36", cursor: "#5b4bc4", cursorAccent: "#fbfbfd", selectionBackground: "#d9d3fb", black: "#2a2d36", brightBlack: "#7a7f8c", red: "#c43d3d", green: "#2f8a55", yellow: "#a87412", blue: "#3463c4", magenta: "#8a44c4", cyan: "#1f8a99", white: "#d0d3da", brightWhite: "#ffffff" };
+  return isDark()
+    ? { background: "#15171c", foreground: "#e3e5ea", cursor: "#c7b8ff", cursorAccent: "#15171c", selectionBackground: "#4b4370", black: "#1d2027", brightBlack: "#5c6370", red: "#ef7d7d", brightRed: "#ff9b9b", green: "#7fd1a0", brightGreen: "#9be6b8", yellow: "#e8c46e", brightYellow: "#f5d78e", blue: "#82aaff", brightBlue: "#a3c1ff", magenta: "#c89cff", brightMagenta: "#dab8ff", cyan: "#7fd6e0", brightCyan: "#a2e6ee", white: "#d8dbe2", brightWhite: "#ffffff" }
+    : { background: "#fbfbfd", foreground: "#2a2d36", cursor: "#5b4bc4", cursorAccent: "#fbfbfd", selectionBackground: "#d9d3fb", black: "#2a2d36", brightBlack: "#7a7f8c", red: "#c43d3d", brightRed: "#d65454", green: "#2f8a55", brightGreen: "#3b9e66", yellow: "#a87412", brightYellow: "#b8862a", blue: "#3463c4", brightBlue: "#4a78d6", magenta: "#8a44c4", brightMagenta: "#9c5ad4", cyan: "#1f8a99", brightCyan: "#2a9dad", white: "#d0d3da", brightWhite: "#ffffff" };
+}
+
+// Agent CLIs pick colors for a dark terminal; in the light theme xterm nudges
+// text too faint to read against the background.
+function contrast() {
+  return isDark() ? 1 : 4.5;
 }
 
 export function retheme() {
-  for (const v of views.values()) v.term.options.theme = xtermTheme();
+  for (const v of views.values()) {
+    v.term.options.theme = xtermTheme();
+    v.term.options.minimumContrastRatio = contrast();
+  }
+}
+
+// Cascadia Mono has no coding ligatures, which merge "->" and the like in a
+// terminal grid.
+const TERM_FONT = '"Cascadia Mono", "Cascadia Code", Consolas, ui-monospace, monospace';
+let fontReady = null;
+
+// xterm measures the cell once. Measured before the font is loaded it gets a
+// fallback font's cell, and text overlaps or gaps until the next resize.
+function loadTermFont() {
+  if (!fontReady) {
+    const load = Promise.all([document.fonts.load('13px "Cascadia Mono"'), document.fonts.load('bold 13px "Cascadia Mono"')]).catch(() => {});
+    fontReady = Promise.race([load, new Promise((r) => setTimeout(r, 1500))]);
+  }
+  return fontReady;
+}
+
+// Agent CLIs take Esc+Enter as a new line in their prompt; xterm sends Enter
+// and Shift+Enter the same. A plain shell gets Enter as typed.
+function newlineOnShiftEnter(provider) {
+  return provider !== "shell";
 }
 
 export class TerminalView {
@@ -55,18 +89,29 @@ export class TerminalView {
     this.el.innerHTML = '<div class="xterm-host"></div><div class="term-exit" hidden></div>';
     this.host = this.el.querySelector(".xterm-host");
     this.exitEl = this.el.querySelector(".term-exit");
+    const info = store.info || {};
     this.term = new window.Terminal({
-      fontFamily: cssVar("--mono") || "Cascadia Code, Consolas, monospace",
+      fontFamily: TERM_FONT,
       fontSize: 13,
       lineHeight: 1.15,
       cursorBlink: true,
       allowProposedApi: true,
       scrollback: 8000,
       theme: xtermTheme(),
+      minimumContrastRatio: contrast(),
+      // Wide symbols (⏺, ✻) are drawn inside their cell instead of over the next.
+      rescaleOverlappingGlyphs: true,
+      // ConPTY repaints the screen itself after a resize; without this xterm
+      // reflows the lines too and they come out doubled or cut.
+      windowsPty: info.platform === "win32" ? { backend: "conpty", buildNumber: info.osBuild || undefined } : undefined,
     });
     this.fit = new window.FitAddon.FitAddon();
     this.term.loadAddon(this.fit);
-    this.term.open(this.host);
+    if (window.Unicode11Addon) {
+      // Emoji and symbol widths as agent CLIs count them, so columns line up.
+      this.term.loadAddon(new window.Unicode11Addon.Unicode11Addon());
+      this.term.unicode.activeVersion = "11";
+    }
     this.term.onData((data) => window.jagents.pty.write(pane.id, data));
     this.term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
@@ -76,9 +121,17 @@ export class TerminalView {
         this.term.clearSelection();
         return false;
       }
-      if (mod && e.key.toLowerCase() === "v") {
+      if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "v") {
         e.preventDefault();
-        navigator.clipboard.readText().then((t) => t && this.term.paste(t));
+        // No text on the clipboard (a screenshot): pass Ctrl+V on so the agent
+        // can read the image itself.
+        const passOn = () => window.jagents.pty.write(pane.id, "\x16");
+        navigator.clipboard.readText().then((t) => (t ? this.term.paste(t) : passOn()), passOn);
+        return false;
+      }
+      if (e.key === "Enter" && e.shiftKey && !mod && !e.altKey && newlineOnShiftEnter(pane.provider)) {
+        e.preventDefault();
+        window.jagents.pty.write(pane.id, "\x1b\r");
         return false;
       }
       return true;
@@ -89,7 +142,35 @@ export class TerminalView {
     this.exitEl.addEventListener("click", (e) => {
       if (e.target.closest("[data-restart]")) this.restart();
     });
-    this.attach();
+    loadTermFont().then(() => {
+      if (this.disposed) return;
+      this.term.open(this.host);
+      this.useWebgl();
+      this.attach();
+    });
+  }
+
+  // The WebGL renderer draws block and box characters (Claude Code's logo, TUI
+  // borders) to fill the whole cell so they join up; the DOM renderer took
+  // them from the font and left gaps between rows. It is also much faster
+  // while agents stream output. Without WebGL the DOM renderer stays.
+  useWebgl() {
+    if (!window.WebglAddon) return;
+    try {
+      const gl = new window.WebglAddon.WebglAddon();
+      gl.onContextLoss(() => {
+        gl.dispose();
+        if (this.webgl === gl) this.webgl = null;
+        // The GPU process restarted (driver update, sleep): try again shortly.
+        clearTimeout(this.webglRetry);
+        this.webglRetry = setTimeout(() => !this.disposed && !this.webgl && this.useWebgl(), 1000);
+      });
+      this.term.loadAddon(gl);
+      this.webgl = gl;
+    } catch {
+      this.webgl = null;
+    }
+    this.queueRefit();
   }
 
   size() {
@@ -105,7 +186,7 @@ export class TerminalView {
   }
 
   refit() {
-    if (!this.host.offsetWidth || !this.host.offsetHeight) return;
+    if (!this.term.element || !this.host.offsetWidth || !this.host.offsetHeight) return;
     try {
       this.fit.fit();
     } catch {
@@ -142,6 +223,7 @@ export class TerminalView {
     this.term.reset();
     try {
       await window.jagents.pty.restart(this.pane.id, this.size());
+      fire("terminal-restarted", this.pane.id);
     } catch (error) {
       this.term.write("\r\n\x1b[31m" + String(error.message || error) + "\x1b[0m\r\n");
     }
@@ -157,8 +239,10 @@ export class TerminalView {
   }
 
   destroy() {
+    this.disposed = true;
     clearTimeout(this.refitTimer);
     clearTimeout(this.refitLate);
+    clearTimeout(this.webglRetry);
     views.delete(this.pane.id);
     this.ro.disconnect();
     this.term.dispose();

@@ -376,6 +376,18 @@ export function markExited(id) {
   }
 }
 
+// Restart: the tab and project dot stop showing the terminal as exited.
+on("terminal-restarted", (id) => {
+  const e = panes.get(id);
+  const p = store.panes.find((x) => x.id === id);
+  if (p && p.status === "exited") p.status = "idle";
+  if (e && e.exited) {
+    e.exited = false;
+    render();
+    fire("project-counts");
+  }
+});
+
 // Shows an agent's tab (switching project if it lives in another one).
 export function focusAgent(ref) {
   const entry = Array.from(panes.values()).find((e) => e.pane.handle === ref || e.pane.id === ref || e.pane.chatId === ref);
