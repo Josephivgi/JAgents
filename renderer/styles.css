@@ -1,6 +1,10 @@
 @font-face { font-family: "IBM Plex Sans"; font-weight: 400; font-display: swap; src: url("fonts/ibm-plex-sans-400.woff2") format("woff2"); }
 @font-face { font-family: "IBM Plex Sans"; font-weight: 500; font-display: swap; src: url("fonts/ibm-plex-sans-500.woff2") format("woff2"); }
 @font-face { font-family: "IBM Plex Sans"; font-weight: 600; font-display: swap; src: url("fonts/ibm-plex-sans-600.woff2") format("woff2"); }
+/* Terminal fonts: JetBrains Mono (OFL) for every weight, and Nerd Font icons
+   (MIT) that shell prompts draw with. */
+@font-face { font-family: "JetBrains Mono"; font-weight: 100 800; font-display: block; src: url("fonts/jetbrains-mono-var.woff2") format("woff2"); }
+@font-face { font-family: "Symbols Nerd Font Mono"; font-display: block; src: url("fonts/symbols-nerd-font-mono.woff2") format("woff2"); }
 
 /* Tokens: Plugin App's OKLCH set. */
 :root {
@@ -150,7 +154,9 @@ code, pre, .mono { font-family: var(--mono); font-size: 12.5px; }
 
 /* Terminal */
 .termview { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
-.xterm-host { flex: 1; min-height: 0; padding: 6px 4px 4px 10px; }
+/* Margin, not padding: the fit addon measures the parent box with its padding
+   and fitted one row too many when the leftover space was under 10px. */
+.xterm-host { flex: 1; min-height: 0; min-width: 0; margin: 6px 4px 4px 10px; }
 .xterm-host .xterm { height: 100%; }
 .xterm .xterm-viewport { background-color: transparent !important; }
 .xterm .xterm-viewport::-webkit-scrollbar { width: 10px; }

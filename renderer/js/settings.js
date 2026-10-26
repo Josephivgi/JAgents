@@ -10,9 +10,12 @@ import { embedNextModal, openHubPanel, openUpdatesPanel } from "./dialogs.js";
 import { openPluginsPanel } from "./plugins.js";
 import { openMarketplace } from "./marketplace.js";
 import { openUsagePanel } from "./usage.js";
+import { THEMES, isLightTheme } from "./terminal-themes.js";
+import { termSettings, setTermSettings, mountTermPreview, TERM_FONTS, TERM_WEIGHTS, TERM_LINE_HEIGHTS, TERM_CURSORS } from "./terminal-view.js";
 
 const SECTIONS = [
   { id: "general", label: "General", icon: "gear" },
+  { id: "terminal", label: "Terminal", icon: "terminal" },
   { id: "projects", label: "Projects", icon: "folder" },
   { id: "agents", label: "Agents", icon: "store" },
   { id: "hub", label: "MCP hub", icon: "hub" },
@@ -25,6 +28,7 @@ const SECTIONS = [
 
 let page = null;
 let current = "general";
+let dropPreview = null;
 
 export function settingsOpen() {
   return Boolean(page && !page.hidden);
@@ -33,6 +37,7 @@ export function settingsOpen() {
 export function closeSettings() {
   if (!page || page.hidden) return;
   page.hidden = true;
+  stopPreview();
   page.querySelector("[data-set-body]").innerHTML = "";
   document.body.classList.remove("settings-on");
   for (const b of document.querySelectorAll("[data-settings]")) b.classList.remove("on");
@@ -53,6 +58,7 @@ export function openSettings(section) {
 
 export function refreshSettings() {
   if (settingsOpen() && (current === "general" || current === "projects" || current === "about")) show(current);
+  else if (settingsOpen() && current === "terminal") paintTermCtl();
 }
 
 function wire() {
@@ -72,6 +78,7 @@ function wire() {
   });
   on("update", paintDots);
   on("plugins", paintDots);
+  on("app:theme", () => settingsOpen() && current === "terminal" && paintTermCtl());
   on("projects", () => settingsOpen() && current === "projects" && show("projects"));
   paintDots();
 }
@@ -102,12 +109,72 @@ function generalHtml() {
   return (
     '<h2 class="set-h">General</h2>' +
     '<div class="set-card">' +
-    row("Theme", "Colors for the whole window, terminals included.", '<div class="seg" role="radiogroup" aria-label="Theme"><button type="button" role="radio" aria-checked="' + (t === "dark") + '" class="' + (t === "dark" ? "on" : "") + '" data-set-theme="dark">' + icon("moon", 14) + 'Dark</button><button type="button" role="radio" aria-checked="' + (t === "light") + '" class="' + (t === "light" ? "on" : "") + '" data-set-theme="light">' + icon("sun", 14) + "Light</button></div>") +
+    row("Theme", "Light or dark window. Terminals use the matching theme from Terminal settings.", '<div class="seg" role="radiogroup" aria-label="Theme"><button type="button" role="radio" aria-checked="' + (t === "dark") + '" class="' + (t === "dark" ? "on" : "") + '" data-set-theme="dark">' + icon("moon", 14) + 'Dark</button><button type="button" role="radio" aria-checked="' + (t === "light") + '" class="' + (t === "light" ? "on" : "") + '" data-set-theme="light">' + icon("sun", 14) + "Light</button></div>") +
     row("Page tabs shown", "How many page tabs (Code, Threads and any a plugin adds) fit at the top of the sidebar. More than that scroll sideways.", '<div class="seg" role="radiogroup" aria-label="Page tabs shown">' + [2, 3, 4].map((n) => '<button type="button" role="radio" aria-checked="' + (n === tabs) + '" class="' + (n === tabs ? "on" : "") + '" data-set-page-tabs="' + n + '">' + n + "</button>").join("") + "</div>") +
     row("New agents start in", "The open project's folder. Pick a project in the sidebar to change it.", '<span class="mono small set-path" title="' + esc(store.info.cwd || "") + '">' + esc(store.info.cwd || "") + "</span>") +
     row("Agents see each other", "The JAgents MCP hub gives terminal agents tools to list, message and hand off to other agents.", toggle("data-set-hub", Boolean(store.info.hubAttach), "MCP hub")) +
     "</div>"
   );
+}
+
+function seg(label, attr, items, current) {
+  return '<div class="seg" role="radiogroup" aria-label="' + esc(label) + '">' + items.map(([value, text]) => '<button type="button" role="radio" aria-checked="' + (value === current) + '" class="' + (value === current ? "on" : "") + '" ' + attr + '="' + esc(value) + '">' + esc(text) + "</button>").join("") + "</div>";
+}
+
+// A theme as a small card: its background, name in its text color, and the
+// eight ANSI colors.
+function themeCard(name, mode, on) {
+  const t = THEMES[name];
+  const dots = ["red", "green", "yellow", "blue", "magenta", "cyan"].map((k) => '<i style="background:' + t[k] + '"></i>').join("");
+  return '<button type="button" class="tt-card' + (on ? " on" : "") + '" role="radio" aria-checked="' + on + '" data-term-theme="' + esc(name) + '" data-term-mode="' + mode + '" title="' + esc(name) + '" style="background:' + t.background + ";color:" + t.foreground + '"><span class="tt-name">' + esc(name) + '</span><span class="tt-dots">' + dots + "</span></button>";
+}
+
+function themeGrid(mode, current) {
+  const names = Object.keys(THEMES).filter((n) => isLightTheme(n) === (mode === "light"));
+  return '<div class="tt-grid" role="radiogroup" aria-label="' + (mode === "light" ? "Light" : "Dark") + ' window terminal theme">' + names.map((n) => themeCard(n, mode, n === current)).join("") + "</div>";
+}
+
+function terminalCtlHtml() {
+  const s = termSettings();
+  const dark = store.info.theme === "dark";
+  const weightNames = { 300: "Light", 400: "Regular", 500: "Medium", 600: "Semibold" };
+  return (
+    '<div class="set-card">' +
+    row("Font", "JetBrains Mono comes with JAgents. Icons in shell prompts (Nerd Font symbols) work with every font.", seg("Font", "data-term-font", TERM_FONTS.map((f) => [f, f]), s.font)) +
+    row("Size", "", '<div class="seg"><button type="button" data-term-size="-1" aria-label="Smaller">−</button><span class="tt-size" aria-live="polite">' + s.fontSize + ' px</span><button type="button" data-term-size="1" aria-label="Larger">+</button></div>') +
+    row("Weight", "Bold text is always Bold.", seg("Weight", "data-term-weight", TERM_WEIGHTS.map((w) => [String(w), weightNames[w]]), String(s.fontWeight))) +
+    row("Line spacing", "1.0 keeps block characters and box borders joined with no gaps.", seg("Line spacing", "data-term-line", TERM_LINE_HEIGHTS.map((h) => [String(h), h.toFixed(1)]), String(s.lineHeight))) +
+    row("Cursor", "", seg("Cursor", "data-term-cursor", TERM_CURSORS.map((c) => [c, c[0].toUpperCase() + c.slice(1)]), s.cursorStyle) + toggle("data-term-blink", s.cursorBlink, "Blinking cursor") + '<span class="muted small">Blink</span>') +
+    "</div>" +
+    '<h3 class="set-sub">' + icon("moon", 14) + "Dark window" + (dark ? ' <span class="pill ok">In use</span>' : "") + "</h3>" +
+    '<div class="set-card">' + themeGrid("dark", s.themeDark) + "</div>" +
+    '<h3 class="set-sub">' + icon("sun", 14) + "Light window" + (!dark ? ' <span class="pill ok">In use</span>' : "") + "</h3>" +
+    '<div class="set-card">' + themeGrid("light", s.themeLight) + "</div>" +
+    '<button type="button" class="btn secondary" data-term-reset>' + icon("undo", 14) + "Reset to defaults</button>"
+  );
+}
+
+function terminalHtml() {
+  return '<h2 class="set-h">Terminal</h2><p class="muted set-lead">How agent terminals look. Changes show in open terminals right away.</p>' + '<div class="tt-preview"><div data-term-preview></div></div><div data-term-ctl>' + terminalCtlHtml() + "</div>";
+}
+
+function stopPreview() {
+  if (dropPreview) dropPreview();
+  dropPreview = null;
+}
+
+async function changeTerm(patch) {
+  await setTermSettings(patch);
+  paintTermCtl();
+}
+
+function paintTermCtl() {
+  const ctl = page && page.querySelector("[data-term-ctl]");
+  if (ctl) {
+    const y = page.querySelector("[data-set-body]").scrollTop;
+    ctl.innerHTML = terminalCtlHtml();
+    page.querySelector("[data-set-body]").scrollTop = y;
+  }
 }
 
 function projectsHtml() {
@@ -170,6 +237,7 @@ async function show(id) {
     else b.removeAttribute("aria-current");
   }
   const body = page.querySelector("[data-set-body]");
+  stopPreview();
   body.scrollTop = 0;
   body.innerHTML = "";
   const host = () => {
@@ -181,6 +249,10 @@ async function show(id) {
   };
   try {
     if (id === "general") body.innerHTML = generalHtml();
+    else if (id === "terminal") {
+      body.innerHTML = terminalHtml();
+      dropPreview = mountTermPreview(body.querySelector("[data-term-preview]"));
+    }
     else if (id === "projects") body.innerHTML = projectsHtml();
     else if (id === "guide") body.innerHTML = guideHtml();
     else if (id === "about") body.innerHTML = aboutHtml();
@@ -218,6 +290,20 @@ async function onClick(e) {
     fire("set-theme", th.dataset.setTheme);
     return show("general");
   }
+  const tt = t.closest("[data-term-theme]");
+  if (tt) return changeTerm(tt.dataset.termMode === "light" ? { themeLight: tt.dataset.termTheme } : { themeDark: tt.dataset.termTheme });
+  const tf = t.closest("[data-term-font]");
+  if (tf) return changeTerm({ font: tf.dataset.termFont });
+  const tz = t.closest("[data-term-size]");
+  if (tz) return changeTerm({ fontSize: termSettings().fontSize + Number(tz.dataset.termSize) });
+  const tw = t.closest("[data-term-weight]");
+  if (tw) return changeTerm({ fontWeight: Number(tw.dataset.termWeight) });
+  const tl = t.closest("[data-term-line]");
+  if (tl) return changeTerm({ lineHeight: Number(tl.dataset.termLine) });
+  const tc = t.closest("[data-term-cursor]");
+  if (tc) return changeTerm({ cursorStyle: tc.dataset.termCursor });
+  if (t.closest("[data-term-blink]")) return changeTerm({ cursorBlink: !termSettings().cursorBlink });
+  if (t.closest("[data-term-reset]")) return changeTerm(null);
   const pt = t.closest("[data-set-page-tabs]");
   if (pt) {
     store.info.pageTabs = Number(pt.dataset.setPageTabs);
