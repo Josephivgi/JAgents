@@ -4,8 +4,8 @@
 // the group. Pane views live as long as their pane does; switching tabs,
 // projects or groups only moves or hides their elements.
 //
-// Groups are kept per project in the ui.groups setting:
-//   { [projectKey]: { focused, groups: [{ id, tabs: [paneId], active }], tree } }
+// Groups are kept per project workspace in the ui.groups setting:
+//   { [layoutKey]: { focused, groups: [{ id, tabs: [paneId], active }], tree } }
 // tree arranges them: a leaf { g: groupId } or a split
 // { dir: "row" | "column", kids: [node], sizes: [number] }, so any group can
 // be split right or down.
@@ -27,29 +27,48 @@ let dragTab = "";
 let saveTimer = 0;
 
 export const projectKey = (dir) => String(dir || "").replace(/[\\/]+$/, "").replace(/\//g, "\\").toLowerCase();
-const activeKey = () => projectKey(store.info.cwd);
+
+// Each project has workspaces, separate sets of agents; Default holds the
+// ones from before workspaces. A Default workspace's layout keeps the
+// project's own key, so layouts saved before workspaces stay put.
+export const DEFAULT_WS = "default";
+export const layoutKey = (dir, ws) => projectKey(dir) + (ws && ws !== DEFAULT_WS ? "#" + ws : "");
+
+export function activeWorkspace() {
+  const k = projectKey(store.info.cwd);
+  const p = (store.projects || []).find((x) => projectKey(x.path) === k);
+  return (p && p.workspace) || DEFAULT_WS;
+}
+
+const activeKey = () => layoutKey(store.info.cwd, activeWorkspace());
 const uid = () => "g" + Math.random().toString(36).slice(2, 9);
 
-// Which project a pane belongs to. Panes with no folder (plugin panes from
-// before projects) stay with the project that is open.
-function paneProject(p) {
-  return p.cwd ? projectKey(p.cwd) : "";
+// Which project workspace a pane belongs to. Panes with no folder (plugin
+// panes) stay with the project that is open.
+function paneKey(p) {
+  return p.cwd ? layoutKey(p.cwd, p.workspace) : "";
 }
 
 function projectPanes(key) {
-  return store.panes.filter((p) => paneProject(p) === key || (!paneProject(p) && key === activeKey()));
+  return store.panes.filter((p) => paneKey(p) === key || (!p.cwd && key === activeKey() && (p.workspace || DEFAULT_WS) === activeWorkspace()));
 }
 
+// Agents per project (keyed by projectKey) and per workspace (keyed by
+// projectKey + "#" + workspace id, Default included), for the sidebar.
 export function projectCounts() {
   const out = new Map();
-  for (const p of store.panes) {
-    const k = paneProject(p) || activeKey();
+  const add = (k, p) => {
     const e = out.get(k) || { count: 0, busy: 0 };
     e.count++;
     const entry = panes.get(p.id);
     const st = entry && entry.snap ? entry.snap.status : p.status;
     if (st === "busy" || st === "starting" || (p.kind === "terminal" && p.status !== "exited" && !(entry && entry.exited))) e.busy++;
     out.set(k, e);
+  };
+  for (const p of store.panes) {
+    const k = p.cwd ? projectKey(p.cwd) : projectKey(store.info.cwd);
+    add(k, p);
+    add(k + "#" + (p.workspace || DEFAULT_WS), p);
   }
   return out;
 }
@@ -331,9 +350,11 @@ function stripMarkup(g, last) {
 function emptyMarkup() {
   const dir = store.info.cwd || "";
   const name = dir.replace(/^.*[\\/](?=[^\\/]+[\\/]?$)/, "") || dir;
+  const p = (store.projects || []).find((x) => projectKey(x.path) === projectKey(dir));
+  const ws = p && activeWorkspace() !== DEFAULT_WS && (p.workspaces || []).find((w) => w.id === activeWorkspace());
   return (
     '<div class="group-empty"><div class="empty-inner">' +
-    "<h1>" + esc(name || "New project") + "</h1>" +
+    "<h1>" + esc(name || "New project") + (ws ? ' <span class="muted">· ' + esc(ws.name) + "</span>" : "") + "</h1>" +
     '<p class="muted">' + esc(dir) + "</p>" +
     '<p class="muted">Open an agent in this folder. Terminals run the real Claude Code, Codex and other CLIs; chats run Claude Code through the Agent SDK or ACP agents like Devin and Cursor.</p>' +
     '<button type="button" class="btn primary" data-menu-anchor data-empty-add>' + icon("plus", 16) + "New tab</button>" +
@@ -538,9 +559,9 @@ on("terminal-restarted", (id) => {
 export function focusAgent(ref) {
   const entry = Array.from(panes.values()).find((e) => e.pane.handle === ref || e.pane.id === ref || e.pane.chatId === ref);
   if (!entry) return false;
-  const k = paneProject(entry.pane);
+  const k = paneKey(entry.pane);
   if (k && k !== activeKey()) {
-    fire("switch-project", entry.pane.cwd);
+    fire("switch-workspace", { dir: entry.pane.cwd, workspace: entry.pane.workspace || DEFAULT_WS });
     setTimeout(() => focusAgent(ref), 50);
     return true;
   }

@@ -62,6 +62,16 @@ html[data-theme="light"] .project.on .project-ic { background: oklch(1 0 0 / 0.7
 html[data-theme="light"] .project-count { background: oklch(0 0 0 / 0.07); }
 .project-count i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
 .project-count.live i { background: var(--live); }
+/* A project's workspaces, indented under it on a guide line. */
+.ws-list { display: flex; flex-direction: column; gap: 1px; margin: 1px 0 4px 22px; padding-left: 10px; border-left: 1px solid var(--line); }
+.ws-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 30px; padding: 4px 8px; border-radius: 7px; text-align: left; color: var(--muted); font-size: 12.5px; }
+.ws-row:hover { background: var(--well); color: var(--ink); }
+.ws-row.on { background: var(--proj-on); color: var(--ink); font-weight: 600; }
+.ws-ic { flex: none; display: inline-flex; opacity: 0.85; }
+.ws-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-row .project-count { height: 18px; padding: 0 7px; font-size: 11px; }
+.ws-add { color: var(--muted); font-weight: 400; }
+.ws-rename { flex: 1; font-size: 12.5px; }
 .plugin-side { overflow-y: auto; min-height: 0; }
 
 /* Resize handle on the sidebar's right edge. */

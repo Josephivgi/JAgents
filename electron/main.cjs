@@ -276,6 +276,10 @@ function registerIpc() {
   });
   handle("projects-remove", (dir) => workspace.removeProject(dir));
   handle("projects-rename", (dir, name) => workspace.renameProject(dir, name));
+  handle("workspaces-add", (dir, name) => workspace.addWorkspace(dir, name));
+  handle("workspaces-activate", (dir, id) => workspace.setActiveWorkspace(dir, id));
+  handle("workspaces-rename", (dir, id, name) => workspace.renameWorkspace(dir, id, name));
+  handle("workspaces-remove", (dir, id) => workspace.removeWorkspace(dir, id));
   handle("projects-activate", (dir) => workspace.setActiveProject(dir));
   handle("pick-folder", async () => {
     const res = await dialog.showOpenDialog(mainWindow, { properties: ["openDirectory", "createDirectory"], defaultPath: workspace.cwdDefault() });
