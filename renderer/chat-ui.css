@@ -113,7 +113,8 @@ html.jsystems-ui :is(.tool, .thought) + :is(.tool, .thought) { margin-top: -12px
 html.jsystems-ui .thought { font-size: 13px; }
 html.jsystems-ui .thought summary { min-height: 24px; display: flex; align-items: center; padding: 1px 2px; list-style: none; }
 html.jsystems-ui .thought summary::-webkit-details-marker { display: none; }
-html.jsystems-ui .thought summary::before { content: ""; width: 5px; height: 5px; margin: 0 9px 0 4px; border-radius: 50%; background: var(--muted); opacity: 0.6; }
+html.jsystems-ui .thought summary::before { content: ""; width: 5px; height: 5px; margin: 0 10px 0 3px; border: solid var(--muted); border-width: 0 1.5px 1.5px 0; transform: rotate(-45deg); }
+html.jsystems-ui .thought[open] > summary::before { transform: rotate(45deg); }
 html.jsystems-ui .thought div { padding: 2px 0 6px 21px; line-height: 1.55; }
 
 html.jsystems-ui .plan { background: transparent; border-radius: 10px; }

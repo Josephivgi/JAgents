@@ -69,30 +69,38 @@ function wire() {
     '<button type="button" class="strip-btn" data-set-close title="Close settings (Esc)" aria-label="Close settings">' + icon("close", 15) + "</button>" +
     '<span class="wco-space" aria-hidden="true"></span></header>' +
     '<div class="set-wrap"><nav class="set-nav" aria-label="Settings sections">' +
-    SECTIONS.map((s) => '<button type="button" data-set-nav="' + s.id + '">' + icon(s.icon, 15) + "<span>" + esc(s.label) + '</span><span class="set-dot" data-set-dot="' + s.id + '" hidden></span></button>').join("") +
+    SECTIONS.map((s) => '<button type="button" data-set-nav="' + s.id + '">' + icon(s.icon, 15) + "<span>" + esc(s.label) + '</span><span class="set-flag" data-set-flag="' + s.id + '" hidden></span></button>').join("") +
     '</nav><div class="set-body" data-set-body></div></div>';
   page.addEventListener("click", onClick);
   page.addEventListener("change", onChange);
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && settingsOpen() && !document.querySelector(".modal-back, .news-menu.dropdown")) closeSettings();
   });
-  on("update", paintDots);
-  on("plugins", paintDots);
+  on("update", paintFlags);
+  on("plugins", paintFlags);
   on("app:theme", () => settingsOpen() && current === "terminal" && paintTermCtl());
   on("projects", () => settingsOpen() && current === "projects" && show("projects"));
-  paintDots();
+  paintFlags();
 }
 
-function paintDots() {
+// Sections that want a look get an icon and a word in the nav.
+function paintFlags() {
   if (!page) return;
   const u = store.update || {};
-  const set = (id, on) => {
-    const d = page.querySelector('[data-set-dot="' + id + '"]');
-    if (d) d.hidden = !on;
+  const set = (id, text, tone, ic) => {
+    const f = page.querySelector('[data-set-flag="' + id + '"]');
+    if (!f) return;
+    const html = text ? icon(ic, 12) + esc(text) : "";
+    if (f._html === html) return;
+    f._html = html;
+    f.innerHTML = html;
+    f.className = "set-flag " + tone;
+    f.hidden = !text;
   };
-  set("updates", Boolean(u.available || u.applied));
+  set("updates", u.applied ? "Restart" : u.available ? "New version" : "", "warn", "update");
   const st = store.plugins || { plugins: [] };
-  set("plugins", Boolean(st.safeMode || (st.plugins || []).some((p) => p.enabled && p.errors && (p.errors.main || p.errors.renderer || p.errors.mcp))));
+  const broken = (st.plugins || []).some((p) => p.enabled && p.errors && (p.errors.main || p.errors.renderer || p.errors.mcp));
+  set("plugins", st.safeMode ? "Safe mode" : broken ? "Error" : "", st.safeMode ? "warn" : "danger", "alert");
 }
 
 function row(title, desc, control) {
@@ -146,9 +154,9 @@ function terminalCtlHtml() {
     row("Line spacing", "1.0 keeps block characters and box borders joined with no gaps.", seg("Line spacing", "data-term-line", TERM_LINE_HEIGHTS.map((h) => [String(h), h.toFixed(1)]), String(s.lineHeight))) +
     row("Cursor", "", seg("Cursor", "data-term-cursor", TERM_CURSORS.map((c) => [c, c[0].toUpperCase() + c.slice(1)]), s.cursorStyle) + toggle("data-term-blink", s.cursorBlink, "Blinking cursor") + '<span class="muted small">Blink</span>') +
     "</div>" +
-    '<h3 class="set-sub">' + icon("moon", 14) + "Dark window" + (dark ? ' <span class="pill ok">In use</span>' : "") + "</h3>" +
+    '<h3 class="set-sub">' + icon("moon", 14) + "Dark window" + (dark ? ' <span class="pill">In use</span>' : "") + "</h3>" +
     '<div class="set-card">' + themeGrid("dark", s.themeDark) + "</div>" +
-    '<h3 class="set-sub">' + icon("sun", 14) + "Light window" + (!dark ? ' <span class="pill ok">In use</span>' : "") + "</h3>" +
+    '<h3 class="set-sub">' + icon("sun", 14) + "Light window" + (!dark ? ' <span class="pill">In use</span>' : "") + "</h3>" +
     '<div class="set-card">' + themeGrid("light", s.themeLight) + "</div>" +
     '<button type="button" class="btn secondary" data-term-reset>' + icon("undo", 14) + "Reset to defaults</button>"
   );
@@ -277,7 +285,7 @@ async function show(id) {
   } catch (error) {
     body.insertAdjacentHTML("beforeend", '<p class="err-row">' + esc(errorText(error)) + "</p>");
   }
-  paintDots();
+  paintFlags();
 }
 
 async function onClick(e) {

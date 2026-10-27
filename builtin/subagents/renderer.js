@@ -177,13 +177,16 @@ export async function activate(jagents) {
 
   // ---- Tiles and threads ----
 
+  // Working gets a spinner and an error an icon; idle and stopped are plain text.
+  const stateMark = (tone) => (tone === "busy" ? '<span class="spinner sm" aria-hidden="true"></span>' : tone === "danger" ? jagents.icon("alert", 13) : "");
+
   function tile(s, attr) {
     const [label, tone] = stateOf(s.status);
     return (
       '<button type="button" class="sub-tile" ' + attr + '="' + esc(s.handle) + '" title="Open ' + esc(s.handle) + " · " + esc(s.task) + '">' +
       '<span class="sub-tile-ic">' + harnessIcon(s.provider, 16) + "</span>" +
       '<span class="sub-tile-txt"><b>' + esc(short(s.handle)) + "</b><span>" + esc([s.providerName, s.model && modelLabel(s.model), s.effort && effortLabel(s.effort)].filter(Boolean).join(" · ")) + "</span></span>" +
-      '<span class="sub-tile-state ' + tone + '"><span class="sub-dot ' + tone + '" aria-hidden="true"></span>' + esc(label) + "</span></button>"
+      '<span class="sub-tile-state ' + tone + '">' + stateMark(tone) + esc(label) + "</span></button>"
     );
   }
 
@@ -191,7 +194,7 @@ export async function activate(jagents) {
     if (r.role === "user") return '<div class="msg user relayed"><span class="from-tag">' + esc(parent) + '</span><div class="bubble">' + esc(r.text) + "</div></div>";
     if (r.role === "assistant") return '<div class="msg agent"><div class="bubble">' + markdown(r.text) + "</div></div>";
     if (r.role === "thought") return '<details class="thought"><summary>Thinking</summary><div>' + esc(r.text) + "</div></details>";
-    if (r.role === "tool") return '<div class="tool ' + esc(r.status || "pending") + '"><span class="sub-dot ' + (r.status === "completed" ? "ok" : r.status === "failed" ? "danger" : "busy") + '"></span><span class="grow">' + esc(r.text) + "</span></div>";
+    if (r.role === "tool") return '<div class="tool ' + esc(r.status || "pending") + '"><span class="sub-tool-mark">' + (r.status === "completed" ? jagents.icon("check", 13) : r.status === "failed" ? jagents.icon("alert", 13) : '<span class="spinner sm"></span>') + '</span><span class="grow">' + esc(r.text) + "</span></div>";
     if (r.role === "error") return '<div class="err-row">' + esc(r.text) + "</div>";
     return '<div class="sys">' + esc(r.text) + "</div>";
   }
@@ -207,7 +210,7 @@ export async function activate(jagents) {
       '<span class="chip sub-chip">' + ICON_SM + "Subagent of " + esc(s.parent) + "</span>" +
       (s.model ? '<span class="chip" title="' + esc(s.model) + '">' + esc(modelLabel(s.model)) + "</span>" : "") +
       (s.effort ? '<span class="chip">' + GAUGE + "Effort " + esc(effortLabel(s.effort)) + "</span>" : "") +
-      '<span class="sub-tile-state ' + tone + '"><span class="sub-dot ' + tone + '" aria-hidden="true"></span>' + esc(label) + "</span>" +
+      '<span class="sub-tile-state ' + tone + '">' + stateMark(tone) + esc(label) + "</span>" +
       "</header>" +
       '<div class="transcript" data-sub-scroll><div class="transcript-inner">' +
       (rows ? (rows.length ? rows.map((r) => rowHtml(r, s.parent)).join("") : '<div class="sys">Nothing yet.</div>') : '<div class="sys">Loading…</div>') +
@@ -313,7 +316,7 @@ export async function activate(jagents) {
     return (
       '<article class="sub-pcard' + (p.enabled ? "" : " off") + '" data-sub-pcard="' + esc(p.provider) + '">' +
       '<header><span class="pane-ic">' + harnessIcon(p.provider, 18) + '</span><div class="grow"><b>' + esc(p.name) + '</b><span class="muted small mono">' + esc(p.provider) + "</span></div>" +
-      '<span class="muted small sub-det' + (c && c.error ? " sub-bad" : "") + '" title="' + esc(state) + '">' + (p.detecting ? '<span class="sub-dot busy"></span>' : "") + esc(state) + (c && !c.error && models.length ? " · " + models.length + (models.length === 1 ? " model" : " models") : "") + "</span>" +
+      '<span class="muted small sub-det' + (c && c.error ? " sub-bad" : "") + '" title="' + esc(state) + '">' + (p.detecting ? '<span class="spinner sm"></span>' : "") + esc(state) + (c && !c.error && models.length ? " · " + models.length + (models.length === 1 ? " model" : " models") : "") + "</span>" +
       '<button type="button" class="btn sm ghost" data-sub-detect="' + esc(p.provider) + '"' + (p.detecting ? " disabled" : "") + ' title="Start ' + esc(p.name) + ' once, with no tools, to read its models and effort levels">' + jagents.icon("restart", 13) + "<span>" + (c ? "Detect again" : "Detect") + "</span></button>" +
       switchHtml(p.enabled, 'data-sub-prov-on="' + esc(p.provider) + '"', p.name + " subagents") +
       "</header>" +
@@ -658,7 +661,7 @@ export async function activate(jagents) {
         .map((p) => {
           const kids = groups.get(p);
           const tone = kids.some((x) => x.status === "busy" || x.status === "starting") ? "busy" : live.has(p) ? "ok" : "off";
-          return '<button type="button" class="sub-side-item" data-sub-goto="' + esc(p) + '"><span class="sub-dot ' + tone + '" aria-hidden="true"></span><span class="grow">' + esc(p) + '</span><span class="sub-side-n">' + kids.length + "</span></button>";
+          return '<button type="button" class="sub-side-item' + (tone === "off" ? " off" : "") + '" data-sub-goto="' + esc(p) + '"' + (tone === "off" ? ' title="' + esc(p) + ' is closed"' : "") + '><span class="grow">' + esc(p) + "</span>" + (tone === "busy" ? '<span class="spinner sm" role="img" aria-label="Working"></span>' : "") + '<span class="sub-side-n">' + kids.length + "</span></button>";
         })
         .join("") || '<p class="nav-empty">No parents yet.</p>',
     );

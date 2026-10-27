@@ -157,7 +157,7 @@ function paintProjects() {
 }
 
 function countPill(c) {
-  return c && c.count ? '<span class="project-count' + (c.busy ? " live" : "") + '" title="' + c.count + (c.count === 1 ? " agent" : " agents") + (c.busy ? ", " + c.busy + " running" : "") + '"><i></i>' + c.count + "</span>" : "";
+  return c && c.count ? '<span class="project-count" title="' + c.count + (c.count === 1 ? " agent" : " agents") + (c.busy ? ", " + c.busy + " running" : "") + '">' + c.count + "</span>" : "";
 }
 
 // A project's workspaces, under it: each its own set of agents. A project with
@@ -510,7 +510,7 @@ async function boot() {
     '<div class="dock-icons">' +
     '<button type="button" class="dock-icon" data-menu-anchor data-activity title="Agent activity" aria-label="Agent activity">' + icon("tree", 15) + '<span class="dock-badge" data-activity-badge hidden></span></button>' +
     '<button type="button" class="dock-icon" data-usage-open title="Usage for every agent" aria-label="Usage">' + icon("usage", 15) + "</button>" +
-    '<button type="button" class="dock-icon" data-settings title="Settings" aria-label="Settings">' + icon("gear", 15) + '<span class="dock-badge dot" data-settings-badge hidden></span></button>' +
+    '<button type="button" class="dock-icon" data-settings title="Settings" aria-label="Settings">' + icon("gear", 15) + '<span class="dock-flag" data-settings-badge hidden>' + icon("update", 11) + "</span></button>" +
     '<span class="plugin-top" data-plugin-top></span>' +
     '<span class="spacer"></span>' +
     '<button type="button" class="dock-icon" data-usage-refresh title="Check usage now" aria-label="Check usage now">' + icon("restart", 14) + "</button></div>" +
@@ -553,8 +553,14 @@ async function boot() {
     refreshSettings();
   });
   on("update", (u) => {
-    const dot = app.querySelector("[data-settings-badge]");
-    if (dot) dot.hidden = !(u && (u.available || u.applied));
+    const flag = app.querySelector("[data-settings-badge]");
+    const ready = Boolean(u && (u.available || u.applied));
+    if (flag) flag.hidden = !ready;
+    const gear = app.querySelector(".dock-icon[data-settings]");
+    if (gear) {
+      gear.title = ready ? "Settings (update available)" : "Settings";
+      gear.setAttribute("aria-label", gear.title);
+    }
   });
 
   // The sidebar's right edge resizes it.

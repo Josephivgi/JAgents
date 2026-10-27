@@ -443,7 +443,7 @@ export class ChatView {
       return '<details class="tool ' + esc(st) + " kind-" + esc(kind || "other") + '" data-tool="' + esc(key) + '"' + (open ? " open" : "") + "><summary>" + head + '</summary><div class="tool-body">' + body + "</div></details>";
     }
     if (row.role === "plan") {
-      return '<div class="plan"><strong>Plan</strong>' + (row.entries || []).map((e) => '<div class="plan-row ' + (e.status === "completed" ? "done" : esc(e.status)) + '"><span class="plan-dot"></span>' + esc(e.content) + "</div>").join("") + "</div>";
+      return '<div class="plan"><strong>Plan</strong>' + (row.entries || []).map((e) => '<div class="plan-row ' + (e.status === "completed" ? "done" : esc(e.status)) + '"><span class="plan-mark">' + (e.status === "completed" ? icon("check", 13) : e.status === "in_progress" ? icon("next", 13) : "") + "</span>" + esc(e.content) + "</div>").join("") + "</div>";
     }
     if (row.role === "error") {
       const retry = index === this.lastErrorIndex && !this.busy() ? '<button type="button" class="btn sm secondary" data-retry>' + icon("retry", 14) + "Retry</button>" : "";
@@ -1265,7 +1265,7 @@ export class ChatView {
         const active = a.id === view.id;
         const state = a.id === current ? " (in use)" : a.available ? "" : " (not installed)";
         return (
-          '<button type="button" role="tab" class="harness-tab' + (active ? " is-active" : "") + (a.id === current ? " is-current" : "") + (a.available ? "" : " is-missing") + '" data-harness-tab="' + esc(a.id) + '" aria-selected="' + active + '" tabindex="' + (active ? "0" : "-1") + '" title="' + esc(a.name + state) + '" aria-label="' + esc(a.name + state) + '">' +
+          '<button type="button" role="tab" class="harness-tab' + (active ? " is-active" : "") + (a.available ? "" : " is-missing") + '" data-harness-tab="' + esc(a.id) + '" aria-selected="' + active + '" tabindex="' + (active ? "0" : "-1") + '" title="' + esc(a.name + state) + '" aria-label="' + esc(a.name + state) + '">' +
           harnessIcon(a.id, 18) + "</button>"
         );
       })

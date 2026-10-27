@@ -9,7 +9,6 @@
   --strip-bg: oklch(0.975 0.002 286);
   --tab-on: var(--canvas);
   --tab-hover: oklch(0.94 0.003 286);
-  --live: oklch(0.72 0.17 150);
   --badge: oklch(0.62 0.17 285);
   --proj-on: oklch(0.93 0.03 285);
 }
@@ -58,10 +57,8 @@ html[data-theme="light"] .project.on .project-ic { background: oklch(1 0 0 / 0.7
 .project-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-path { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-rename { font: inherit; font-size: 13px; font-weight: 600; width: 100%; padding: 1px 4px; border: 1px solid var(--accent); border-radius: 5px; background: var(--canvas); color: var(--ink); outline: none; }
-.project-count { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 8px; border-radius: 999px; background: oklch(0 0 0 / 0.28); color: var(--ink); font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.project-count { flex: none; display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; background: oklch(0 0 0 / 0.28); color: var(--ink); font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
 html[data-theme="light"] .project-count { background: oklch(0 0 0 / 0.07); }
-.project-count i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
-.project-count.live i { background: var(--live); }
 /* A project's workspaces, indented under it on a guide line. */
 .ws-list { display: flex; flex-direction: column; gap: 1px; margin: 1px 0 4px 22px; padding-left: 10px; border-left: 1px solid var(--line); }
 .ws-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 30px; padding: 4px 8px; border-radius: 7px; text-align: left; color: var(--muted); font-size: 12.5px; }
@@ -88,8 +85,10 @@ body.resizing-rows, body.resizing-rows * { cursor: row-resize !important; user-s
 .dock-icon:hover, .dock-icon.on { background: var(--well); color: var(--ink); }
 .dock-icon:disabled { opacity: 0.5; }
 .dock-badge { position: absolute; top: 0; right: 0; min-width: 16px; height: 14px; padding: 0 4px; border-radius: 999px; background: var(--badge); color: #fff; font-size: 10px; font-weight: 700; line-height: 14px; text-align: center; }
-.dock-badge.dot { min-width: 8px; width: 8px; height: 8px; padding: 0; top: 4px; right: 5px; box-shadow: 0 0 0 2px var(--canvas); }
 .dock-badge[hidden] { display: none; }
+/* A new version is out: a small arrow on the gear's corner. */
+.dock-flag { position: absolute; top: 1px; right: 2px; display: inline-flex; border-radius: 4px; background: var(--canvas); color: var(--warn); }
+.dock-flag[hidden] { display: none; }
 .side-dock .spacer { flex: 1; }
 .dock-usage { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px; }
 .dock-usage .usage-rows { display: flex; flex-direction: column; gap: 8px; width: 100%; padding: 0; text-align: left; background: none; border: 0; }
@@ -171,26 +170,24 @@ body.settings-on .main::before { display: none; }
 .tab-rename { flex: 1 1 auto; min-width: 0; height: 22px; margin-left: -5px; padding: 0 5px; border: 1px solid color-mix(in oklch, var(--accent) 60%, var(--line)); border-radius: 6px; outline: none; background: var(--canvas); color: var(--ink); font: inherit; font-weight: 500; }
 .tab.renaming .tab-end { visibility: hidden; }
 .tab-sub { margin-left: 7px; font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--muted); opacity: 0.85; }
-/* The right end holds the state (spinner, dot) and the close button, which
-   takes its place on hover, like an editor's unsaved dot. */
+/* The right end holds the state (a spinner, or an icon when the agent asks
+   something or exited) and the close button, which takes its place on hover.
+   A finished tab has no mark; its title reads in full ink until you look. */
 .tab-end { flex: none; position: relative; width: 20px; height: 20px; display: grid; place-items: center; }
 .tab-x { position: absolute; inset: 0; display: grid; place-items: center; border-radius: 6px; color: var(--muted); opacity: 0; transition: opacity 0.1s ease; }
 .tab-x:hover { background: var(--well); color: var(--ink); }
 .tab:hover .tab-x, .tab:focus-within .tab-x, .tab.on:not([data-state]) .tab-x { opacity: 1; }
-.tab-state { display: none; width: 8px; height: 8px; border-radius: 50%; transition: opacity 0.1s ease; }
-.tab[data-state] .tab-state { display: block; }
+.tab-state { display: none; transition: opacity 0.1s ease; }
+.tab:is([data-state="busy"], [data-state="ask"], [data-state="exited"]) .tab-state { display: inline-flex; }
 .tab[data-state]:hover .tab-state, .tab[data-state]:focus-within .tab-state { opacity: 0; }
-.tab[data-state="busy"] .tab-state { width: 11px; height: 11px; border: 1.6px solid color-mix(in oklch, var(--warn) 30%, transparent); border-top-color: var(--warn); animation: spin 0.8s linear infinite; }
-.tab[data-state="done"] .tab-state { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in oklch, var(--ok) 22%, transparent); }
-.tab[data-state="ask"] .tab-state { background: var(--warn); animation: tab-pulse 1.6s ease-in-out infinite; }
-.tab[data-state="exited"] .tab-state { border: 1.6px solid var(--danger); }
+.tab[data-state="busy"] .tab-state { width: 11px; height: 11px; border-radius: 50%; border: 1.6px solid color-mix(in oklch, var(--muted) 35%, transparent); border-top-color: var(--ink); animation: spin 0.8s linear infinite; }
+.tab[data-state="ask"] .tab-state { color: var(--warn); }
+.tab[data-state="exited"] .tab-state { color: var(--danger); }
 .tab[data-state="exited"] .tab-title { color: var(--muted); }
 .tab[data-state="done"]:not(.on) .tab-title, .tab[data-state="ask"]:not(.on) .tab-title { color: var(--ink); }
-@keyframes tab-pulse { 50% { box-shadow: 0 0 0 4px color-mix(in oklch, var(--warn) 25%, transparent); } }
 @media (prefers-reduced-motion: reduce) {
   .tab, .tab::before, .tab-ic, .tab-x, .tab-state { transition: none; }
-  .tab[data-state="busy"] .tab-state { animation: none; border-color: var(--warn); }
-  .tab[data-state="ask"] .tab-state { animation: none; }
+  .tab[data-state="busy"] .tab-state { animation: none; border-color: var(--muted); }
 }
 .strip-btn { flex: none; align-self: center; display: grid; place-items: center; width: 28px; height: 28px; margin: 0 2px; border-radius: 7px; color: var(--muted); -webkit-app-region: no-drag; }
 .strip-btn:hover, .strip-btn.on, .strip-btn.open { background: var(--well); color: var(--ink); }
@@ -219,8 +216,11 @@ body.settings-on .main::before { display: none; }
 .set-nav button { position: relative; display: flex; align-items: center; gap: 9px; height: 32px; padding: 0 10px; border-radius: 8px; color: var(--muted); font-size: 13px; text-align: left; }
 .set-nav button:hover { background: var(--well); color: var(--ink); }
 .set-nav button.on { background: var(--proj-on); color: var(--ink); font-weight: 500; }
-.set-dot { margin-left: auto; width: 7px; height: 7px; border-radius: 50%; background: var(--badge); }
-.set-dot[hidden] { display: none; }
+/* A section that wants a look: "New version", "Safe mode", "Error". */
+.set-flag { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 500; white-space: nowrap; }
+.set-flag.warn { color: var(--warn); }
+.set-flag.danger { color: var(--danger); }
+.set-flag[hidden] { display: none; }
 .set-body { flex: 1; min-width: 0; overflow-y: auto; padding: 22px 28px 40px; }
 .set-body > * { max-width: 860px; }
 .set-h { font-size: 19px; font-weight: 600; margin-bottom: 14px; }

@@ -32,7 +32,7 @@ export const projectKey = (dir) => String(dir || "").replace(/[\\/]+$/, "").repl
 // ones from before workspaces. A Default workspace's layout keeps the
 // project's own key, so layouts saved before workspaces stay put.
 export const DEFAULT_WS = "default";
-export const layoutKey = (dir, ws) => projectKey(dir) + (ws && ws !== DEFAULT_WS ? "#" + ws : "");
+const layoutKey = (dir, ws) => projectKey(dir) + (ws && ws !== DEFAULT_WS ? "#" + ws : "");
 
 export function activeWorkspace() {
   const k = projectKey(store.info.cwd);
@@ -266,9 +266,11 @@ function tabMarkup(id, g) {
   );
 }
 
-// What a tab shows on its right: working, finished while you were elsewhere,
-// waiting for your answer, or exited.
+// What a tab shows on its right: a spinner while working, an icon when it
+// waits for your answer or exited. Finished while you were elsewhere has no
+// mark; the title reads in full ink and the tooltip says so.
 const STATE_TEXT = { busy: "Working", done: "Finished, not looked at yet", ask: "Waiting for your answer", exited: "Exited" };
+const STATE_ICON = { ask: "help", exited: "alert" };
 
 function tabState(entry) {
   if (entry.exited) return "exited";
@@ -291,6 +293,17 @@ function paintTabStates() {
     if ((tab.dataset.state || "") !== st) {
       if (st) tab.dataset.state = st;
       else delete tab.dataset.state;
+      const mark = tab.querySelector(".tab-state");
+      if (mark) {
+        mark.innerHTML = STATE_ICON[st] ? icon(STATE_ICON[st], 14) : "";
+        if (st && st !== "done") {
+          mark.setAttribute("role", "img");
+          mark.setAttribute("aria-label", STATE_TEXT[st]);
+        } else {
+          mark.removeAttribute("role");
+          mark.removeAttribute("aria-label");
+        }
+      }
     }
     const { name, sub } = tabParts(entry.pane, entry);
     const tip = [name + (st ? " (" + STATE_TEXT[st] + ")" : ""), sub, entry.pane.cwd].filter(Boolean).join("\n");
@@ -311,7 +324,7 @@ function noteDone(entry) {
 on("term-activity", ({ id, busy, worked }) => {
   const entry = panes.get(id);
   if (!entry) return;
-  // A few seconds of output is work worth a dot; a short redraw is not.
+  // A few seconds of output counts as finished work; a short redraw does not.
   if (!busy && worked >= 3000) noteDone(entry);
   paintTabStates();
 });
@@ -527,6 +540,8 @@ export function syncPanes(list) {
   for (const p of list) {
     const entry = panes.get(p.id) || mount(p);
     entry.pane = Object.assign(entry.pane, p);
+    // An exited terminal stays marked after a reload, not only on its exit event.
+    if (p.kind === "terminal" && p.status === "exited") entry.exited = true;
   }
   render();
   save();
@@ -543,7 +558,7 @@ export function markExited(id) {
   }
 }
 
-// Restart: the tab and project dot stop showing the terminal as exited.
+// Restart: the tab and the sidebar count stop showing the terminal as exited.
 on("terminal-restarted", (id) => {
   const e = panes.get(id);
   const p = store.panes.find((x) => x.id === id);

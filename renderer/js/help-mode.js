@@ -130,7 +130,7 @@ function article() {
     "<dt>A subagent never answers</dt><dd>Call <code>wait_for_agent</code> again with a longer <code>timeout_seconds</code> (up to 900), or open its thread to see what it is doing.</dd>" +
     "</dl></section>" +
 
-    '<section id="help-updates"><h2>Version and updates</h2><p>This is JAgents <b>v' + esc(v) + "</b>. When a newer GitHub release is out, a reminder pops up in the bottom right and the gear at the bottom of the sidebar gets a dot. Install it from the reminder or from <b>Settings &gt; Updates</b>, read the release notes there, and restart when you are ready. <b>Later</b> hides the reminder for a few hours.</p>" +
+    '<section id="help-updates"><h2>Version and updates</h2><p>This is JAgents <b>v' + esc(v) + "</b>. When a newer GitHub release is out, a reminder pops up in the bottom right and the gear at the bottom of the sidebar gets a small arrow. Install it from the reminder or from <b>Settings &gt; Updates</b>, read the release notes there, and restart when you are ready. <b>Later</b> hides the reminder for a few hours.</p>" +
     '<p><button class="btn sm secondary" data-help="updates">' + icon("update", 14) + "Check for updates</button></p></section>" +
     "</article>"
   );

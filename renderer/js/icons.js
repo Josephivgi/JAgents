@@ -79,6 +79,7 @@ const GLYPHS = {
   textSize: stroke("M4 18 8.5 6 13 18M5.6 14h5.8M15 18l3-8 3 8M15.9 15.6h4.2", 1.8),
   check: stroke("m5 12.6 4.4 4.4L19 7.4", 2),
   help: '<circle cx="12" cy="12" r="8.6" fill="none" stroke="currentColor" stroke-width="1.6"/>' + stroke("M9.6 9.6a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.1-2.4 3.6") + '<circle cx="12" cy="17" r="1" fill="currentColor"/>',
+  alert: stroke("M12 4.2 20.8 19.4H3.2ZM12 10v4", 1.7) + '<circle cx="12" cy="16.7" r="1" fill="currentColor"/>',
   update: stroke("M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14"),
   usage: stroke("M4 19h16M7 15v-4M12 15V7M17 15v-6"),
   tree: '<g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="5" rx="1.2"/><rect x="3" y="16" width="6" height="5" rx="1.2"/><rect x="15" y="16" width="6" height="5" rx="1.2"/><path d="M12 8v4M6 16v-2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2"/></g>',

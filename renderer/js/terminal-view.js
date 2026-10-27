@@ -104,7 +104,7 @@ export async function setTermSettings(patch) {
   await window.jagents.setSetting("terminal", store.info.terminal);
 }
 
-export function themeName(s = termSettings()) {
+function themeName(s = termSettings()) {
   return isDark() ? s.themeDark : s.themeLight;
 }
 
@@ -145,7 +145,7 @@ function termOptions(s) {
 }
 
 // Theme, font and cursor for every open terminal (and the Settings preview).
-export function applyTermSettings() {
+function applyTermSettings() {
   const s = termSettings();
   document.documentElement.style.setProperty("--term-bg", THEMES[themeName(s)].background);
   loadTermFont(s).then(() => {
@@ -158,6 +158,7 @@ export function applyTermSettings() {
   });
 }
 
+// app.js calls this when the window theme changes.
 export const retheme = applyTermSettings;
 
 const fontLoads = new Map();

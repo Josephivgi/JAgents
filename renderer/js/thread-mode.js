@@ -15,7 +15,7 @@ let current = "";
 let filter = "";
 
 // Settled threads (chatId -> settled at, ms) sit in a foldable Settled group
-// at the bottom of the list. Working threads show larger with a live dot. A
+// at the bottom of the list. Working threads show larger with a spinner. A
 // settled thread that starts working again moves back up by itself.
 const WORKING = new Set(["busy", "starting"]);
 const UNDO_MS = 8000;
@@ -51,7 +51,7 @@ function setStatus(id, next) {
   return WORKING.has(prev) !== WORKING.has(next);
 }
 
-// A working dot never sticks: while a thread shows as working, the main
+// A working spinner never sticks: while a thread shows as working, the main
 // process is asked again every few seconds.
 function watchWorking() {
   const any = Array.from(status.values()).some((s) => WORKING.has(s));
@@ -100,6 +100,7 @@ function paintList() {
       '<span class="thread-ic">' + harnessIcon(c.harnessId, 16) + "</span>" +
       '<span class="grow"><span class="t">' + esc(c.title) + '</span><span class="s">' + esc(c.handle || agentName(c.harnessId)) + (parent ? " · sub of " + esc(parent.handle || "") : "") + "</span></span>" +
       (settled[c.id] ? '<span class="settle-mark" aria-hidden="true">' + icon("check", 14) + "</span>" : "") +
+      (isWorking(c.id) ? '<span class="spinner sm" role="img" aria-label="Working"></span>' : "") +
       '<span class="when">' + timeAgo(c.updatedAt) + "</span></button>"
     );
   };
