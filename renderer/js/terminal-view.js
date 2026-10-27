@@ -110,7 +110,7 @@ export function themeName(s = termSettings()) {
 
 // The scrollbar is drawn by xterm; a neutral gray reads on every theme.
 function xtermTheme(s) {
-  return Object.assign({ scrollbarSliderBackground: "rgba(180, 180, 185, 0.4)", scrollbarSliderHoverBackground: "rgba(180, 180, 185, 0.6)", scrollbarSliderActiveBackground: "rgba(180, 180, 185, 0.8)" }, THEMES[themeName(s)]);
+  return Object.assign({ scrollbarSliderBackground: "rgba(180, 180, 185, 0.4)", scrollbarSliderHoverBackground: "rgba(180, 180, 185, 0.6)", scrollbarSliderActiveBackground: "rgba(180, 180, 185, 0.8)", overviewRulerBorder: "transparent" }, THEMES[themeName(s)]);
 }
 
 // Agent CLIs print dim grays meant for one background; xterm brightens text
@@ -294,6 +294,9 @@ export class TerminalView {
       Object.assign(termOptions(settings), {
         allowProposedApi: true,
         scrollback: 8000,
+        // The scrollbar column: 10px instead of 14, and find marks its
+        // matches there.
+        overviewRuler: { width: 10 },
         // Wide symbols (⏺, ✻) are drawn inside their cell instead of over the next.
         rescaleOverlappingGlyphs: true,
         // ConPTY repaints the screen itself after a resize; without this xterm

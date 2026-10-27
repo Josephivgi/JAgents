@@ -159,8 +159,11 @@ code, pre, .mono { font-family: var(--mono); font-size: 12.5px; }
 .xterm-host { flex: 1; min-height: 0; min-width: 0; margin: 6px 4px 4px 10px; }
 .xterm-host .xterm { height: 100%; }
 .xterm .xterm-viewport { background-color: transparent !important; }
-.xterm .xterm-viewport::-webkit-scrollbar { width: 10px; }
-.xterm .xterm-viewport::-webkit-scrollbar-thumb { background: color-mix(in oklch, var(--muted) 35%, transparent); border-radius: 10px; border: 2px solid transparent; background-clip: padding-box; }
+/* xterm draws its own scrollbar, which fades when idle. The browser one on
+   the viewport showed as a second, always-on stripe beside it. */
+.xterm .xterm-viewport { scrollbar-width: none; }
+.xterm .xterm-viewport::-webkit-scrollbar { display: none; }
+.xterm .xterm-scrollable-element > .scrollbar > .slider { border-radius: 5px; }
 .term-exit { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); font-size: 13px; }
 /* Over the terminal: the find bar, the jump-to-latest button, small hints and
    the file drop target. */
