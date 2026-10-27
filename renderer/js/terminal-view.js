@@ -2,9 +2,11 @@
 // the main process. The process outlives the view, so moving a pane between
 // layouts or reloading the window reattaches and replays the screen.
 
-import { esc } from "./util.js";
+import { esc, toast, errorText } from "./util.js";
 import { icon } from "./icons.js";
-import { on } from "./store.js";
+import { on, fire, store } from "./store.js";
+import { dropdown } from "./dialogs.js";
+import { THEMES, DEFAULT_DARK, DEFAULT_LIGHT, isLightTheme } from "./terminal-themes.js";
 
 const views = new Map(); // paneId -> TerminalView
 
@@ -19,12 +21,71 @@ function refitAll() {
 on("app:layout", refitAll);
 window.addEventListener("resize", refitAll);
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) refitAll();
+  if (document.hidden) return;
+  refitAll();
+  // The GPU canvas may have dropped its last frame or its glyphs while hidden
+  // (sleep, a driver reset); draw them again.
+  for (const v of views.values()) {
+    if (!v.webgl) continue;
+    v.term.clearTextureAtlas();
+    v.term.refresh(0, v.term.rows - 1);
+  }
 });
+
+// Moving the window to a screen with another scale changes the cell width.
+function watchScale() {
+  matchMedia("(resolution: " + devicePixelRatio + "dppx)").addEventListener(
+    "change",
+    () => {
+      applyTermSettings();
+      watchScale();
+    },
+    { once: true },
+  );
+}
+watchScale();
 
 export function routePtyData({ id, data }) {
   const v = views.get(id);
-  if (v) v.term.write(data);
+  // Output from before the view's snapshot arrived is already in it.
+  if (!v || !v.live) return;
+  v.term.write(data);
+  noteOutput(v);
+}
+
+// Whether the agent is working, for the tab: output that keeps coming for a
+// moment and is not the echo of typing or a redraw after a resize. Fires
+// "term-activity" with {id, busy, worked} (ms of work) when it changes.
+const ECHO_MS = 600;
+const BUSY_AFTER_MS = 800;
+const IDLE_AFTER_MS = 1600;
+const STARTUP_MS = 15000;
+
+function noteOutput(v) {
+  const now = Date.now();
+  if (!v.busy && (now < v.lastInput + ECHO_MS || now < v.quietUntil)) return;
+  if (!v.burstStart) v.burstStart = now;
+  clearTimeout(v.idleTimer);
+  v.idleTimer = setTimeout(() => {
+    let worked = v.busy ? Date.now() - v.burstStart : 0;
+    // Before anything was typed in, a short burst is the agent starting up
+    // (banner, loading MCP servers), not finished work. One started with a
+    // task works for longer than that.
+    if (!v.lastInput && worked < STARTUP_MS) worked = 0;
+    v.burstStart = 0;
+    if (!v.busy) return;
+    v.busy = false;
+    fire("term-activity", { id: v.pane.id, busy: false, worked });
+  }, IDLE_AFTER_MS);
+  if (!v.busy && now - v.burstStart >= BUSY_AFTER_MS) {
+    v.busy = true;
+    fire("term-activity", { id: v.pane.id, busy: true, worked: 0 });
+  }
+}
+
+export function terminalBusy(id) {
+  const v = views.get(id);
+  return Boolean(v && v.busy);
 }
 
 export function routePtyExit({ id, exitCode }) {
@@ -32,19 +93,256 @@ export function routePtyExit({ id, exitCode }) {
   if (v) v.showExit(exitCode);
 }
 
-function cssVar(name) {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+function isDark() {
+  return document.documentElement.dataset.theme === "dark";
 }
 
-function xtermTheme() {
-  const dark = document.documentElement.dataset.theme === "dark";
-  return dark
-    ? { background: "#15171c", foreground: "#e3e5ea", cursor: "#c7b8ff", cursorAccent: "#15171c", selectionBackground: "#4b4370", black: "#1d2027", brightBlack: "#5c6370", red: "#ef7d7d", green: "#7fd1a0", yellow: "#e8c46e", blue: "#82aaff", magenta: "#c89cff", cyan: "#7fd6e0", white: "#d8dbe2", brightWhite: "#ffffff" }
-    : { background: "#fbfbfd", foreground: "#2a2d36", cursor: "#5b4bc4", cursorAccent: "#fbfbfd", selectionBackground: "#d9d3fb", black: "#2a2d36", brightBlack: "#7a7f8c", red: "#c43d3d", green: "#2f8a55", yellow: "#a87412", blue: "#3463c4", magenta: "#8a44c4", cyan: "#1f8a99", white: "#d0d3da", brightWhite: "#ffffff" };
+// Settings > Terminal. The defaults match Orca's terminals.
+export const TERM_FONTS = ["Cascadia Mono", "JetBrains Mono", "Cascadia Code", "Consolas"];
+export const TERM_WEIGHTS = [300, 400, 500, 600];
+export const TERM_LINE_HEIGHTS = [1, 1.1, 1.2, 1.3];
+export const TERM_CURSORS = ["block", "bar", "underline"];
+// Claude Code's own choice, its classic layout (the prompt under the
+// conversation) or its full-screen one (the prompt pinned to the bottom).
+export const CLAUDE_LAYOUTS = ["", "classic", "fullscreen"];
+// Weight 400 as in Windows Terminal, so bold text stands out.
+const DEFAULTS = { themeDark: DEFAULT_DARK, themeLight: DEFAULT_LIGHT, font: "Cascadia Mono", fontSize: 14, fontWeight: 400, lineHeight: 1, cursorStyle: "block", cursorBlink: true, claudeLayout: "" };
+
+export function termSettings() {
+  const s = Object.assign({}, DEFAULTS, (store.info && store.info.terminal) || {});
+  if (!THEMES[s.themeDark]) s.themeDark = DEFAULTS.themeDark;
+  if (!THEMES[s.themeLight]) s.themeLight = DEFAULTS.themeLight;
+  if (!TERM_FONTS.includes(s.font)) s.font = DEFAULTS.font;
+  s.fontSize = Math.min(24, Math.max(9, Math.round(Number(s.fontSize)) || DEFAULTS.fontSize));
+  if (!TERM_WEIGHTS.includes(s.fontWeight)) s.fontWeight = DEFAULTS.fontWeight;
+  if (!TERM_LINE_HEIGHTS.includes(s.lineHeight)) s.lineHeight = DEFAULTS.lineHeight;
+  if (!TERM_CURSORS.includes(s.cursorStyle)) s.cursorStyle = DEFAULTS.cursorStyle;
+  s.cursorBlink = s.cursorBlink !== false;
+  if (!CLAUDE_LAYOUTS.includes(s.claudeLayout)) s.claudeLayout = "";
+  return s;
 }
 
-export function retheme() {
-  for (const v of views.values()) v.term.options.theme = xtermTheme();
+export async function setTermSettings(patch) {
+  store.info.terminal = patch ? Object.assign({}, store.info.terminal || {}, patch) : null;
+  applyTermSettings();
+  await window.jagents.setSetting("terminal", store.info.terminal);
+}
+
+function themeName(s = termSettings()) {
+  return isDark() ? s.themeDark : s.themeLight;
+}
+
+// The scrollbar is drawn by xterm; a neutral gray reads on every theme.
+// The scrollbar column draws a line down its left side; in the background
+// color it disappears ("transparent" came out white).
+function xtermTheme(s) {
+  const t = THEMES[themeName(s)];
+  return Object.assign({ scrollbarSliderBackground: "rgba(180, 180, 185, 0.4)", scrollbarSliderHoverBackground: "rgba(180, 180, 185, 0.6)", scrollbarSliderActiveBackground: "rgba(180, 180, 185, 0.8)", overviewRulerBorder: t.background }, t);
+}
+
+// Agent CLIs print dim grays meant for one background; xterm brightens text
+// that would be too faint to read on this one.
+function contrast(s) {
+  return isLightTheme(themeName(s)) ? 4.5 : 3;
+}
+
+// The chosen font, then Windows' terminal fonts for anything it lacks, then
+// Nerd Font icons for shell prompts.
+function fontStack(font) {
+  const list = [font, "Cascadia Mono", "Consolas", "Symbols Nerd Font Mono"].filter((f, i, a) => a.indexOf(f) === i);
+  return list.map((f) => '"' + f + '"').join(", ") + ", monospace";
+}
+
+function termOptions(s) {
+  return {
+    fontFamily: fontStack(s.font),
+    fontSize: s.fontSize,
+    fontWeight: s.fontWeight,
+    fontWeightBold: 700,
+    lineHeight: s.lineHeight,
+    cursorStyle: s.cursorStyle,
+    cursorInactiveStyle: s.cursorStyle === "block" ? "outline" : s.cursorStyle,
+    cursorBlink: s.cursorBlink,
+    theme: xtermTheme(s),
+    minimumContrastRatio: contrast(s),
+    letterSpacing: letterSpacing(s),
+  };
+}
+
+// xterm rounds the cell width down to whole device pixels, so a font 8.8px
+// wide got 8px cells and its letters touched. One more pixel when the font
+// is closer to the next width. Measured once the font has loaded.
+function letterSpacing(s) {
+  const ctx = (letterSpacing.canvas ||= document.createElement("canvas")).getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  ctx.font = s.fontWeight + " " + s.fontSize * dpr + "px " + fontStack(s.font);
+  const w = ctx.measureText("W").width;
+  return w ? Math.round(w) - Math.floor(w) : 0;
+}
+
+// Pasted or dropped text goes to the program as typed input, inside
+// bracketed paste. An escape character in it could end the paste early and
+// run the rest as keys, so escapes are dropped.
+function cleanPaste(text) {
+  return String(text).replace(/[\x1b\x9b]/g, "");
+}
+
+// Programs copy with OSC 52 (Claude Code when text is selected in it, tmux,
+// vim over SSH). Writes only; a request to read the clipboard is ignored.
+function osc52(data) {
+  const i = data.indexOf(";");
+  const b64 = i < 0 ? "" : data.slice(i + 1);
+  if (!b64 || b64 === "?" || b64.length > 4 * 1024 * 1024) return true;
+  try {
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    navigator.clipboard.writeText(new TextDecoder().decode(bytes)).catch(() => {});
+  } catch {
+    /* not base64 */
+  }
+  return true;
+}
+
+// Emoji with skin tones, flags and joined emoji take two columns, as agent
+// CLIs count them; with older width tables they ate the next letter.
+function loadWidths(term) {
+  if (window.UnicodeGraphemesAddon) {
+    term.loadAddon(new window.UnicodeGraphemesAddon.UnicodeGraphemesAddon());
+    term.unicode.activeVersion = "15-graphemes";
+  } else if (window.Unicode11Addon) {
+    term.loadAddon(new window.Unicode11Addon.Unicode11Addon());
+    term.unicode.activeVersion = "11";
+  }
+}
+
+// Where a new terminal will appear, so it starts at its real size: the
+// terminal showing in the group with focus, or any terminal on screen.
+export function terminalSizeHint() {
+  const shown = [...views.values()].filter((v) => v.lastSize && v.host.offsetWidth);
+  const group = document.querySelector(".group.focused");
+  const pick = (group && shown.find((v) => group.contains(v.el))) || shown[0];
+  return pick ? Object.assign({}, pick.lastSize) : undefined;
+}
+
+// Theme, font and cursor for every open terminal (and the Settings preview).
+function applyTermSettings() {
+  const s = termSettings();
+  document.documentElement.style.setProperty("--term-bg", THEMES[themeName(s)].background);
+  loadTermFont(s).then(() => {
+    const opts = termOptions(s);
+    for (const v of [...views.values(), ...previews]) {
+      if (v.disposed) continue;
+      for (const [k, val] of Object.entries(opts)) v.term.options[k] = val;
+      v.queueRefit();
+    }
+  });
+}
+
+// app.js calls this when the window theme changes.
+export const retheme = applyTermSettings;
+
+const fontLoads = new Map();
+
+// xterm measures the cell once. Measured before the font is loaded it gets a
+// fallback font's cell, and text overlaps or gaps until the next resize.
+function loadTermFont(s) {
+  const key = s.font + "|" + s.fontWeight;
+  if (!fontLoads.has(key)) {
+    const f = '"' + s.font + '"';
+    const load = Promise.all([document.fonts.load(s.fontWeight + " 14px " + f), document.fonts.load("700 14px " + f), document.fonts.load('14px "Symbols Nerd Font Mono"', "")]).catch(() => {});
+    fontLoads.set(key, Promise.race([load, new Promise((r) => setTimeout(r, 1500))]));
+  }
+  return fontLoads.get(key);
+}
+
+// A terminal with sample output and no process, for Settings > Terminal.
+const previews = new Set();
+const SAMPLE = [
+  "\x1b[38;2;215;119;87m ▐▛███▜▌\x1b[0m   \x1b[1mClaude Code\x1b[0m \x1b[90mv2.1\x1b[0m",
+  "\x1b[38;2;215;119;87m▝▜█████▛▘\x1b[0m  \x1b[90mOpus · ~/JAgents\x1b[0m",
+  "\x1b[38;2;215;119;87m  ▘▘ ▝▝\x1b[0m",
+  "",
+  "\x1b[32m\x1b[42;30m  main \x1b[0m\x1b[32m\x1b[0m \x1b[36m~/JAgents\x1b[0m \x1b[1m❯\x1b[0m npm test",
+  "\x1b[32m✔\x1b[0m terminal themes \x1b[90m(12 ms)\x1b[0m   \x1b[31m✖\x1b[0m \x1b[1;31mone failed\x1b[0m   \x1b[33m⚠ warning\x1b[0m",
+  "┌──────────┬────────┐   \x1b[34mblue\x1b[0m \x1b[35mmagenta\x1b[0m \x1b[36mcyan\x1b[0m \x1b[37mwhite\x1b[0m",
+  "│ \x1b[1mFile\x1b[0m     │ \x1b[1mStatus\x1b[0m │   \x1b[94mbright\x1b[0m \x1b[95mbright\x1b[0m \x1b[96mbright\x1b[0m \x1b[97mbright\x1b[0m",
+  "└──────────┴────────┘   \x1b[2mdim text\x1b[0m \x1b[3mitalic\x1b[0m \x1b[4munderline\x1b[0m",
+].join("\r\n");
+
+// Its height follows the font (ten rows); only the width is fitted.
+export function mountTermPreview(el) {
+  const s = termSettings();
+  const p = { term: new window.Terminal(Object.assign({ rows: 10, cols: 72, allowProposedApi: true, disableStdin: true, scrollback: 0 }, termOptions(s))) };
+  p.fit = new window.FitAddon.FitAddon();
+  p.term.loadAddon(p.fit);
+  p.queueRefit = () =>
+    setTimeout(() => {
+      const d = !p.disposed && p.term.element && p.fit.proposeDimensions();
+      if (d && d.cols) p.term.resize(d.cols, 10);
+    }, 0);
+  loadWidths(p.term);
+  previews.add(p);
+  loadTermFont(s).then(() => {
+    if (p.disposed) return;
+    p.term.options.letterSpacing = letterSpacing(s);
+    p.term.open(el);
+    if (window.WebglAddon) {
+      try {
+        p.term.loadAddon(new window.WebglAddon.WebglAddon());
+      } catch {
+        /* the DOM renderer draws it */
+      }
+    }
+    p.queueRefit();
+    p.term.write(SAMPLE);
+    p.term.write("\x1b[?25h");
+  });
+  return () => {
+    p.disposed = true;
+    previews.delete(p);
+    p.term.dispose();
+  };
+}
+
+// Ctrl+= and Ctrl+- (or Ctrl+wheel) change the text size of every terminal,
+// the same setting as Settings > Terminal > Size. Ctrl+0 goes back to 14.
+function zoomTerminals(step, view) {
+  const s = termSettings();
+  const size = step ? Math.min(24, Math.max(9, s.fontSize + step)) : DEFAULTS.fontSize;
+  if (view) view.flashHint("Text size " + size);
+  if (size !== s.fontSize) setTermSettings({ fontSize: size });
+}
+
+// Search highlights: every match, and a stronger one for the current match.
+function findColors() {
+  return isLightTheme(themeName())
+    ? { matchBackground: "#fff0a6", matchBorder: "#e0c341", matchOverviewRuler: "#d4a72c", activeMatchBackground: "#ffc94d", activeMatchBorder: "#a87800", activeMatchColorOverviewRuler: "#a87800" }
+    : { matchBackground: "#4a4020", matchBorder: "#8a7633", matchOverviewRuler: "#c9a03a", activeMatchBackground: "#7a5c0c", activeMatchBorder: "#ffcc33", activeMatchColorOverviewRuler: "#ffcc33" };
+}
+
+// A dropped file's path, quoted when it has spaces or shell characters.
+function quotePath(p) {
+  return /[\s&()[\]{}^=;!'+,`~$@#%]/.test(p) ? '"' + p + '"' : p;
+}
+
+// One anchor for the right-click menu, moved to the pointer each time.
+let menuAnchor = null;
+function anchorAt(x, y) {
+  if (!menuAnchor) {
+    menuAnchor = document.createElement("div");
+    menuAnchor.className = "term-menu-anchor";
+    document.body.appendChild(menuAnchor);
+  }
+  menuAnchor.style.left = x + "px";
+  menuAnchor.style.top = y - 6 + "px";
+  return menuAnchor;
+}
+
+const menuIcon = (name) => '<span class="menu-ic">' + icon(name, 16) + "</span>";
+
+// Agent CLIs take Esc+Enter as a new line in their prompt; xterm sends Enter
+// and Shift+Enter the same. A plain shell gets Enter as typed.
+function newlineOnShiftEnter(provider) {
+  return provider !== "shell";
 }
 
 export class TerminalView {
@@ -52,33 +350,126 @@ export class TerminalView {
     this.el = el;
     this.pane = pane;
     this.el.classList.add("termview");
-    this.el.innerHTML = '<div class="xterm-host"></div><div class="term-exit" hidden></div>';
+    this.el.innerHTML =
+      '<div class="xterm-host"></div>' +
+      '<div class="term-find" role="search" hidden><span class="tf-ic">' + icon("search", 14) + "</span>" +
+      '<input type="text" placeholder="Find" aria-label="Find in terminal" spellcheck="false" autocomplete="off">' +
+      '<span class="tf-count" aria-live="polite"></span>' +
+      '<button type="button" class="tf-btn tf-case" data-find-case aria-pressed="false" title="Match case">Aa</button>' +
+      '<button type="button" class="tf-btn" data-find-prev title="Previous match (Shift+Enter)" aria-label="Previous match">' + icon("chevronUp", 15) + "</button>" +
+      '<button type="button" class="tf-btn" data-find-next title="Next match (Enter)" aria-label="Next match">' + icon("chevronDown", 15) + "</button>" +
+      '<button type="button" class="tf-btn" data-find-close title="Close (Esc)" aria-label="Close find">' + icon("close", 13) + "</button></div>" +
+      '<button type="button" class="term-bottom" hidden title="Jump to the latest output" aria-label="Jump to the latest output">' + icon("arrowDown", 15) + "</button>" +
+      '<div class="term-hint" hidden></div>' +
+      '<div class="term-exit" hidden></div>';
     this.host = this.el.querySelector(".xterm-host");
     this.exitEl = this.el.querySelector(".term-exit");
-    this.term = new window.Terminal({
-      fontFamily: cssVar("--mono") || "Cascadia Code, Consolas, monospace",
-      fontSize: 13,
-      lineHeight: 1.15,
-      cursorBlink: true,
-      allowProposedApi: true,
-      scrollback: 8000,
-      theme: xtermTheme(),
-    });
+    this.findEl = this.el.querySelector(".term-find");
+    this.findInput = this.findEl.querySelector("input");
+    this.findCount = this.findEl.querySelector(".tf-count");
+    this.bottomEl = this.el.querySelector(".term-bottom");
+    this.hintEl = this.el.querySelector(".term-hint");
+    const info = store.info || {};
+    const settings = termSettings();
+    this.term = new window.Terminal(
+      Object.assign(termOptions(settings), {
+        allowProposedApi: true,
+        scrollback: 8000,
+        // The scrollbar column: 10px instead of 14, and find marks its
+        // matches there.
+        overviewRuler: { width: 10 },
+        // Wide symbols (⏺, ✻) are drawn inside their cell instead of over the next.
+        rescaleOverlappingGlyphs: true,
+        // How ConPTY (the bundled one, pty-host.cjs) repaints after a resize,
+        // so xterm's own reflow and ConPTY's line up instead of doubling lines.
+        windowsPty: info.platform === "win32" ? { backend: "conpty", buildNumber: info.osBuild || undefined } : undefined,
+      }),
+    );
     this.fit = new window.FitAddon.FitAddon();
     this.term.loadAddon(this.fit);
-    this.term.open(this.host);
-    this.term.onData((data) => window.jagents.pty.write(pane.id, data));
+    loadWidths(this.term);
+    // The terminal service answers "who are you" (CSI c) for the process, even
+    // with no view attached; a second answer from here would arrive as typing.
+    this.term.parser.registerCsiHandler({ final: "c" }, (params) => !params[0]);
+    this.term.parser.registerOscHandler(52, osc52);
+    if (window.SearchAddon) {
+      this.search = new window.SearchAddon.SearchAddon();
+      this.term.loadAddon(this.search);
+      this.search.onDidChangeResults(({ resultIndex, resultCount }) => {
+        this.findCount.textContent = !this.findInput.value ? "" : !resultCount ? "No results" : resultIndex < 0 ? resultCount + "+ matches" : resultIndex + 1 + " of " + resultCount;
+        this.findEl.classList.toggle("none", Boolean(this.findInput.value) && !resultCount);
+      });
+    }
+    // Web addresses underline on hover and open with Ctrl+click, so a stray
+    // click while selecting text does not open a browser.
+    if (window.WebLinksAddon) {
+      this.term.loadAddon(
+        new window.WebLinksAddon.WebLinksAddon(
+          (e, uri) => {
+            if (e.ctrlKey || e.metaKey) window.jagents.openUrl(uri).catch((err) => toast(errorText(err)));
+            else this.flashHint("Ctrl+click to open the link", e);
+          },
+          { hover: (e) => this.showHint("Ctrl+click to open", e), leave: () => this.hideHint() },
+        ),
+      );
+    }
+    this.lastInput = 0;
+    this.quietUntil = Date.now() + 3000; // the screen replays on attach
+    this.term.onData((data) => {
+      this.lastInput = Date.now();
+      window.jagents.pty.write(pane.id, data);
+    });
+    // Mouse reports in the old X10 format (a full-screen app that did not ask
+    // for SGR) come out here, not in onData.
+    this.term.onBinary((data) => window.jagents.pty.write(pane.id, data));
     this.term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
+      // Ctrl+Tab switches tabs (code-mode), not a key for the agent.
+      if (e.ctrlKey && e.key === "Tab") return false;
       const mod = e.ctrlKey || e.metaKey;
-      if (mod && e.key.toLowerCase() === "c" && this.term.hasSelection()) {
-        navigator.clipboard.writeText(this.term.getSelection());
-        this.term.clearSelection();
+      const key = e.key.toLowerCase();
+      if (mod && key === "c" && this.term.hasSelection()) {
+        e.preventDefault();
+        this.copy();
         return false;
       }
-      if (mod && e.key.toLowerCase() === "v") {
+      // Ctrl+Shift+C and V copy and paste too, as in Windows Terminal.
+      if (mod && e.shiftKey && !e.altKey && key === "c") {
         e.preventDefault();
-        navigator.clipboard.readText().then((t) => t && this.term.paste(t));
+        this.copy();
+        return false;
+      }
+      if (mod && !e.altKey && key === "v") {
+        e.preventDefault();
+        this.paste();
+        return false;
+      }
+      if (mod && e.shiftKey && !e.altKey && key === "f") {
+        e.preventDefault();
+        this.openFind();
+        return false;
+      }
+      // (Ctrl+Shift+- stays Ctrl+_, the shell's undo.)
+      if (mod && !e.altKey && (key === "=" || key === "+" || key === "-" || (key === "0" && !e.shiftKey))) {
+        e.preventDefault();
+        zoomTerminals(key === "0" ? 0 : key === "-" ? -1 : 1, this);
+        return false;
+      }
+      // Ctrl+/ is Ctrl+_ (undo in shells and agent prompts), as in Windows Terminal.
+      if (e.ctrlKey && !e.altKey && !e.metaKey && (e.key === "/" || e.code === "Slash")) {
+        e.preventDefault();
+        window.jagents.pty.write(pane.id, "\x1f");
+        return false;
+      }
+      // PowerShell deletes a word on Ctrl+Backspace; Alt+Backspace typed ^H.
+      if (e.key === "Backspace" && e.altKey && !mod && pane.provider === "shell" && info.platform === "win32") {
+        e.preventDefault();
+        window.jagents.pty.write(pane.id, "\x08");
+        return false;
+      }
+      if (e.key === "Enter" && e.shiftKey && !mod && !e.altKey && newlineOnShiftEnter(pane.provider)) {
+        e.preventDefault();
+        window.jagents.pty.write(pane.id, "\x1b\r");
         return false;
       }
       return true;
@@ -89,7 +480,243 @@ export class TerminalView {
     this.exitEl.addEventListener("click", (e) => {
       if (e.target.closest("[data-restart]")) this.restart();
     });
-    this.attach();
+    this.wireFind();
+    this.wireExtras();
+    loadTermFont(settings).then(() => {
+      if (this.disposed) return;
+      this.term.options.letterSpacing = letterSpacing(settings);
+      this.term.open(this.host);
+      this.useWebgl();
+      this.attach();
+    });
+  }
+
+  // The WebGL renderer draws block and box characters (Claude Code's logo, TUI
+  // borders) to fill the whole cell so they join up; the DOM renderer took
+  // them from the font and left gaps between rows. It is also much faster
+  // while agents stream output. Without WebGL the DOM renderer stays.
+  useWebgl() {
+    if (!window.WebglAddon) return;
+    try {
+      const gl = new window.WebglAddon.WebglAddon();
+      gl.onContextLoss(() => {
+        gl.dispose();
+        if (this.webgl === gl) this.webgl = null;
+        // The GPU process restarted (driver update, sleep): try again shortly.
+        clearTimeout(this.webglRetry);
+        this.webglRetry = setTimeout(() => !this.disposed && !this.webgl && this.useWebgl(), 1000);
+      });
+      this.term.loadAddon(gl);
+      this.webgl = gl;
+      // xterm waits 3 seconds for the context to come back before
+      // onContextLoss, with a blank terminal; draw with the DOM meanwhile.
+      const canvas = this.host.querySelector("canvas");
+      if (canvas)
+        canvas.addEventListener(
+          "webglcontextlost",
+          () => {
+            if (this.webgl !== gl) return;
+            this.webgl = null;
+            gl.dispose();
+            clearTimeout(this.webglRetry);
+            this.webglRetry = setTimeout(() => !this.disposed && !this.webgl && this.useWebgl(), 1000);
+          },
+          { once: true },
+        );
+    } catch {
+      this.webgl = null;
+    }
+    this.queueRefit();
+  }
+
+  copy() {
+    if (!this.term.hasSelection()) return;
+    navigator.clipboard.writeText(this.term.getSelection());
+    this.term.clearSelection();
+  }
+
+  // No text on the clipboard (a screenshot): pass Ctrl+V on so the agent can
+  // read the image itself.
+  paste() {
+    const passOn = () => window.jagents.pty.write(this.pane.id, "\x16");
+    navigator.clipboard.readText().then((t) => (t ? this.term.paste(cleanPaste(t)) : passOn()), passOn);
+  }
+
+  // Ctrl+Shift+F: a find bar over the top right corner. Enter and Shift+Enter
+  // go through the matches; every match is highlighted and marked on the
+  // scrollbar.
+  wireFind() {
+    this.runFind = (forward, incremental) => {
+      if (!this.search) return;
+      const q = this.findInput.value;
+      if (!q) {
+        this.search.clearDecorations();
+        this.findCount.textContent = "";
+        this.findEl.classList.remove("none");
+        return;
+      }
+      const opts = { caseSensitive: Boolean(this.findCase), incremental, decorations: findColors() };
+      if (forward) this.search.findNext(q, opts);
+      else this.search.findPrevious(q, opts);
+    };
+    this.findInput.addEventListener("input", () => this.runFind(true, true));
+    this.findInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        this.runFind(!e.shiftKey, false);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        this.closeFind();
+      } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        this.findInput.select();
+      }
+    });
+    this.findEl.addEventListener("click", (e) => {
+      const b = e.target.closest("button");
+      if (!b) return;
+      if (b.hasAttribute("data-find-close")) return this.closeFind();
+      if (b.hasAttribute("data-find-case")) {
+        this.findCase = !this.findCase;
+        b.setAttribute("aria-pressed", String(this.findCase));
+        if (this.search) this.search.clearDecorations();
+        this.runFind(true, true);
+      } else this.runFind(b.hasAttribute("data-find-next"), false);
+      this.findInput.focus();
+    });
+  }
+
+  openFind() {
+    if (!this.search) return;
+    const sel = this.term.hasSelection() ? this.term.getSelection() : "";
+    if (sel && !sel.includes("\n") && sel.length < 200) this.findInput.value = sel;
+    this.findEl.hidden = false;
+    this.findInput.focus();
+    this.findInput.select();
+    if (this.findInput.value) this.runFind(true, true);
+  }
+
+  closeFind() {
+    if (this.findEl.hidden) return;
+    this.findEl.hidden = true;
+    if (this.search) this.search.clearDecorations();
+    this.term.clearSelection();
+    this.term.focus();
+  }
+
+  // The right-click menu, Ctrl+wheel text size, the jump-to-latest button and
+  // dropping files in.
+  wireExtras() {
+    // A full-screen app that reads the mouse gets the right click instead;
+    // Shift+right-click still opens the menu there.
+    this.el.addEventListener("contextmenu", (e) => {
+      if (!e.target.closest(".xterm-host")) return;
+      e.preventDefault();
+      if (this.term.modes.mouseTrackingMode !== "none" && !e.shiftKey) return;
+      this.openMenu(e.clientX, e.clientY);
+    });
+    this.el.addEventListener(
+      "wheel",
+      (e) => {
+        if (!e.ctrlKey) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const now = Date.now();
+        if (!e.deltaY || now - (this.lastZoom || 0) < 90) return;
+        this.lastZoom = now;
+        zoomTerminals(e.deltaY < 0 ? 1 : -1, this);
+      },
+      { passive: false, capture: true },
+    );
+    // Scrolled back through the history: a button jumps to the latest output
+    // and lights up when more arrives.
+    this.bottomEl.addEventListener("click", () => {
+      this.term.scrollToBottom();
+      this.term.focus();
+    });
+    this.term.onScroll(() => this.paintBottom());
+    this.term.onWriteParsed(() => {
+      if (this.scrolledUp) this.bottomEl.classList.add("new");
+    });
+    // Dropped files are typed in as their paths (an agent reads them, a
+    // dropped image becomes an attachment in Claude Code).
+    const hasFiles = (e) => Boolean(e.dataTransfer) && Array.from(e.dataTransfer.types || []).includes("Files");
+    this.el.addEventListener("dragover", (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      this.el.classList.add("drop-files");
+    });
+    this.el.addEventListener("dragleave", (e) => {
+      if (!this.el.contains(e.relatedTarget)) this.el.classList.remove("drop-files");
+    });
+    this.el.addEventListener("drop", (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.el.classList.remove("drop-files");
+      const paths = Array.from(e.dataTransfer.files).map((f) => window.jagents.pathForFile(f)).filter(Boolean);
+      if (!paths.length) return;
+      this.term.paste(cleanPaste(paths.map(quotePath).join(" ")));
+      this.term.focus();
+    });
+  }
+
+  paintBottom() {
+    const b = this.term.buffer.active;
+    const up = b.viewportY < b.baseY;
+    if (up === Boolean(this.scrolledUp)) return;
+    this.scrolledUp = up;
+    this.bottomEl.hidden = !up;
+    if (!up) this.bottomEl.classList.remove("new");
+  }
+
+  openMenu(x, y) {
+    const pick = (fn) => () => {
+      fn();
+      if (this.findEl.hidden) this.term.focus();
+    };
+    const items = [
+      { label: "Copy", icon: menuIcon("copy"), badge: "Ctrl+C", disabled: !this.term.hasSelection(), onPick: pick(() => this.copy()) },
+      { label: "Paste", icon: menuIcon("paste"), badge: "Ctrl+V", onPick: pick(() => this.paste()) },
+      { label: "Select all", icon: menuIcon("selectAll"), onPick: pick(() => this.term.selectAll()) },
+      { divider: true },
+      { label: "Find", icon: menuIcon("search"), badge: "Ctrl+Shift+F", onPick: () => this.openFind() },
+      // Only the history above the screen; what the agent shows now stays.
+      { label: "Clear scrollback", icon: menuIcon("trash"), onPick: pick(() => this.term.write("\x1b[3J")) },
+      { divider: true },
+      { label: "Larger text", icon: menuIcon("textSize"), badge: "Ctrl+=", onPick: pick(() => zoomTerminals(1, this)) },
+      { label: "Smaller text", icon: menuIcon("textSize"), badge: "Ctrl+-", onPick: pick(() => zoomTerminals(-1, this)) },
+    ];
+    dropdown(anchorAt(x, y), items, { width: 260 });
+  }
+
+  // A small label: "Ctrl+click to open" by the pointer, or the text size at
+  // the top of the terminal.
+  showHint(text, e) {
+    clearTimeout(this.hintTimer);
+    this.hintEl.textContent = text;
+    this.hintEl.hidden = false;
+    const at = Boolean(e);
+    this.hintEl.classList.toggle("at", at);
+    if (at) {
+      const r = this.el.getBoundingClientRect();
+      this.hintEl.style.left = Math.max(8, Math.min(r.width - 190, e.clientX - r.left + 12)) + "px";
+      this.hintEl.style.top = Math.max(8, Math.min(r.height - 34, e.clientY - r.top + 16)) + "px";
+    } else {
+      this.hintEl.style.left = "";
+      this.hintEl.style.top = "";
+    }
+  }
+
+  hideHint() {
+    clearTimeout(this.hintTimer);
+    this.hintEl.hidden = true;
+  }
+
+  flashHint(text, e) {
+    this.showHint(text, e);
+    this.hintTimer = setTimeout(() => this.hideHint(), 1100);
   }
 
   size() {
@@ -105,7 +732,7 @@ export class TerminalView {
   }
 
   refit() {
-    if (!this.host.offsetWidth || !this.host.offsetHeight) return;
+    if (!this.term.element || !this.host.offsetWidth || !this.host.offsetHeight) return;
     try {
       this.fit.fit();
     } catch {
@@ -114,25 +741,62 @@ export class TerminalView {
     const s = this.size();
     if (this.lastSize && this.lastSize.cols === s.cols && this.lastSize.rows === s.rows) return;
     this.lastSize = s;
-    if (this.attached) window.jagents.pty.resize(this.pane.id, s.cols, s.rows);
+    if (!this.attached) return;
+    // The agent redraws for the new size; that is not work.
+    this.quietUntil = Date.now() + 1200;
+    // Dragging a split or the window edge changes the size many times a
+    // second; the process (and its full redraw) only gets where it ends up.
+    clearTimeout(this.resizeTimer);
+    this.resizeTimer = setTimeout(() => {
+      const now = this.size();
+      if (this.disposed || (this.sentSize && this.sentSize.cols === now.cols && this.sentSize.rows === now.rows)) return;
+      this.sentSize = now;
+      window.jagents.pty.resize(this.pane.id, now.cols, now.rows);
+    }, 80);
+  }
+
+  // Waits until the pane's size has stopped changing (the layout and fonts
+  // settle over the first frames), so the process gets one size, not two.
+  async settled() {
+    let last = "";
+    for (let i = 0; i < 16; i++) {
+      await new Promise((r) => setTimeout(r, 25));
+      const now = this.host.offsetWidth + "x" + this.host.offsetHeight;
+      if (now === last) return;
+      last = now;
+    }
   }
 
   async attach() {
-    // A timer, not requestAnimationFrame: rAF never fires while the window is
+    // Timers, not requestAnimationFrame: rAF never fires while the window is
     // hidden or covered, and the process must start regardless.
-    await new Promise((r) => setTimeout(r, 30));
-    try {
-      this.fit.fit();
-    } catch {
-      /* not laid out yet */
+    await this.settled();
+    if (this.disposed) return;
+    // A view in a hidden tab has no size to give; it reports none and the
+    // process keeps its own until the tab is shown (refit). Sending xterm's
+    // 80x24 default squeezed every background agent on each reload.
+    let shown = this.host.offsetWidth > 0 && this.host.offsetHeight > 0;
+    if (shown) {
+      try {
+        this.fit.fit();
+      } catch {
+        shown = false;
+      }
     }
     try {
-      const snap = await window.jagents.pty.attach(this.pane.id, this.size());
+      const size = shown ? this.size() : null;
+      const snap = await window.jagents.pty.attach(this.pane.id, size);
+      if (this.disposed) return;
       this.attached = true;
-      this.lastSize = this.size();
+      if (size) this.lastSize = this.sentSize = size;
+      else if (snap && snap.cols && snap.rows) this.term.resize(snap.cols, snap.rows);
       if (snap && snap.data) this.term.write(snap.data);
+      this.live = true;
       if (snap && snap.exited) this.showExit(snap.exitCode);
+      // The pane may have come into view while the snapshot was on its way.
+      if (!size) this.queueRefit();
     } catch (error) {
+      this.live = true;
       this.term.write("\r\n\x1b[31m" + String(error.message || error).replace(/^Error invoking remote method '[^']+': (Error: )?/, "") + "\x1b[0m\r\n");
     }
   }
@@ -141,7 +805,10 @@ export class TerminalView {
     this.exitEl.hidden = true;
     this.term.reset();
     try {
-      await window.jagents.pty.restart(this.pane.id, this.size());
+      this.quietUntil = Date.now() + 3000;
+      this.sentSize = this.size();
+      await window.jagents.pty.restart(this.pane.id, this.sentSize);
+      fire("terminal-restarted", this.pane.id);
     } catch (error) {
       this.term.write("\r\n\x1b[31m" + String(error.message || error) + "\x1b[0m\r\n");
     }
@@ -157,8 +824,13 @@ export class TerminalView {
   }
 
   destroy() {
+    this.disposed = true;
     clearTimeout(this.refitTimer);
     clearTimeout(this.refitLate);
+    clearTimeout(this.resizeTimer);
+    clearTimeout(this.webglRetry);
+    clearTimeout(this.idleTimer);
+    clearTimeout(this.hintTimer);
     views.delete(this.pane.id);
     this.ro.disconnect();
     this.term.dispose();

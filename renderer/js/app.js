@@ -3,7 +3,7 @@ import { icon, harnessIcon } from "./icons.js";
 import { store, fire, on, refreshAgents, refreshChats } from "./store.js";
 import { routeAcpState, routeAcpModels } from "./chat-view.js";
 import { routePtyData, routePtyExit, retheme } from "./terminal-view.js";
-import { renderCodeMode, syncPanes, addChat, markExited, focusAgent, projectCounts, showProject } from "./code-mode.js";
+import { renderCodeMode, syncPanes, addChat, markExited, focusAgent, projectCounts, showProject, activeWorkspace, DEFAULT_WS } from "./code-mode.js";
 import { renderThreadMode, noteThreadState, openThread } from "./thread-mode.js";
 import { initUsage, noteUsage } from "./usage.js";
 import { dropdown, updateActivity } from "./dialogs.js";
@@ -143,8 +143,9 @@ function paintProjects() {
             '<button type="button" class="project' + (on ? " on" : "") + '" data-project="' + esc(p.path) + '" title="' + esc(p.path) + '"' + (on ? ' aria-current="true"' : "") + ">" +
             '<span class="project-ic">' + icon("folder", 15) + "</span>" +
             '<span class="project-text"><span class="project-name">' + esc(p.name) + '</span><span class="project-path">' + esc(parentDir(p.path)) + "</span></span>" +
-            (c && c.count ? '<span class="project-count' + (c.busy ? " live" : "") + '" title="' + c.count + (c.count === 1 ? " agent" : " agents") + (c.busy ? ", " + c.busy + " running" : "") + '"><i></i>' + c.count + "</span>" : "") +
-            "</button>"
+            countPill(c) +
+            "</button>" +
+            workspaceRows(p, on, counts)
           );
         })
         .join("")
@@ -155,14 +156,132 @@ function paintProjects() {
   }
 }
 
+function countPill(c) {
+  return c && c.count ? '<span class="project-count" title="' + c.count + (c.count === 1 ? " agent" : " agents") + (c.busy ? ", " + c.busy + " running" : "") + '">' + c.count + "</span>" : "";
+}
+
+// A project's workspaces, under it: each its own set of agents. A project with
+// only Default shows just "New workspace", and only while it is open.
+function workspaceRows(p, open, counts) {
+  const list = p.workspaces || [];
+  if (list.length < 2 && !open) return "";
+  const current = p.workspace || DEFAULT_WS;
+  const rows = list.length < 2 ? [] : list.map((w) => {
+    const on = open && w.id === current;
+    return (
+      '<button type="button" class="ws-row' + (on ? " on" : "") + '" data-ws="' + esc(w.id) + '" data-ws-dir="' + esc(p.path) + '"' + (on ? ' aria-current="true"' : "") + ">" +
+      '<span class="ws-ic">' + icon(w.id === DEFAULT_WS ? "grid" : "columns", 13) + "</span>" +
+      '<span class="ws-name">' + esc(w.name) + "</span>" +
+      countPill(counts.get(keyOf(p.path) + "#" + w.id)) +
+      "</button>"
+    );
+  });
+  if (open) rows.push('<button type="button" class="ws-row ws-add" data-ws-add="' + esc(p.path) + '"><span class="ws-ic">' + icon("plus", 13) + '</span><span class="ws-name">New workspace</span></button>');
+  return '<div class="ws-list" role="group" aria-label="Workspaces in ' + esc(p.name) + '">' + rows.join("") + "</div>";
+}
+
+async function switchWorkspace(dir, id) {
+  const same = keyOf(dir) === keyOf(store.info.cwd) && activeWorkspace() === id;
+  if (same) {
+    if (mode !== "code") setMode("code");
+    return;
+  }
+  try {
+    store.projects = await window.jagents.projects.activateWorkspace(dir, id);
+    store.info.cwd = dir;
+    if (mode !== "code") setMode("code");
+    showProject();
+    paintProjects();
+    window.dispatchEvent(new Event("resize"));
+  } catch (error) {
+    toast(errorText(error));
+  }
+}
+
+async function newWorkspace(dir) {
+  try {
+    store.projects = await window.jagents.projects.addWorkspace(dir);
+    store.info.cwd = dir;
+    if (mode !== "code") setMode("code");
+    showProject();
+    paintProjects();
+    const p = store.projects.find((x) => keyOf(x.path) === keyOf(dir));
+    if (p) renameWorkspace(p, p.workspace);
+  } catch (error) {
+    toast(errorText(error));
+  }
+}
+
+function workspaceMenu(anchor, dir, id) {
+  const p = (store.projects || []).find((x) => keyOf(x.path) === keyOf(dir));
+  const w = p && (p.workspaces || []).find((x) => x.id === id);
+  if (!w) return;
+  const count = (projectCounts().get(keyOf(dir) + "#" + id) || { count: 0 }).count;
+  const items = [
+    { section: w.name + " · " + p.name },
+    { label: "Open", icon: '<span class="menu-ic">' + icon("columns", 16) + "</span>", onPick: () => switchWorkspace(dir, id) },
+  ];
+  if (id !== DEFAULT_WS) {
+    items.push({ label: "Rename…", icon: '<span class="menu-ic">' + icon("pencil", 16) + "</span>", onPick: () => renameWorkspace(p, id) });
+    items.push({
+      label: "Remove workspace",
+      desc: count ? "Close its " + count + (count === 1 ? " agent" : " agents") + " first" : "Its layout goes; the folder stays",
+      icon: '<span class="menu-ic">' + icon("trash", 16) + "</span>",
+      disabled: count > 0,
+      onPick: () => window.jagents.projects.removeWorkspace(dir, id).then(refreshProjects).catch((e) => toast(errorText(e))),
+    });
+  }
+  items.push({ label: "New workspace", icon: '<span class="menu-ic">' + icon("plus", 16) + "</span>", onPick: () => newWorkspace(dir) });
+  dropdown(anchor, items, { width: 260 });
+}
+
+function renameWorkspace(p, id) {
+  const w = (p.workspaces || []).find((x) => x.id === id);
+  const row = app.querySelector('[data-ws="' + CSS.escape(id) + '"][data-ws-dir="' + CSS.escape(p.path) + '"] .ws-name');
+  if (!w || !row || id === DEFAULT_WS) return;
+  const input = document.createElement("input");
+  input.className = "project-rename ws-rename";
+  input.value = w.name;
+  input.maxLength = 40;
+  input.setAttribute("aria-label", "Workspace name");
+  row.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = async (ok) => {
+    if (done) return;
+    done = true;
+    const name = input.value.trim();
+    if (ok && name && name !== w.name) {
+      try {
+        store.projects = await window.jagents.projects.renameWorkspace(p.path, id, name);
+      } catch (error) {
+        toast(errorText(error));
+      }
+    }
+    app.querySelector("[data-projects]")._html = "";
+    paintProjects();
+    // The empty workspace screen shows its name.
+    if (keyOf(p.path) === keyOf(store.info.cwd)) showProject();
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") finish(true);
+    if (e.key === "Escape") finish(false);
+    e.stopPropagation();
+  });
+  input.addEventListener("blur", () => finish(true));
+  input.addEventListener("click", (e) => e.stopPropagation());
+}
+
 async function refreshProjects(list) {
   try {
+    const wsBefore = activeWorkspace();
     store.projects = list || (await window.jagents.projects.list());
     const active = store.projects.find((p) => p.active);
     if (active && keyOf(active.path) !== keyOf(store.info.cwd)) {
       store.info.cwd = active.path;
       showProject();
-    }
+    } else if (activeWorkspace() !== wsBefore) showProject();
   } catch {
     /* closing */
   }
@@ -215,6 +334,7 @@ function projectMenu(anchor, dir) {
       { label: "Open", icon: '<span class="menu-ic">' + icon("folder", 16) + "</span>", onPick: () => switchProject(p.path) },
       { label: "Show in Explorer", icon: '<span class="menu-ic">' + icon("external", 16) + "</span>", onPick: () => window.jagents.openPath(p.path).catch((e) => toast(errorText(e))) },
       { label: "Rename…", icon: '<span class="menu-ic">' + icon("pencil", 16) + "</span>", onPick: () => renameProject(p) },
+      { label: "New workspace", desc: "A separate set of agents in this folder", icon: '<span class="menu-ic">' + icon("plus", 16) + "</span>", onPick: () => newWorkspace(p.path) },
       { label: "Remove from list", desc: count ? "Close its " + count + (count === 1 ? " agent" : " agents") + " first" : "The folder stays on disk", icon: '<span class="menu-ic">' + icon("trash", 16) + "</span>", disabled: count > 0, onPick: () => window.jagents.projects.remove(p.path).then(refreshProjects).catch((e) => toast(errorText(e))) },
     ],
     { width: 260 },
@@ -339,6 +459,7 @@ on("open-chat", (chatId) => {
   openThread(chatId);
 });
 on("switch-project", (dir) => switchProject(dir));
+on("switch-workspace", ({ dir, workspace }) => switchWorkspace(dir, workspace));
 on("open-help", (section) => {
   setMode("help");
   const el = document.getElementById("help-" + (section || "workspace"));
@@ -389,7 +510,7 @@ async function boot() {
     '<div class="dock-icons">' +
     '<button type="button" class="dock-icon" data-menu-anchor data-activity title="Agent activity" aria-label="Agent activity">' + icon("tree", 15) + '<span class="dock-badge" data-activity-badge hidden></span></button>' +
     '<button type="button" class="dock-icon" data-usage-open title="Usage for every agent" aria-label="Usage">' + icon("usage", 15) + "</button>" +
-    '<button type="button" class="dock-icon" data-settings title="Settings" aria-label="Settings">' + icon("gear", 15) + '<span class="dock-badge dot" data-settings-badge hidden></span></button>' +
+    '<button type="button" class="dock-icon" data-settings title="Settings" aria-label="Settings">' + icon("gear", 15) + '<span class="dock-flag" data-settings-badge hidden>' + icon("update", 11) + "</span></button>" +
     '<span class="plugin-top" data-plugin-top></span>' +
     '<span class="spacer"></span>' +
     '<button type="button" class="dock-icon" data-usage-refresh title="Check usage now" aria-label="Check usage now">' + icon("restart", 14) + "</button></div>" +
@@ -432,8 +553,14 @@ async function boot() {
     refreshSettings();
   });
   on("update", (u) => {
-    const dot = app.querySelector("[data-settings-badge]");
-    if (dot) dot.hidden = !(u && (u.available || u.applied));
+    const flag = app.querySelector("[data-settings-badge]");
+    const ready = Boolean(u && (u.available || u.applied));
+    if (flag) flag.hidden = !ready;
+    const gear = app.querySelector(".dock-icon[data-settings]");
+    if (gear) {
+      gear.title = ready ? "Settings (update available)" : "Settings";
+      gear.setAttribute("aria-label", gear.title);
+    }
   });
 
   // The sidebar's right edge resizes it.
@@ -459,6 +586,11 @@ async function boot() {
   });
 
   app.addEventListener("contextmenu", (e) => {
+    const w = e.target.closest("[data-ws]");
+    if (w) {
+      e.preventDefault();
+      return workspaceMenu(w, w.dataset.wsDir, w.dataset.ws);
+    }
     const p = e.target.closest("[data-project]");
     if (!p) return;
     e.preventDefault();
@@ -469,6 +601,10 @@ async function boot() {
     const t = e.target;
     const m = t.closest(".mode-seg [data-mode]");
     if (m) return setMode(m.dataset.mode);
+    const w = t.closest("[data-ws]");
+    if (w) return switchWorkspace(w.dataset.wsDir, w.dataset.ws);
+    const wa = t.closest("[data-ws-add]");
+    if (wa) return newWorkspace(wa.dataset.wsAdd);
     const p = t.closest("[data-project]");
     if (p) return switchProject(p.dataset.project);
     if (t.closest("[data-project-add]")) return addProject();

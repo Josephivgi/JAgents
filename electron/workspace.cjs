@@ -27,6 +27,12 @@ function claudeToolName(name) {
 function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, pluginMcp }) {
   let panes = (db.getSetting("panes", []) || []).filter((p) => p && p.id && p.kind);
   const counters = db.getSetting("handle-counters", {}) || {};
+  const DEFAULT_WS = "default";
+  // Panes from before workspaces move into their project's Default workspace.
+  if (panes.some((p) => !p.workspace)) {
+    for (const p of panes) if (!p.workspace) p.workspace = DEFAULT_WS;
+    db.setSetting("panes", panes);
+  }
 
   function save() {
     db.setSetting("panes", panes);
@@ -75,7 +81,11 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
 
   function projects() {
     const active = normPath(cwdDefault());
-    return projectList().map((p) => Object.assign({}, p, { active: normPath(p.path) === active }));
+    const all = wsState();
+    return projectList().map((p) => {
+      const ws = wsFor(p.path, all);
+      return Object.assign({}, p, { active: normPath(p.path) === active, workspaces: ws.list, workspace: ws.active });
+    });
   }
 
   function setActiveProject(dir) {
@@ -102,6 +112,11 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
     if (panes.some((p) => p.cwd && normPath(p.cwd) === key)) throw new Error("Close this project's agents first.");
     const list = projectList().filter((p) => normPath(p.path) !== key);
     db.setSetting("projects", list);
+    const all = wsState();
+    if (all[key]) {
+      delete all[key];
+      db.setSetting("workspaces", all);
+    }
     if (normPath(cwdDefault()) === key) db.setSetting("cwd", list.length ? list[0].path : require("node:os").homedir());
     projectList();
     emit("projects-changed", projects());
@@ -114,6 +129,95 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
     if (!p) throw new Error("No project " + dir + ".");
     p.name = String(name || "").trim().slice(0, 60) || path.basename(p.path);
     db.setSetting("projects", list);
+    emit("projects-changed", projects());
+    return projects();
+  }
+
+  // ---- Workspaces: separate sets of agents inside one project --------------
+  //
+  // Every project has a Default workspace and any number more. Each pane
+  // belongs to one ("workspace" on the pane; panes from before workspaces are
+  // in Default), and the window shows the open project's open workspace. The
+  // others' agents keep running out of sight.
+  //   setting "workspaces": { [project key]: { list: [{ id, name }], active } }
+
+  function wsState() {
+    const all = db.getSetting("workspaces", null);
+    return all && typeof all === "object" ? all : {};
+  }
+
+  function wsFor(dir, all) {
+    const s = (all || wsState())[normPath(dir)] || {};
+    const list = [{ id: DEFAULT_WS, name: "Default" }].concat((Array.isArray(s.list) ? s.list : []).filter((w) => w && w.id && w.id !== DEFAULT_WS));
+    const active = list.some((w) => w.id === s.active) ? s.active : DEFAULT_WS;
+    return { list, active };
+  }
+
+  function wsSave(dir, ws) {
+    const all = wsState();
+    all[normPath(dir)] = { list: ws.list.filter((w) => w.id !== DEFAULT_WS), active: ws.active };
+    db.setSetting("workspaces", all);
+  }
+
+  // The workspace a new pane joins: its parent agent's, else the one open in
+  // its project.
+  function workspaceForNew(src, cwd) {
+    const parent = src.parentId && panes.find((p) => p.id === src.parentId || p.chatId === src.parentId);
+    if (parent) return parent.workspace || DEFAULT_WS;
+    const ws = wsFor(cwd || cwdDefault());
+    return ws.list.some((w) => w.id === src.workspace) ? src.workspace : ws.active;
+  }
+
+  function paneWorkspace(p) {
+    return p.workspace || DEFAULT_WS;
+  }
+
+  function addWorkspace(dir, name) {
+    if (!dir || !fs.existsSync(dir)) throw new Error("Folder not found: " + dir);
+    const ws = wsFor(dir);
+    let n = ws.list.length + 1;
+    while (ws.list.some((w) => w.name.toLowerCase() === ("workspace " + n).toLowerCase())) n++;
+    const w = { id: "ws-" + randomUUID().slice(0, 8), name: String(name || "").replace(/\s+/g, " ").trim().slice(0, 40) || "Workspace " + n };
+    ws.list.push(w);
+    ws.active = w.id;
+    wsSave(dir, ws);
+    db.setSetting("cwd", dir);
+    projectList();
+    emit("projects-changed", projects());
+    return projects();
+  }
+
+  function setActiveWorkspace(dir, id) {
+    if (!dir || !fs.existsSync(dir)) throw new Error("Folder not found: " + dir);
+    const ws = wsFor(dir);
+    if (!ws.list.some((w) => w.id === id)) throw new Error("That workspace no longer exists.");
+    ws.active = id;
+    wsSave(dir, ws);
+    db.setSetting("cwd", dir);
+    projectList();
+    emit("projects-changed", projects());
+    return projects();
+  }
+
+  function renameWorkspace(dir, id, name) {
+    const ws = wsFor(dir);
+    const w = ws.list.find((x) => x.id === id);
+    if (!w || id === DEFAULT_WS) throw new Error("The Default workspace keeps its name.");
+    w.name = String(name || "").replace(/\s+/g, " ").trim().slice(0, 40) || w.name;
+    wsSave(dir, ws);
+    emit("projects-changed", projects());
+    return projects();
+  }
+
+  // Removes a workspace. Its agents must be closed first, as with projects.
+  function removeWorkspace(dir, id) {
+    if (id === DEFAULT_WS) throw new Error("The Default workspace can't be removed.");
+    const key = normPath(dir);
+    if (panes.some((p) => p.cwd && normPath(p.cwd) === key && paneWorkspace(p) === id)) throw new Error("Close this workspace's agents first.");
+    const ws = wsFor(dir);
+    ws.list = ws.list.filter((w) => w.id !== id);
+    if (ws.active === id) ws.active = DEFAULT_WS;
+    wsSave(dir, ws);
     emit("projects-changed", projects());
     return projects();
   }
@@ -243,6 +347,9 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
     const attach = pane.mcp && hubOn();
     const spec = terminalSpawnSpec(pane.provider, launchArgs(pane.provider, pane, attach, initialPrompt));
     const env = Object.assign({}, spec.env, { JAGENTS_PANE_ID: pane.id, JAGENTS_HUB_FILE: hubFiles.hub, JAGENTS_HANDLE: pane.handle });
+    // Settings > Terminal > Claude Code layout. Unset, Claude Code picks.
+    const layout = (db.getSetting("terminal", null) || {}).claudeLayout;
+    if (pane.provider === "claude" && (layout === "classic" || layout === "fullscreen")) env.CLAUDE_CODE_NO_FLICKER = layout === "fullscreen" ? "1" : "0";
     if (!fs.existsSync(pane.cwd)) throw new Error("Folder not found: " + pane.cwd);
     // Terminals JAgents wires per launch; others only have it through a global install.
     pane.attached = Boolean(attach) && ["claude", "codex", "devin-cli"].includes(pane.provider);
@@ -262,6 +369,7 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
       title: src.title || agent.name,
       cwd: src.cwd || cwdDefault(),
       parentId: src.parentId || "",
+      workspace: workspaceForNew(src, src.cwd || cwdDefault()),
       mcp: src.mcp !== false,
       createdAt: Date.now(),
     };
@@ -282,9 +390,23 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
   function ensureTerminal(id, size) {
     const pane = panes.find((p) => p.id === id && p.kind === "terminal");
     if (!pane) throw new Error("No terminal pane " + id + ".");
-    if (!ptyHost.has(id)) launchTerminal(pane, size);
-    else if (size) ptyHost.resize(id, size.cols, size.rows);
+    // No size: the view is in a hidden tab and has not been measured; the
+    // process keeps its size until the tab is shown.
+    if (!ptyHost.has(id)) launchTerminal(pane, size || pane.size);
+    else if (size) resizeTerminal(id, size.cols, size.rows);
     return ptyHost.snapshot(id);
+  }
+
+  // The last size each terminal had, so the next app start launches it at
+  // that size instead of a guess that the agent then redraws for.
+  let sizeTimer = null;
+  function resizeTerminal(id, cols, rows) {
+    ptyHost.resize(id, cols, rows);
+    const pane = panes.find((p) => p.id === id && p.kind === "terminal");
+    if (!pane || !(cols > 0 && rows > 0)) return;
+    pane.size = { cols: Math.floor(cols), rows: Math.floor(rows) };
+    clearTimeout(sizeTimer);
+    sizeTimer = setTimeout(() => db.setSetting("panes", panes), 2000);
   }
 
   // Terminal panes from the last run start with the app, so agents are reachable
@@ -293,7 +415,7 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
     for (const pane of panes) {
       if (pane.kind !== "terminal" || ptyHost.has(pane.id)) continue;
       try {
-        launchTerminal(pane, { cols: 120, rows: 32 });
+        launchTerminal(pane, pane.size || { cols: 120, rows: 32 });
       } catch (error) {
         console.error("Could not restart " + pane.handle + ": " + error.message);
       }
@@ -304,7 +426,7 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
     const pane = panes.find((p) => p.id === id && p.kind === "terminal");
     if (!pane) throw new Error("No terminal pane " + id + ".");
     ptyHost.kill(id);
-    launchTerminal(pane, size);
+    launchTerminal(pane, size || pane.size);
     save();
     return ptyHost.snapshot(id);
   }
@@ -327,7 +449,7 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
     const chat = db.getChat(chatId);
     if (!chat) throw new Error("That chat no longer exists.");
     const agent = acpAgent(chat.harnessId);
-    const pane = { id: "chat-" + chatId.slice(0, 8), kind: "chat", chatId, provider: chat.harnessId, name: agent ? agent.name : chat.harnessId, handle: chat.handle, title: chat.title, cwd: chat.cwd, parentId: chat.parentId, createdAt: Date.now() };
+    const pane = { id: "chat-" + chatId.slice(0, 8), kind: "chat", chatId, provider: chat.harnessId, name: agent ? agent.name : chat.harnessId, handle: chat.handle, title: chat.title, cwd: chat.cwd, parentId: chat.parentId, workspace: workspaceForNew({ parentId: chat.parentId, workspace: src.workspace }, chat.cwd), createdAt: Date.now() };
     panes.push(pane);
     save();
     return pane;
@@ -339,7 +461,7 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
     const src = input || {};
     const kind = String(src.kind || "");
     if (!/^[a-z0-9][a-z0-9-]{0,39}:[a-z0-9][a-z0-9-]{0,39}$/.test(kind)) throw new Error("Plugin pane kinds look like plugin-id:kind.");
-    const pane = { id: "plug-" + randomUUID().slice(0, 8), kind: "plugin", pluginKind: kind, handle: kind.split(":")[1], name: String(src.title || kind), title: String(src.title || kind), state: src.state && typeof src.state === "object" ? src.state : {}, createdAt: Date.now() };
+    const pane = { id: "plug-" + randomUUID().slice(0, 8), kind: "plugin", pluginKind: kind, handle: kind.split(":")[1], name: String(src.title || kind), title: String(src.title || kind), state: src.state && typeof src.state === "object" ? src.state : {}, workspace: workspaceForNew(src, cwdDefault()), createdAt: Date.now() };
     panes.push(pane);
     save();
     return pane;
@@ -354,6 +476,16 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
     // State changes are frequent (a browser's URL); only a title change redraws.
     if (src.title != null) save();
     else db.setSetting("panes", panes);
+    return pane;
+  }
+
+  // A terminal or plugin tab's own name; an empty one goes back to the
+  // agent's name. Chats take theirs from the conversation.
+  function renamePane(id, title) {
+    const pane = panes.find((p) => p.id === id && (p.kind === "terminal" || p.kind === "plugin"));
+    if (!pane) throw new Error("This tab can't be renamed.");
+    pane.title = String(title == null ? "" : title).replace(/\s+/g, " ").trim().slice(0, 60) || pane.name;
+    save();
     return pane;
   }
 
@@ -414,7 +546,7 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
     return panes.find((p) => p.kind === "chat" && p.chatId === chatId) || null;
   }
 
-  return { list, agents, findAgent, addTerminal, ensureTerminal, restartTerminal, launchRestored, addChatPane, addPluginPane, updatePluginPane, newChat, removePane, reorder, paneForChat, cwdDefault, projects, addProject, removeProject, renameProject, setActiveProject, hubOn, mcpEntry, mcpEntries, claudeDisallowed, systemNote, toolsNote };
+  return { list, agents, findAgent, addTerminal, ensureTerminal, resizeTerminal, restartTerminal, launchRestored, addChatPane, addPluginPane, updatePluginPane, renamePane, addWorkspace, setActiveWorkspace, renameWorkspace, removeWorkspace, newChat, removePane, reorder, paneForChat, cwdDefault, projects, addProject, removeProject, renameProject, setActiveProject, hubOn, mcpEntry, mcpEntries, claudeDisallowed, systemNote, toolsNote };
 }
 
 module.exports = { createWorkspace };

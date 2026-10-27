@@ -28,15 +28,8 @@
 .sub-tile-txt b { font-family: var(--mono); font-size: 12px; font-weight: 600; white-space: nowrap; }
 .sub-tile-txt span { font-size: 11.5px; color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sub-tile-state { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
-.sub-tile-state.ok { color: var(--ok); }
-.sub-tile-state.busy { color: var(--accent); }
 .sub-tile-state.danger { color: var(--danger); }
-.sub-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--muted); opacity: 0.5; }
-.sub-dot.ok { background: var(--ok); opacity: 1; }
-.sub-dot.danger { background: var(--danger); opacity: 1; }
-.sub-dot.busy { background: var(--accent); opacity: 1; animation: sub-pulse 1s ease-in-out infinite; }
-@keyframes sub-pulse { 50% { opacity: 0.35; } }
-@media (prefers-reduced-motion: reduce) { .sub-dot.busy { animation: none; } }
+.sub-tile-state svg { flex: none; }
 
 /* ---- Maximized chat: tiles in the empty sides ---- */
 .sub-gutter { position: absolute; top: 16px; z-index: 3; display: flex; flex-direction: column; gap: 8px; max-height: calc(100% - 200px); overflow-y: auto; }
@@ -55,6 +48,8 @@
 .sub-thread-head .sub-tile-state { margin-left: auto; }
 .sub-thread-host .transcript { flex: 1; min-height: 0; }
 .sub-thread-host .tool { display: flex; align-items: center; gap: 8px; padding: 6px 10px; }
+.sub-tool-mark { flex: none; display: inline-flex; width: 13px; justify-content: center; }
+.sub-thread-host .tool.completed .sub-tool-mark svg { color: var(--muted); }
 .sub-thread-foot { display: flex; align-items: center; justify-content: center; gap: 6px; flex: none; padding: 10px 16px 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }
 
 /* ---- Sidebar ---- */
@@ -62,6 +57,7 @@
 .sub-side-item { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 30px; padding: 4px 8px; border-radius: 6px; text-align: left; font-size: 13px; }
 .sub-side-item:hover { background: var(--well); }
 .sub-side-item .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sub-side-item.off { color: var(--muted); }
 .sub-side-n { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .sub-servers { display: flex; flex-direction: column; gap: 2px; padding: 0 10px 12px; }
 .sub-server { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 2px 6px; border-radius: 6px; font-size: 13px; cursor: pointer; }

@@ -11,7 +11,7 @@ for (const arg of process.argv) {
 const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
-const { app, BrowserWindow, ipcMain, protocol, shell, dialog, Notification } = require("electron");
+const { app, BrowserWindow, ipcMain, protocol, shell, dialog, Notification, nativeTheme, Menu } = require("electron");
 const { openDb } = require("../lib/db");
 const { listAcpAgents, listTerminalAgents, setExtraAgents } = require("../lib/agents");
 const marketplace = require("../lib/acp-marketplace");
@@ -35,6 +35,11 @@ const VENDOR = {
   "xterm.js": path.join(APP_ROOT, "node_modules", "@xterm", "xterm", "lib", "xterm.js"),
   "xterm.css": path.join(APP_ROOT, "node_modules", "@xterm", "xterm", "css", "xterm.css"),
   "addon-fit.js": path.join(APP_ROOT, "node_modules", "@xterm", "addon-fit", "lib", "addon-fit.js"),
+  "addon-webgl.js": path.join(APP_ROOT, "node_modules", "@xterm", "addon-webgl", "lib", "addon-webgl.js"),
+  "addon-unicode11.js": path.join(APP_ROOT, "node_modules", "@xterm", "addon-unicode11", "lib", "addon-unicode11.js"),
+  "addon-unicode-graphemes.js": path.join(APP_ROOT, "node_modules", "@xterm", "addon-unicode-graphemes", "lib", "addon-unicode-graphemes.js"),
+  "addon-search.js": path.join(APP_ROOT, "node_modules", "@xterm", "addon-search", "lib", "addon-search.js"),
+  "addon-web-links.js": path.join(APP_ROOT, "node_modules", "@xterm", "addon-web-links", "lib", "addon-web-links.js"),
   // Chat markdown: parser, sanitizer, code highlighting (ES modules).
   "marked.js": path.join(APP_ROOT, "node_modules", "marked", "lib", "marked.esm.js"),
   "purify.js": path.join(APP_ROOT, "node_modules", "dompurify", "dist", "purify.es.mjs"),
@@ -69,6 +74,9 @@ if (process.platform === "win32" && "NO_COLOR" in process.env) {
 app.setName("JAgents");
 // Some sandboxed or remote sessions crash the GPU process; this falls back to software rendering.
 if (process.env.JAGENTS_DISABLE_GPU === "1") app.disableHardwareAcceleration();
+// Each terminal pane draws with its own WebGL context, and Chromium's default
+// cap of 16 would drop the oldest ones in a big grid.
+app.commandLine.appendSwitch("max-active-webgl-contexts", "64");
 const DATA_ROOT = process.env.JAGENTS_DATA_ROOT ? path.resolve(process.env.JAGENTS_DATA_ROOT) : path.join(app.getPath("appData"), "JAgents");
 // Before the rebrand the data folder was "Relay ADE"; copy it once.
 // Relay ADE data comes in only when the user presses "Get data from legacy
@@ -154,6 +162,11 @@ function registerProtocol() {
   });
 }
 
+// Windows build number, so the terminals know how ConPTY redraws on resize.
+function osBuild() {
+  return process.platform === "win32" ? Number(require("node:os").release().split(".")[2]) || 0 : 0;
+}
+
 function theme() {
   return db.getSetting("theme", "dark") === "light" ? "light" : "dark";
 }
@@ -161,6 +174,10 @@ function theme() {
 const TITLEBAR_H = 38;
 
 function createWindow() {
+  // Windows draws a 1px frame line around the window in the system's light
+  // or dark color; it follows the app's theme instead, or a light app showed
+  // a dark line along its top.
+  nativeTheme.themeSource = theme();
   started = true;
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -223,19 +240,24 @@ function registerIpc() {
     }
     return settled;
   }
-  handle("app-info", () => ({ dataRoot: DATA_ROOT, hubDir: HOME_DIR, theme: theme(), cwd: workspace.cwdDefault(), hubAttach: workspace.hubOn(), hubChosen: db.getSetting("hub.chosen", false), mode: db.getSetting("mode", "code"), version: updater.state().current, mcpAutoUpdate: db.getSetting("mcp.autoUpdate", true), mcpAutoInstall: db.getSetting("mcp.autoInstall", false), layout: db.getSetting("layout", "grid"), threadCurrent: db.getSetting("thread.current", ""), threadSettled: settledThreads(), threadSettledFolded: Boolean(db.getSetting("thread.settledFolded", false)), platform: process.platform, updateAuto: db.getSetting("update.auto", true) !== false, updateSnooze: db.getSetting("update.snooze", null), groups: db.getSetting("ui.groups", null), pageTabs: db.getSetting("ui.pageTabs", 3), sidebarWidth: db.getSetting("ui.sidebarWidth", 0), sidebarHidden: Boolean(db.getSetting("ui.sidebarHidden", false)), projects: workspace.projects() }));
+  handle("app-info", () => ({ dataRoot: DATA_ROOT, hubDir: HOME_DIR, theme: theme(), cwd: workspace.cwdDefault(), hubAttach: workspace.hubOn(), hubChosen: db.getSetting("hub.chosen", false), mode: db.getSetting("mode", "code"), version: updater.state().current, mcpAutoUpdate: db.getSetting("mcp.autoUpdate", true), mcpAutoInstall: db.getSetting("mcp.autoInstall", false), layout: db.getSetting("layout", "grid"), threadCurrent: db.getSetting("thread.current", ""), threadSettled: settledThreads(), threadSettledFolded: Boolean(db.getSetting("thread.settledFolded", false)), platform: process.platform, osBuild: osBuild(), updateAuto: db.getSetting("update.auto", true) !== false, updateSnooze: db.getSetting("update.snooze", null), groups: db.getSetting("ui.groups", null), pageTabs: db.getSetting("ui.pageTabs", 3), sidebarWidth: db.getSetting("ui.sidebarWidth", 0), sidebarHidden: Boolean(db.getSetting("ui.sidebarHidden", false)), terminal: db.getSetting("terminal", null), projects: workspace.projects() }));
   // The page sends its colors so the window buttons match the theme.
   handle("titlebar-colors", (colors) => {
     if (!mainWindow || !colors || process.platform === "darwin") return false;
     try {
       mainWindow.setTitleBarOverlay({ color: String(colors.color), symbolColor: String(colors.symbolColor), height: TITLEBAR_H });
+      const rgb = /^#([0-9a-f]{6})$/i.exec(String(colors.color));
+      if (rgb) {
+        const n = parseInt(rgb[1], 16);
+        nativeTheme.themeSource = 0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255) > 128 ? "light" : "dark";
+      }
     } catch {
       return false;
     }
     return true;
   });
   handle("set-setting", (key, value) => {
-    const allowed = ["update.auto", "update.snooze", "ui.sidebarWidth", "ui.groups", "ui.pageTabs", "ui.sidebarHidden", "theme", "mode", "layout", "hub.attach", "hub.chosen", "thread.current", "thread.settled", "thread.settledFolded", "ui.sidebar", "mcp.autoUpdate", "mcp.autoInstall", "help.section"];
+    const allowed = ["update.auto", "update.snooze", "ui.sidebarWidth", "ui.groups", "ui.pageTabs", "ui.sidebarHidden", "theme", "mode", "layout", "hub.attach", "hub.chosen", "thread.current", "thread.settled", "thread.settledFolded", "ui.sidebar", "mcp.autoUpdate", "mcp.autoInstall", "help.section", "terminal"];
     if (!allowed.includes(key)) throw new Error("Unknown setting " + key);
     db.setSetting(key, value);
     return true;
@@ -255,6 +277,10 @@ function registerIpc() {
   });
   handle("projects-remove", (dir) => workspace.removeProject(dir));
   handle("projects-rename", (dir, name) => workspace.renameProject(dir, name));
+  handle("workspaces-add", (dir, name) => workspace.addWorkspace(dir, name));
+  handle("workspaces-activate", (dir, id) => workspace.setActiveWorkspace(dir, id));
+  handle("workspaces-rename", (dir, id, name) => workspace.renameWorkspace(dir, id, name));
+  handle("workspaces-remove", (dir, id) => workspace.removeWorkspace(dir, id));
   handle("projects-activate", (dir) => workspace.setActiveProject(dir));
   handle("pick-folder", async () => {
     const res = await dialog.showOpenDialog(mainWindow, { properties: ["openDirectory", "createDirectory"], defaultPath: workspace.cwdDefault() });
@@ -264,7 +290,8 @@ function registerIpc() {
   });
   handle("open-path", (p) => shell.openPath(String(p)));
   handle("open-url", (url) => {
-    if (!/^https:\/\//.test(String(url))) throw new Error("Only https links open.");
+    // http too: terminals print local dev servers (http://localhost:5173).
+    if (!/^https?:\/\//i.test(String(url))) throw new Error("Only web links open.");
     return shell.openExternal(String(url));
   });
 
@@ -335,7 +362,7 @@ function registerIpc() {
   handle("pty-attach", (id, size) => workspace.ensureTerminal(id, size));
   handle("pty-restart", (id, size) => workspace.restartTerminal(id, size));
   ipcMain.on("pty-write", (_e, id, data) => ptyHost.write(id, data));
-  ipcMain.on("pty-resize", (_e, id, cols, rows) => ptyHost.resize(id, cols, rows));
+  ipcMain.on("pty-resize", (_e, id, cols, rows) => workspace.resizeTerminal(id, cols, rows));
 
   handle("chats-list", () => acp.listChats());
   handle("chat-get", (id) => acp.snapshot(id));
@@ -412,6 +439,7 @@ function registerIpc() {
   });
   handle("pane-add-plugin", (opts) => workspace.addPluginPane(opts));
   handle("pane-plugin-update", (id, patch) => workspace.updatePluginPane(id, patch));
+  handle("pane-rename", (id, title) => workspace.renamePane(id, title));
 
   handle("mcp-status", () => mcpInstall.status(hub.files.script));
   handle("mcp-install", (id) => mcpInstall.install(id, hub.files.script));
@@ -472,6 +500,10 @@ async function runAutoMcp(force) {
 }
 
 app.whenReady().then(async () => {
+  // Electron's default menu is hidden but its shortcuts still ran: Ctrl+Shift+R
+  // reloaded the window and Ctrl+Shift+I opened DevTools, keys a terminal
+  // program may want.
+  Menu.setApplicationMenu(null);
   log("started v" + require("../package.json").version + ", data in " + DATA_ROOT);
   if (fs.existsSync(IMPORT_FLAG)) {
     try {

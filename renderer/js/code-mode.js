@@ -4,8 +4,8 @@
 // the group. Pane views live as long as their pane does; switching tabs,
 // projects or groups only moves or hides their elements.
 //
-// Groups are kept per project in the ui.groups setting:
-//   { [projectKey]: { focused, groups: [{ id, tabs: [paneId], active }], tree } }
+// Groups are kept per project workspace in the ui.groups setting:
+//   { [layoutKey]: { focused, groups: [{ id, tabs: [paneId], active }], tree } }
 // tree arranges them: a leaf { g: groupId } or a split
 // { dir: "row" | "column", kids: [node], sizes: [number] }, so any group can
 // be split right or down.
@@ -13,7 +13,7 @@
 import { esc, toast, errorText } from "./util.js";
 import { icon, harnessIcon } from "./icons.js";
 import { store, fire, on } from "./store.js";
-import { TerminalView } from "./terminal-view.js";
+import { TerminalView, terminalBusy, terminalSizeHint } from "./terminal-view.js";
 import { ChatView } from "./chat-view.js";
 import { openHandoff, dropdown } from "./dialogs.js";
 import { PluginPaneView, pluginKindIcon, openPluginsFromPane, openPluginPane } from "./plugins.js";
@@ -27,29 +27,48 @@ let dragTab = "";
 let saveTimer = 0;
 
 export const projectKey = (dir) => String(dir || "").replace(/[\\/]+$/, "").replace(/\//g, "\\").toLowerCase();
-const activeKey = () => projectKey(store.info.cwd);
+
+// Each project has workspaces, separate sets of agents; Default holds the
+// ones from before workspaces. A Default workspace's layout keeps the
+// project's own key, so layouts saved before workspaces stay put.
+export const DEFAULT_WS = "default";
+const layoutKey = (dir, ws) => projectKey(dir) + (ws && ws !== DEFAULT_WS ? "#" + ws : "");
+
+export function activeWorkspace() {
+  const k = projectKey(store.info.cwd);
+  const p = (store.projects || []).find((x) => projectKey(x.path) === k);
+  return (p && p.workspace) || DEFAULT_WS;
+}
+
+const activeKey = () => layoutKey(store.info.cwd, activeWorkspace());
 const uid = () => "g" + Math.random().toString(36).slice(2, 9);
 
-// Which project a pane belongs to. Panes with no folder (plugin panes from
-// before projects) stay with the project that is open.
-function paneProject(p) {
-  return p.cwd ? projectKey(p.cwd) : "";
+// Which project workspace a pane belongs to. Panes with no folder (plugin
+// panes) stay with the project that is open.
+function paneKey(p) {
+  return p.cwd ? layoutKey(p.cwd, p.workspace) : "";
 }
 
 function projectPanes(key) {
-  return store.panes.filter((p) => paneProject(p) === key || (!paneProject(p) && key === activeKey()));
+  return store.panes.filter((p) => paneKey(p) === key || (!p.cwd && key === activeKey() && (p.workspace || DEFAULT_WS) === activeWorkspace()));
 }
 
+// Agents per project (keyed by projectKey) and per workspace (keyed by
+// projectKey + "#" + workspace id, Default included), for the sidebar.
 export function projectCounts() {
   const out = new Map();
-  for (const p of store.panes) {
-    const k = paneProject(p) || activeKey();
+  const add = (k, p) => {
     const e = out.get(k) || { count: 0, busy: 0 };
     e.count++;
     const entry = panes.get(p.id);
     const st = entry && entry.snap ? entry.snap.status : p.status;
     if (st === "busy" || st === "starting" || (p.kind === "terminal" && p.status !== "exited" && !(entry && entry.exited))) e.busy++;
     out.set(k, e);
+  };
+  for (const p of store.panes) {
+    const k = p.cwd ? projectKey(p.cwd) : projectKey(store.info.cwd);
+    add(k, p);
+    add(k + "#" + (p.workspace || DEFAULT_WS), p);
   }
   return out;
 }
@@ -164,21 +183,171 @@ function tabIcon(p, size) {
   return harnessIcon(p.provider, size || 15);
 }
 
+// A terminal tab reads "Claude Code  claude-1": the agent, then its handle
+// (what other agents call it) in a quieter style. A renamed one shows its name
+// and keeps the handle.
+function tabParts(p, entry) {
+  if (p.kind === "terminal") return { name: p.title || p.name, sub: p.handle || "" };
+  return { name: tabTitle(p, entry), sub: "" };
+}
+
+// Double-click, F2 or the tab menu: the name turns into a text box. Enter or
+// clicking away saves, Esc cancels, and an empty name goes back to the agent's.
+function canRename(entry) {
+  return Boolean(entry) && (entry.pane.kind === "terminal" || entry.pane.kind === "plugin");
+}
+
+function startRename(tabEl) {
+  const id = tabEl && tabEl.dataset.tab;
+  const entry = panes.get(id);
+  const titleEl = tabEl && tabEl.querySelector(".tab-title");
+  if (!canRename(entry) || !titleEl) return;
+  const p = entry.pane;
+  const input = document.createElement("input");
+  input.className = "tab-rename";
+  input.value = p.title || p.name;
+  input.placeholder = p.name;
+  input.maxLength = 60;
+  input.spellcheck = false;
+  input.setAttribute("aria-label", "Tab name");
+  tabEl.draggable = false;
+  tabEl.classList.add("renaming");
+  titleEl.replaceWith(input);
+  input.focus();
+  input.select();
+  let finished = false;
+  const finish = async (keep) => {
+    if (finished) return;
+    finished = true;
+    const name = input.value.trim();
+    const strip = tabEl.closest(".tabstrip");
+    if (strip) strip._html = "";
+    if (keep && name !== (p.title || p.name)) {
+      try {
+        await window.jagents.panes.rename(id, name);
+      } catch (error) {
+        toast(errorText(error));
+      }
+    }
+    render();
+    if (entry.view && entry.view.focus && !entry.el.hidden) entry.view.focus();
+  };
+  input.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") {
+      e.preventDefault();
+      finish(true);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      finish(false);
+    }
+  });
+  input.addEventListener("blur", () => finish(true));
+}
+
+function renameTab(id) {
+  const tab = groupsEl.querySelector('[data-tab="' + CSS.escape(id) + '"]');
+  if (tab) startRename(tab);
+}
+
 function tabMarkup(id, g) {
   const entry = panes.get(id);
   if (!entry) return "";
   const p = entry.pane;
-  const st = entry.snap ? entry.snap.status : "";
-  const busy = st === "busy" || st === "starting";
-  const title = tabTitle(p, entry);
-  const tip = [title, p.handle, p.cwd].filter(Boolean).join("\n");
+  const { name, sub } = tabParts(p, entry);
+  const label = sub ? name + " · " + sub : name;
+  const on = g.active === id;
   return (
-    '<div class="tab' + (g.active === id ? " on" : "") + (entry.exited ? " exited" : "") + '" role="tab" aria-selected="' + (g.active === id) + '" tabindex="0" draggable="true" data-tab="' + esc(id) + '" title="' + esc(tip) + '">' +
-    (busy ? '<span class="tab-busy" aria-label="Working"></span>' : "") +
-    '<span class="tab-ic">' + tabIcon(p, 14) + "</span>" +
-    '<span class="tab-title">' + esc(title) + "</span>" +
-    '<button type="button" class="tab-x" data-tab-close="' + esc(id) + '" aria-label="Close ' + esc(title) + '" title="Close">' + icon("close", 13) + "</button></div>"
+    '<div class="tab' + (on ? " on" : "") + (p.kind === "terminal" ? " term" : "") + (p.kind === "terminal" && p.title && p.title !== p.name ? " named" : "") + '" role="tab" aria-selected="' + on + '" tabindex="' + (on ? 0 : -1) + '" draggable="true" data-tab="' + esc(id) + '">' +
+    '<span class="tab-ic">' + tabIcon(p, 15) + "</span>" +
+    '<span class="tab-title"><span class="tab-name">' + esc(name) + "</span>" + (sub ? '<span class="tab-sub">' + esc(sub) + "</span>" : "") + "</span>" +
+    '<span class="tab-end"><span class="tab-state"></span>' +
+    '<button type="button" class="tab-x" data-tab-close="' + esc(id) + '" aria-label="Close ' + esc(label) + '" title="Close (middle click)" tabindex="-1">' + icon("close", 13) + "</button></span></div>"
   );
+}
+
+// What a tab shows on its right: a spinner while working, an icon when it
+// waits for your answer or exited. Finished while you were elsewhere has no
+// mark; the title reads in full ink and the tooltip says so.
+const STATE_TEXT = { busy: "Working", done: "Finished, not looked at yet", ask: "Waiting for your answer", exited: "Exited" };
+const STATE_ICON = { ask: "help", exited: "alert" };
+
+function tabState(entry) {
+  if (entry.exited) return "exited";
+  const snap = entry.snap;
+  if (snap && snap.permissions && snap.permissions.length) return "ask";
+  if (snap ? snap.status === "busy" || snap.status === "starting" : terminalBusy(entry.pane.id)) return "busy";
+  return entry.done ? "done" : "";
+}
+
+// States change often (a terminal starts and stops printing), so they are set
+// on the tabs in place: a strip never rebuilds under the mouse or a drag.
+function paintTabStates() {
+  if (!groupsEl) return;
+  for (const tab of groupsEl.querySelectorAll("[data-tab]")) {
+    const entry = panes.get(tab.dataset.tab);
+    if (!entry) continue;
+    // Seen now (its project or group came into view).
+    if (entry.done && onScreen(entry.pane.id)) entry.done = false;
+    const st = tabState(entry);
+    if ((tab.dataset.state || "") !== st) {
+      if (st) tab.dataset.state = st;
+      else delete tab.dataset.state;
+      const mark = tab.querySelector(".tab-state");
+      if (mark) {
+        mark.innerHTML = STATE_ICON[st] ? icon(STATE_ICON[st], 14) : "";
+        if (st && st !== "done") {
+          mark.setAttribute("role", "img");
+          mark.setAttribute("aria-label", STATE_TEXT[st]);
+        } else {
+          mark.removeAttribute("role");
+          mark.removeAttribute("aria-label");
+        }
+      }
+    }
+    const { name, sub } = tabParts(entry.pane, entry);
+    const tip = [name + (st ? " (" + STATE_TEXT[st] + ")" : ""), sub, entry.pane.cwd].filter(Boolean).join("\n");
+    if (tab.title !== tip) tab.title = tip;
+  }
+}
+
+// On screen: the active tab of its group, in the open project, window showing.
+function onScreen(id) {
+  const g = groupOf(id);
+  return Boolean(g && g.active === id && !document.hidden);
+}
+
+function noteDone(entry) {
+  if (!onScreen(entry.pane.id)) entry.done = true;
+}
+
+on("term-activity", ({ id, busy, worked }) => {
+  const entry = panes.get(id);
+  if (!entry) return;
+  // A few seconds of output counts as finished work; a short redraw does not.
+  if (!busy && worked >= 3000) noteDone(entry);
+  paintTabStates();
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) return;
+  for (const [id, entry] of panes) if (entry.done && onScreen(id)) entry.done = false;
+  paintTabStates();
+});
+
+// Keeps the active tab in view when a strip has more tabs than fit.
+function revealActive(strip) {
+  const tabs = strip.querySelector(".tabs");
+  const on = tabs && tabs.querySelector(".tab.on");
+  if (on) on.scrollIntoView({ block: "nearest", inline: "nearest" });
+  fadeEdges(tabs);
+}
+
+// Faded edges show there are more tabs to scroll to.
+function fadeEdges(tabs) {
+  if (!tabs) return;
+  tabs.classList.toggle("more-left", tabs.scrollLeft > 2);
+  tabs.classList.toggle("more-right", tabs.scrollLeft + tabs.clientWidth < tabs.scrollWidth - 2);
 }
 
 function stripMarkup(g, last) {
@@ -194,9 +363,11 @@ function stripMarkup(g, last) {
 function emptyMarkup() {
   const dir = store.info.cwd || "";
   const name = dir.replace(/^.*[\\/](?=[^\\/]+[\\/]?$)/, "") || dir;
+  const p = (store.projects || []).find((x) => projectKey(x.path) === projectKey(dir));
+  const ws = p && activeWorkspace() !== DEFAULT_WS && (p.workspaces || []).find((w) => w.id === activeWorkspace());
   return (
     '<div class="group-empty"><div class="empty-inner">' +
-    "<h1>" + esc(name || "New project") + "</h1>" +
+    "<h1>" + esc(name || "New project") + (ws ? ' <span class="muted">· ' + esc(ws.name) + "</span>" : "") + "</h1>" +
     '<p class="muted">' + esc(dir) + "</p>" +
     '<p class="muted">Open an agent in this folder. Terminals run the real Claude Code, Codex and other CLIs; chats run Claude Code through the Agent SDK or ACP agents like Devin and Cursor.</p>' +
     '<button type="button" class="btn primary" data-menu-anchor data-empty-add>' + icon("plus", 16) + "New tab</button>" +
@@ -254,6 +425,9 @@ function render() {
     if (strip._html !== html) {
       strip._html = html;
       strip.innerHTML = html;
+      const tabs = strip.querySelector(".tabs");
+      tabs.addEventListener("scroll", () => fadeEdges(tabs), { passive: true });
+      requestAnimationFrame(() => revealActive(strip));
     }
     const body = gel.querySelector(".group-body");
     for (const id of g.tabs) {
@@ -272,6 +446,7 @@ function render() {
   // Panes of other projects wait out of sight.
   const shown = new Set(s.groups.flatMap((g) => g.tabs));
   for (const [id, entry] of panes) if (!shown.has(id) && entry.el.parentNode !== park) park.appendChild(entry.el);
+  paintTabStates();
   fire("app:layout");
   fire("code-tabs");
 }
@@ -293,6 +468,8 @@ function activate(paneId, focus) {
   const g = groupOf(paneId);
   if (!g) return false;
   g.active = paneId;
+  const seen = panes.get(paneId);
+  if (seen) seen.done = false;
   state[activeKey()].focused = g.id;
   save();
   render();
@@ -317,9 +494,12 @@ function mount(pane) {
       compact: true,
       placeholder: "Message " + (pane.handle || "the agent"),
       onChange: (snap) => {
-        const before = entry.snap ? entry.snap.status + entry.snap.title : "";
+        const sig = (x) => (x ? x.status + "|" + x.title + "|" + ((x.permissions && x.permissions.length) || 0) : "");
+        const before = sig(entry.snap);
+        const wasBusy = Boolean(entry.snap && (entry.snap.status === "busy" || entry.snap.status === "starting"));
         entry.snap = snap;
-        if (before !== snap.status + snap.title) {
+        if (before !== sig(snap)) {
+          if (wasBusy && snap.status !== "busy" && snap.status !== "starting") noteDone(entry);
           render();
           fire("project-counts");
         }
@@ -360,6 +540,8 @@ export function syncPanes(list) {
   for (const p of list) {
     const entry = panes.get(p.id) || mount(p);
     entry.pane = Object.assign(entry.pane, p);
+    // An exited terminal stays marked after a reload, not only on its exit event.
+    if (p.kind === "terminal" && p.status === "exited") entry.exited = true;
   }
   render();
   save();
@@ -376,13 +558,25 @@ export function markExited(id) {
   }
 }
 
+// Restart: the tab and the sidebar count stop showing the terminal as exited.
+on("terminal-restarted", (id) => {
+  const e = panes.get(id);
+  const p = store.panes.find((x) => x.id === id);
+  if (p && p.status === "exited") p.status = "idle";
+  if (e && e.exited) {
+    e.exited = false;
+    render();
+    fire("project-counts");
+  }
+});
+
 // Shows an agent's tab (switching project if it lives in another one).
 export function focusAgent(ref) {
   const entry = Array.from(panes.values()).find((e) => e.pane.handle === ref || e.pane.id === ref || e.pane.chatId === ref);
   if (!entry) return false;
-  const k = paneProject(entry.pane);
+  const k = paneKey(entry.pane);
   if (k && k !== activeKey()) {
-    fire("switch-project", entry.pane.cwd);
+    fire("switch-workspace", { dir: entry.pane.cwd, workspace: entry.pane.workspace || DEFAULT_WS });
     setTimeout(() => focusAgent(ref), 50);
     return true;
   }
@@ -401,7 +595,8 @@ function intoGroup(groupId) {
 
 export async function addTerminal(provider) {
   try {
-    const pane = await window.jagents.panes.addTerminal({ provider, cwd: store.info.cwd || undefined });
+    // Started at the size it will have, so its first screen is not redrawn.
+    const pane = await window.jagents.panes.addTerminal({ provider, cwd: store.info.cwd || undefined, size: terminalSizeHint() });
     setTimeout(() => focusAgent(pane.id), 150);
   } catch (error) {
     toast(errorText(error));
@@ -485,7 +680,7 @@ function closeGroup(groupId) {
   render();
 }
 
-function moreMenu(anchor, groupId) {
+function moreMenu(anchor, groupId, atTab) {
   const s = state[activeKey()];
   const g = s.groups.find((x) => x.id === groupId);
   const entry = g && g.active ? panes.get(g.active) : null;
@@ -493,6 +688,7 @@ function moreMenu(anchor, groupId) {
   if (entry) {
     const p = entry.pane;
     items.push({ section: tabTitle(p, entry) });
+    if (canRename(entry)) items.push({ label: "Rename", desc: "Give this tab its own name (F2)", icon: '<span class="menu-ic">' + icon("pencil", 16) + "</span>", onPick: () => renameTab(p.id) });
     if (p.kind !== "plugin") items.push({ label: "Hand off context…", desc: "Pass this agent's work to another agent", icon: '<span class="menu-ic">' + icon("handoff", 16) + "</span>", onPick: () => openHandoff(agentFor(entry), (res) => res && res.started && setTimeout(() => focusAgent(res.to), 300)) });
     if (p.kind === "terminal") items.push({ label: "Restart", desc: "Start " + p.name + " again in this tab", icon: '<span class="menu-ic">' + icon("restart", 16) + "</span>", onPick: () => entry.view.restart && entry.view.restart() });
     if (g.tabs.length > 1) {
@@ -514,7 +710,7 @@ function moreMenu(anchor, groupId) {
     items.push({ label: "Even sizes", icon: '<span class="menu-ic">' + icon("grid", 16) + "</span>", onPick: () => { even(s.tree); save(); render(); } });
     items.push({ label: "Merge this group", desc: "Its tabs join the group beside it", icon: '<span class="menu-ic">' + icon("minimize", 16) + "</span>", onPick: () => closeGroup(g.id) });
   }
-  dropdown(anchor, items, { width: 280, alignRight: true });
+  dropdown(anchor, items, { width: 280, alignRight: !atTab });
 }
 
 function addFromPicker(anchor, groupId) {
@@ -599,12 +795,16 @@ export function renderCodeMode(el) {
 
   el.addEventListener("click", (e) => {
     const t = e.target;
+    if (t.closest(".tab-rename")) return;
     const x = t.closest("[data-tab-close]");
     if (x) {
       e.stopPropagation();
       return closePane(x.dataset.tabClose);
     }
     const tab = t.closest("[data-tab]");
+    // A double-click renames. Its first click may have rebuilt the strip (a
+    // tab that was not open), so the click count is used, not dblclick.
+    if (tab && e.detail === 2) return startRename(tab);
     if (tab) return activate(tab.dataset.tab, true);
     const add = t.closest("[data-group-add]");
     if (add) return addFromPicker(add, add.dataset.groupAdd);
@@ -623,10 +823,22 @@ export function renderCodeMode(el) {
     if (!tab) return;
     e.preventDefault();
     activate(tab.dataset.tab, false);
-    const g = tab.closest("[data-group]");
-    const more = g && g.querySelector("[data-group-more]");
-    if (more) moreMenu(more, g.dataset.group);
+    // The strip was rebuilt; open the menu under the new tab element.
+    const g = tab.closest("[data-group]") || groupsEl.querySelector('[data-group="' + CSS.escape((groupOf(tab.dataset.tab) || {}).id || "") + '"]');
+    const now = g && g.querySelector('[data-tab="' + CSS.escape(tab.dataset.tab) + '"]');
+    if (now) moreMenu(now, g.dataset.group, true);
   });
+  // A mouse wheel scrolls a crowded strip sideways.
+  el.addEventListener(
+    "wheel",
+    (e) => {
+      const tabs = e.target.closest && e.target.closest(".tabs");
+      if (!tabs || tabs.scrollWidth <= tabs.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+      e.preventDefault();
+      tabs.scrollLeft += e.deltaY;
+    },
+    { passive: false },
+  );
   el.addEventListener("auxclick", (e) => {
     const tab = e.button === 1 && e.target.closest("[data-tab]");
     if (tab) closePane(tab.dataset.tab);
@@ -637,10 +849,17 @@ export function renderCodeMode(el) {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       activate(tab.dataset.tab, true);
-    } else if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
-      const sib = e.key === "ArrowRight" ? tab.nextElementSibling : tab.previousElementSibling;
-      if (sib) sib.focus();
+    } else if (e.key === "ArrowRight" || e.key === "ArrowLeft" || e.key === "Home" || e.key === "End") {
+      e.preventDefault();
+      const all = Array.from(tab.parentElement.children);
+      const i = all.indexOf(tab);
+      const next = e.key === "Home" ? all[0] : e.key === "End" ? all[all.length - 1] : all[i + (e.key === "ArrowRight" ? 1 : -1)];
+      if (next) next.focus();
     } else if (e.key === "Delete") closePane(tab.dataset.tab);
+    else if (e.key === "F2") {
+      e.preventDefault();
+      startRename(tab);
+    }
   });
   el.addEventListener("mousedown", (e) => {
     const sp = e.target.closest("[data-split]");
@@ -699,7 +918,24 @@ export function renderCodeMode(el) {
     moveTab(id, g.dataset.group, tab && tab.dataset.tab !== id ? tab.dataset.tab : "");
   });
 
-  new ResizeObserver(() => fire("app:layout")).observe(groupsEl);
+  // Ctrl+Tab and Ctrl+Shift+Tab (or Ctrl+PageDown and PageUp) go through the
+  // focused group's tabs, from anywhere in Code mode.
+  document.addEventListener("keydown", (e) => {
+    if (!e.ctrlKey || e.altKey || e.metaKey || !root.offsetParent) return;
+    const fwd = e.key === "Tab" ? !e.shiftKey : e.key === "PageDown" ? true : e.key === "PageUp" ? false : null;
+    if (fwd === null || document.querySelector(".modal-back, .settings-page:not([hidden])")) return;
+    const s = state[activeKey()];
+    const g = s && (s.groups.find((x) => x.id === s.focused) || s.groups[0]);
+    if (!g || g.tabs.length < 2) return;
+    e.preventDefault();
+    const i = g.tabs.indexOf(g.active);
+    activate(g.tabs[(i + (fwd ? 1 : -1) + g.tabs.length) % g.tabs.length], true);
+  });
+
+  new ResizeObserver(() => {
+    fire("app:layout");
+    for (const t of groupsEl.querySelectorAll(".tabs")) fadeEdges(t);
+  }).observe(groupsEl);
   on("hub-agents", () => render());
   on("plugin-kinds", () => render());
   render();

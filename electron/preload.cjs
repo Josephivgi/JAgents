@@ -15,6 +15,10 @@ contextBridge.exposeInMainWorld("jagents", {
     remove: call("projects-remove"),
     rename: call("projects-rename"),
     activate: call("projects-activate"),
+    addWorkspace: call("workspaces-add"),
+    activateWorkspace: call("workspaces-activate"),
+    renameWorkspace: call("workspaces-rename"),
+    removeWorkspace: call("workspaces-remove"),
   },
   pickFiles: call("pick-files"),
   // The page has drawn the app; until then a stuck start gets reloaded.
@@ -51,6 +55,7 @@ contextBridge.exposeInMainWorld("jagents", {
     reorder: call("pane-reorder"),
     addPlugin: call("pane-add-plugin"),
     updatePlugin: call("pane-plugin-update"),
+    rename: call("pane-rename"),
   },
   plugins: {
     list: call("plugins-list"),
