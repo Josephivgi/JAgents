@@ -11,7 +11,7 @@ for (const arg of process.argv) {
 const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
-const { app, BrowserWindow, ipcMain, protocol, shell, dialog, Notification, nativeTheme } = require("electron");
+const { app, BrowserWindow, ipcMain, protocol, shell, dialog, Notification, nativeTheme, Menu } = require("electron");
 const { openDb } = require("../lib/db");
 const { listAcpAgents, listTerminalAgents, setExtraAgents } = require("../lib/agents");
 const marketplace = require("../lib/acp-marketplace");
@@ -37,6 +37,7 @@ const VENDOR = {
   "addon-fit.js": path.join(APP_ROOT, "node_modules", "@xterm", "addon-fit", "lib", "addon-fit.js"),
   "addon-webgl.js": path.join(APP_ROOT, "node_modules", "@xterm", "addon-webgl", "lib", "addon-webgl.js"),
   "addon-unicode11.js": path.join(APP_ROOT, "node_modules", "@xterm", "addon-unicode11", "lib", "addon-unicode11.js"),
+  "addon-unicode-graphemes.js": path.join(APP_ROOT, "node_modules", "@xterm", "addon-unicode-graphemes", "lib", "addon-unicode-graphemes.js"),
   "addon-search.js": path.join(APP_ROOT, "node_modules", "@xterm", "addon-search", "lib", "addon-search.js"),
   "addon-web-links.js": path.join(APP_ROOT, "node_modules", "@xterm", "addon-web-links", "lib", "addon-web-links.js"),
   // Chat markdown: parser, sanitizer, code highlighting (ES modules).
@@ -361,7 +362,7 @@ function registerIpc() {
   handle("pty-attach", (id, size) => workspace.ensureTerminal(id, size));
   handle("pty-restart", (id, size) => workspace.restartTerminal(id, size));
   ipcMain.on("pty-write", (_e, id, data) => ptyHost.write(id, data));
-  ipcMain.on("pty-resize", (_e, id, cols, rows) => ptyHost.resize(id, cols, rows));
+  ipcMain.on("pty-resize", (_e, id, cols, rows) => workspace.resizeTerminal(id, cols, rows));
 
   handle("chats-list", () => acp.listChats());
   handle("chat-get", (id) => acp.snapshot(id));
@@ -499,6 +500,10 @@ async function runAutoMcp(force) {
 }
 
 app.whenReady().then(async () => {
+  // Electron's default menu is hidden but its shortcuts still ran: Ctrl+Shift+R
+  // reloaded the window and Ctrl+Shift+I opened DevTools, keys a terminal
+  // program may want.
+  Menu.setApplicationMenu(null);
   log("started v" + require("../package.json").version + ", data in " + DATA_ROOT);
   if (fs.existsSync(IMPORT_FLAG)) {
     try {

@@ -347,6 +347,9 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
     const attach = pane.mcp && hubOn();
     const spec = terminalSpawnSpec(pane.provider, launchArgs(pane.provider, pane, attach, initialPrompt));
     const env = Object.assign({}, spec.env, { JAGENTS_PANE_ID: pane.id, JAGENTS_HUB_FILE: hubFiles.hub, JAGENTS_HANDLE: pane.handle });
+    // Settings > Terminal > Claude Code layout. Unset, Claude Code picks.
+    const layout = (db.getSetting("terminal", null) || {}).claudeLayout;
+    if (pane.provider === "claude" && (layout === "classic" || layout === "fullscreen")) env.CLAUDE_CODE_NO_FLICKER = layout === "fullscreen" ? "1" : "0";
     if (!fs.existsSync(pane.cwd)) throw new Error("Folder not found: " + pane.cwd);
     // Terminals JAgents wires per launch; others only have it through a global install.
     pane.attached = Boolean(attach) && ["claude", "codex", "devin-cli"].includes(pane.provider);
@@ -387,9 +390,23 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
   function ensureTerminal(id, size) {
     const pane = panes.find((p) => p.id === id && p.kind === "terminal");
     if (!pane) throw new Error("No terminal pane " + id + ".");
-    if (!ptyHost.has(id)) launchTerminal(pane, size);
-    else if (size) ptyHost.resize(id, size.cols, size.rows);
+    // No size: the view is in a hidden tab and has not been measured; the
+    // process keeps its size until the tab is shown.
+    if (!ptyHost.has(id)) launchTerminal(pane, size || pane.size);
+    else if (size) resizeTerminal(id, size.cols, size.rows);
     return ptyHost.snapshot(id);
+  }
+
+  // The last size each terminal had, so the next app start launches it at
+  // that size instead of a guess that the agent then redraws for.
+  let sizeTimer = null;
+  function resizeTerminal(id, cols, rows) {
+    ptyHost.resize(id, cols, rows);
+    const pane = panes.find((p) => p.id === id && p.kind === "terminal");
+    if (!pane || !(cols > 0 && rows > 0)) return;
+    pane.size = { cols: Math.floor(cols), rows: Math.floor(rows) };
+    clearTimeout(sizeTimer);
+    sizeTimer = setTimeout(() => db.setSetting("panes", panes), 2000);
   }
 
   // Terminal panes from the last run start with the app, so agents are reachable
@@ -398,7 +415,7 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
     for (const pane of panes) {
       if (pane.kind !== "terminal" || ptyHost.has(pane.id)) continue;
       try {
-        launchTerminal(pane, { cols: 120, rows: 32 });
+        launchTerminal(pane, pane.size || { cols: 120, rows: 32 });
       } catch (error) {
         console.error("Could not restart " + pane.handle + ": " + error.message);
       }
@@ -409,7 +426,7 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
     const pane = panes.find((p) => p.id === id && p.kind === "terminal");
     if (!pane) throw new Error("No terminal pane " + id + ".");
     ptyHost.kill(id);
-    launchTerminal(pane, size);
+    launchTerminal(pane, size || pane.size);
     save();
     return ptyHost.snapshot(id);
   }
@@ -529,7 +546,7 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
     return panes.find((p) => p.kind === "chat" && p.chatId === chatId) || null;
   }
 
-  return { list, agents, findAgent, addTerminal, ensureTerminal, restartTerminal, launchRestored, addChatPane, addPluginPane, updatePluginPane, renamePane, addWorkspace, setActiveWorkspace, renameWorkspace, removeWorkspace, newChat, removePane, reorder, paneForChat, cwdDefault, projects, addProject, removeProject, renameProject, setActiveProject, hubOn, mcpEntry, mcpEntries, claudeDisallowed, systemNote, toolsNote };
+  return { list, agents, findAgent, addTerminal, ensureTerminal, resizeTerminal, restartTerminal, launchRestored, addChatPane, addPluginPane, updatePluginPane, renamePane, addWorkspace, setActiveWorkspace, renameWorkspace, removeWorkspace, newChat, removePane, reorder, paneForChat, cwdDefault, projects, addProject, removeProject, renameProject, setActiveProject, hubOn, mcpEntry, mcpEntries, claudeDisallowed, systemNote, toolsNote };
 }
 
 module.exports = { createWorkspace };

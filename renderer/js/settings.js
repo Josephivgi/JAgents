@@ -11,7 +11,7 @@ import { openPluginsPanel } from "./plugins.js";
 import { openMarketplace } from "./marketplace.js";
 import { openUsagePanel } from "./usage.js";
 import { THEMES, isLightTheme } from "./terminal-themes.js";
-import { termSettings, setTermSettings, mountTermPreview, TERM_FONTS, TERM_WEIGHTS, TERM_LINE_HEIGHTS, TERM_CURSORS } from "./terminal-view.js";
+import { termSettings, setTermSettings, mountTermPreview, TERM_FONTS, TERM_WEIGHTS, TERM_LINE_HEIGHTS, TERM_CURSORS, CLAUDE_LAYOUTS } from "./terminal-view.js";
 
 const SECTIONS = [
   { id: "general", label: "General", icon: "gear" },
@@ -153,6 +153,7 @@ function terminalCtlHtml() {
     row("Weight", "Bold text is always Bold.", seg("Weight", "data-term-weight", TERM_WEIGHTS.map((w) => [String(w), weightNames[w]]), String(s.fontWeight))) +
     row("Line spacing", "1.0 keeps block characters and box borders joined with no gaps.", seg("Line spacing", "data-term-line", TERM_LINE_HEIGHTS.map((h) => [String(h), h.toFixed(1)]), String(s.lineHeight))) +
     row("Cursor", "", seg("Cursor", "data-term-cursor", TERM_CURSORS.map((c) => [c, c[0].toUpperCase() + c.slice(1)]), s.cursorStyle) + toggle("data-term-blink", s.cursorBlink, "Blinking cursor") + '<span class="muted small">Blink</span>') +
+    row("Claude Code layout", "Classic keeps the prompt under the conversation. Full screen pins it to the bottom. Applies to Claude Code tabs opened or restarted after the change.", seg("Claude Code layout", "data-term-claude", CLAUDE_LAYOUTS.map((l) => [l, { "": "Claude decides", classic: "Classic", fullscreen: "Full screen" }[l]]), s.claudeLayout)) +
     "</div>" +
     '<h3 class="set-sub">' + icon("moon", 14) + "Dark window" + (dark ? ' <span class="pill">In use</span>' : "") + "</h3>" +
     '<div class="set-card">' + themeGrid("dark", s.themeDark) + "</div>" +
@@ -311,6 +312,8 @@ async function onClick(e) {
   const tc = t.closest("[data-term-cursor]");
   if (tc) return changeTerm({ cursorStyle: tc.dataset.termCursor });
   if (t.closest("[data-term-blink]")) return changeTerm({ cursorBlink: !termSettings().cursorBlink });
+  const tcl = t.closest("[data-term-claude]");
+  if (tcl) return changeTerm({ claudeLayout: tcl.dataset.termClaude });
   if (t.closest("[data-term-reset]")) return changeTerm(null);
   const pt = t.closest("[data-set-page-tabs]");
   if (pt) {

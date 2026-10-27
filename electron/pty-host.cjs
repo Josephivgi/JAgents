@@ -12,28 +12,54 @@
 
 const { Terminal } = require("@xterm/headless");
 const { SerializeAddon } = require("@xterm/addon-serialize");
-const { Unicode11Addon } = require("@xterm/addon-unicode11");
+const { UnicodeGraphemesAddon } = require("@xterm/addon-unicode-graphemes");
 
 const SCROLLBACK = 8000;
 const FLUSH_MS = 12;
+// How much history a reattaching view gets; all of it.
+const REPLAY_LINES = 8000;
 const BUSY_WINDOW_MS = 1500;
 const WINDOWS_PTY = process.platform === "win32" ? { backend: "conpty", buildNumber: Number(require("node:os").release().split(".")[2]) || undefined } : undefined;
 
+// Windows' own ConPTY loses lines when a terminal is narrowed and widened
+// again (it repaints over what xterm already reflowed). node-pty ships the
+// newer ConPTY that Windows Terminal uses, which keeps them; the built-in one
+// is the fallback.
 function nodePtySpawn(opts) {
   const pty = require("node-pty");
-  return pty.spawn(opts.command, opts.args || [], {
+  const options = {
     name: "xterm-256color",
     cols: opts.cols,
     rows: opts.rows,
     cwd: opts.cwd,
     env: Object.assign({}, process.env, { TERM: "xterm-256color", COLORTERM: "truecolor" }, opts.env || {}),
     useConpty: true,
-  });
+  };
+  if (process.platform === "win32") {
+    try {
+      return pty.spawn(opts.command, opts.args || [], Object.assign({ useConptyDll: true }, options));
+    } catch {
+      /* the bundled ConPTY is missing; use Windows' own */
+    }
+  }
+  return pty.spawn(opts.command, opts.args || [], options);
 }
+
+// Modes the serialized screen leaves out; a reattached view needs them, or
+// clicks and the wheel in a full-screen app come out in the wrong format.
+const KEPT_MODES = [1005, 1006, 1015, 25];
 
 function createPtyHost({ emit, spawn }) {
   const terms = new Map();
   const spawnProc = spawn || nodePtySpawn;
+  // The host that owns the real process (the daemon) answers the terminal's
+  // "who are you" query itself: the bundled ConPTY asks it at start and waits
+  // seconds for an answer, before any view may be attached. Views pass on
+  // answering it (terminal-view.js), so it is answered once.
+  const ownsProcess = !spawn;
+  // The daemon already batches output; the app passes it straight on, so the
+  // two waits do not add up when typing.
+  const flushMs = spawn ? 0 : FLUSH_MS;
 
   function flush(t) {
     clearTimeout(t.flushTimer);
@@ -41,6 +67,7 @@ function createPtyHost({ emit, spawn }) {
     if (!t.pending) return;
     const data = t.pending;
     t.pending = "";
+    t.lastFlushAt = Date.now();
     emit("pty-data", { id: t.id, data });
   }
 
@@ -52,9 +79,26 @@ function createPtyHost({ emit, spawn }) {
     const mirror = new Terminal({ cols, rows, scrollback: SCROLLBACK, allowProposedApi: true, windowsPty: WINDOWS_PTY });
     const serializer = new SerializeAddon();
     mirror.loadAddon(serializer);
-    mirror.loadAddon(new Unicode11Addon());
-    mirror.unicode.activeVersion = "11";
-    const t = { id, proc, mirror, serializer, pending: "", flushTimer: null, lastOutputAt: 0, startedAt: Date.now(), exited: false, exitCode: null, listeners: new Set() };
+    mirror.loadAddon(new UnicodeGraphemesAddon());
+    mirror.unicode.activeVersion = "15-graphemes";
+    const t = { id, proc, mirror, serializer, pending: "", flushTimer: null, lastFlushAt: 0, lastOutputAt: 0, startedAt: Date.now(), exited: false, exitCode: null, listeners: new Set(), modes: new Map(), cursorStyle: "" };
+    // Returning false lets xterm handle the sequence as well.
+    const noteModes = (on) => (params) => {
+      for (const p of params) if (KEPT_MODES.includes(p)) t.modes.set(p, on);
+      return false;
+    };
+    mirror.parser.registerCsiHandler({ prefix: "?", final: "h" }, noteModes(true));
+    mirror.parser.registerCsiHandler({ prefix: "?", final: "l" }, noteModes(false));
+    mirror.parser.registerCsiHandler({ intermediates: " ", final: "q" }, (params) => {
+      t.cursorStyle = "\x1b[" + (params[0] || 0) + " q";
+      return false;
+    });
+    if (ownsProcess) {
+      mirror.parser.registerCsiHandler({ final: "c" }, (params) => {
+        if (!params[0] && !t.exited) proc.write("\x1b[?1;2c");
+        return true;
+      });
+    }
     terms.set(id, t);
     const ready = seed ? new Promise((r) => mirror.write(seed, r)) : Promise.resolve();
     // A killed terminal's late output or exit must not reach a new one with the same id.
@@ -65,7 +109,9 @@ function createPtyHost({ emit, spawn }) {
       mirror.write(data, () => {
         if (!live()) return;
         t.pending += data;
-        if (!t.flushTimer) t.flushTimer = setTimeout(() => flush(t), FLUSH_MS);
+        // The first output after a quiet moment (the echo of a key) goes out
+        // at once; a stream that keeps coming is batched.
+        if (!t.flushTimer) t.flushTimer = setTimeout(() => flush(t), Date.now() - t.lastFlushAt < FLUSH_MS ? flushMs : 0);
         for (const fn of t.listeners) fn(data);
       });
     });
@@ -189,10 +235,16 @@ function createPtyHost({ emit, spawn }) {
 
   // The renderer reattaches to a running terminal (window reload) by writing
   // the serialized screen first.
+  // Output parsed but not sent yet goes out first: it is in the snapshot, and
+  // the view skips everything that arrives before the snapshot does.
   function snapshot(id) {
     const t = terms.get(id);
     if (!t) return null;
-    return { id, data: t.serializer.serialize({ scrollback: 2000 }), exited: t.exited, exitCode: t.exitCode, cols: t.mirror.cols, rows: t.mirror.rows, pid: t.proc.pid };
+    flush(t);
+    let data = t.serializer.serialize({ scrollback: REPLAY_LINES });
+    for (const [mode, on] of t.modes) data += "\x1b[?" + mode + (on ? "h" : "l");
+    data += t.cursorStyle;
+    return { id, data, exited: t.exited, exitCode: t.exitCode, cols: t.mirror.cols, rows: t.mirror.rows, pid: t.proc.pid };
   }
 
   function status(id) {

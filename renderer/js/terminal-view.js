@@ -23,13 +23,32 @@ window.addEventListener("resize", refitAll);
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) return;
   refitAll();
-  // The GPU canvas may have dropped its last frame while hidden; redraw it.
-  for (const v of views.values()) if (v.webgl) v.term.refresh(0, v.term.rows - 1);
+  // The GPU canvas may have dropped its last frame or its glyphs while hidden
+  // (sleep, a driver reset); draw them again.
+  for (const v of views.values()) {
+    if (!v.webgl) continue;
+    v.term.clearTextureAtlas();
+    v.term.refresh(0, v.term.rows - 1);
+  }
 });
+
+// Moving the window to a screen with another scale changes the cell width.
+function watchScale() {
+  matchMedia("(resolution: " + devicePixelRatio + "dppx)").addEventListener(
+    "change",
+    () => {
+      applyTermSettings();
+      watchScale();
+    },
+    { once: true },
+  );
+}
+watchScale();
 
 export function routePtyData({ id, data }) {
   const v = views.get(id);
-  if (!v) return;
+  // Output from before the view's snapshot arrived is already in it.
+  if (!v || !v.live) return;
   v.term.write(data);
   noteOutput(v);
 }
@@ -83,7 +102,11 @@ export const TERM_FONTS = ["Cascadia Mono", "JetBrains Mono", "Cascadia Code", "
 export const TERM_WEIGHTS = [300, 400, 500, 600];
 export const TERM_LINE_HEIGHTS = [1, 1.1, 1.2, 1.3];
 export const TERM_CURSORS = ["block", "bar", "underline"];
-const DEFAULTS = { themeDark: DEFAULT_DARK, themeLight: DEFAULT_LIGHT, font: "Cascadia Mono", fontSize: 14, fontWeight: 500, lineHeight: 1, cursorStyle: "block", cursorBlink: true };
+// Claude Code's own choice, its classic layout (the prompt under the
+// conversation) or its full-screen one (the prompt pinned to the bottom).
+export const CLAUDE_LAYOUTS = ["", "classic", "fullscreen"];
+// Weight 400 as in Windows Terminal, so bold text stands out.
+const DEFAULTS = { themeDark: DEFAULT_DARK, themeLight: DEFAULT_LIGHT, font: "Cascadia Mono", fontSize: 14, fontWeight: 400, lineHeight: 1, cursorStyle: "block", cursorBlink: true, claudeLayout: "" };
 
 export function termSettings() {
   const s = Object.assign({}, DEFAULTS, (store.info && store.info.terminal) || {});
@@ -95,6 +118,7 @@ export function termSettings() {
   if (!TERM_LINE_HEIGHTS.includes(s.lineHeight)) s.lineHeight = DEFAULTS.lineHeight;
   if (!TERM_CURSORS.includes(s.cursorStyle)) s.cursorStyle = DEFAULTS.cursorStyle;
   s.cursorBlink = s.cursorBlink !== false;
+  if (!CLAUDE_LAYOUTS.includes(s.claudeLayout)) s.claudeLayout = "";
   return s;
 }
 
@@ -141,7 +165,62 @@ function termOptions(s) {
     cursorBlink: s.cursorBlink,
     theme: xtermTheme(s),
     minimumContrastRatio: contrast(s),
+    letterSpacing: letterSpacing(s),
   };
+}
+
+// xterm rounds the cell width down to whole device pixels, so a font 8.8px
+// wide got 8px cells and its letters touched. One more pixel when the font
+// is closer to the next width. Measured once the font has loaded.
+function letterSpacing(s) {
+  const ctx = (letterSpacing.canvas ||= document.createElement("canvas")).getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  ctx.font = s.fontWeight + " " + s.fontSize * dpr + "px " + fontStack(s.font);
+  const w = ctx.measureText("W").width;
+  return w ? Math.round(w) - Math.floor(w) : 0;
+}
+
+// Pasted or dropped text goes to the program as typed input, inside
+// bracketed paste. An escape character in it could end the paste early and
+// run the rest as keys, so escapes are dropped.
+function cleanPaste(text) {
+  return String(text).replace(/[\x1b\x9b]/g, "");
+}
+
+// Programs copy with OSC 52 (Claude Code when text is selected in it, tmux,
+// vim over SSH). Writes only; a request to read the clipboard is ignored.
+function osc52(data) {
+  const i = data.indexOf(";");
+  const b64 = i < 0 ? "" : data.slice(i + 1);
+  if (!b64 || b64 === "?" || b64.length > 4 * 1024 * 1024) return true;
+  try {
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    navigator.clipboard.writeText(new TextDecoder().decode(bytes)).catch(() => {});
+  } catch {
+    /* not base64 */
+  }
+  return true;
+}
+
+// Emoji with skin tones, flags and joined emoji take two columns, as agent
+// CLIs count them; with older width tables they ate the next letter.
+function loadWidths(term) {
+  if (window.UnicodeGraphemesAddon) {
+    term.loadAddon(new window.UnicodeGraphemesAddon.UnicodeGraphemesAddon());
+    term.unicode.activeVersion = "15-graphemes";
+  } else if (window.Unicode11Addon) {
+    term.loadAddon(new window.Unicode11Addon.Unicode11Addon());
+    term.unicode.activeVersion = "11";
+  }
+}
+
+// Where a new terminal will appear, so it starts at its real size: the
+// terminal showing in the group with focus, or any terminal on screen.
+export function terminalSizeHint() {
+  const shown = [...views.values()].filter((v) => v.lastSize && v.host.offsetWidth);
+  const group = document.querySelector(".group.focused");
+  const pick = (group && shown.find((v) => group.contains(v.el))) || shown[0];
+  return pick ? Object.assign({}, pick.lastSize) : undefined;
 }
 
 // Theme, font and cursor for every open terminal (and the Settings preview).
@@ -200,13 +279,11 @@ export function mountTermPreview(el) {
       const d = !p.disposed && p.term.element && p.fit.proposeDimensions();
       if (d && d.cols) p.term.resize(d.cols, 10);
     }, 0);
-  if (window.Unicode11Addon) {
-    p.term.loadAddon(new window.Unicode11Addon.Unicode11Addon());
-    p.term.unicode.activeVersion = "11";
-  }
+  loadWidths(p.term);
   previews.add(p);
   loadTermFont(s).then(() => {
     if (p.disposed) return;
+    p.term.options.letterSpacing = letterSpacing(s);
     p.term.open(el);
     if (window.WebglAddon) {
       try {
@@ -303,18 +380,18 @@ export class TerminalView {
         overviewRuler: { width: 10 },
         // Wide symbols (⏺, ✻) are drawn inside their cell instead of over the next.
         rescaleOverlappingGlyphs: true,
-        // ConPTY repaints the screen itself after a resize; without this xterm
-        // reflows the lines too and they come out doubled or cut.
+        // How ConPTY (the bundled one, pty-host.cjs) repaints after a resize,
+        // so xterm's own reflow and ConPTY's line up instead of doubling lines.
         windowsPty: info.platform === "win32" ? { backend: "conpty", buildNumber: info.osBuild || undefined } : undefined,
       }),
     );
     this.fit = new window.FitAddon.FitAddon();
     this.term.loadAddon(this.fit);
-    if (window.Unicode11Addon) {
-      // Emoji and symbol widths as agent CLIs count them, so columns line up.
-      this.term.loadAddon(new window.Unicode11Addon.Unicode11Addon());
-      this.term.unicode.activeVersion = "11";
-    }
+    loadWidths(this.term);
+    // The terminal service answers "who are you" (CSI c) for the process, even
+    // with no view attached; a second answer from here would arrive as typing.
+    this.term.parser.registerCsiHandler({ final: "c" }, (params) => !params[0]);
+    this.term.parser.registerOscHandler(52, osc52);
     if (window.SearchAddon) {
       this.search = new window.SearchAddon.SearchAddon();
       this.term.loadAddon(this.search);
@@ -342,6 +419,9 @@ export class TerminalView {
       this.lastInput = Date.now();
       window.jagents.pty.write(pane.id, data);
     });
+    // Mouse reports in the old X10 format (a full-screen app that did not ask
+    // for SGR) come out here, not in onData.
+    this.term.onBinary((data) => window.jagents.pty.write(pane.id, data));
     this.term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
       // Ctrl+Tab switches tabs (code-mode), not a key for the agent.
@@ -375,6 +455,18 @@ export class TerminalView {
         zoomTerminals(key === "0" ? 0 : key === "-" ? -1 : 1, this);
         return false;
       }
+      // Ctrl+/ is Ctrl+_ (undo in shells and agent prompts), as in Windows Terminal.
+      if (e.ctrlKey && !e.altKey && !e.metaKey && (e.key === "/" || e.code === "Slash")) {
+        e.preventDefault();
+        window.jagents.pty.write(pane.id, "\x1f");
+        return false;
+      }
+      // PowerShell deletes a word on Ctrl+Backspace; Alt+Backspace typed ^H.
+      if (e.key === "Backspace" && e.altKey && !mod && pane.provider === "shell" && info.platform === "win32") {
+        e.preventDefault();
+        window.jagents.pty.write(pane.id, "\x08");
+        return false;
+      }
       if (e.key === "Enter" && e.shiftKey && !mod && !e.altKey && newlineOnShiftEnter(pane.provider)) {
         e.preventDefault();
         window.jagents.pty.write(pane.id, "\x1b\r");
@@ -392,6 +484,7 @@ export class TerminalView {
     this.wireExtras();
     loadTermFont(settings).then(() => {
       if (this.disposed) return;
+      this.term.options.letterSpacing = letterSpacing(settings);
       this.term.open(this.host);
       this.useWebgl();
       this.attach();
@@ -415,6 +508,21 @@ export class TerminalView {
       });
       this.term.loadAddon(gl);
       this.webgl = gl;
+      // xterm waits 3 seconds for the context to come back before
+      // onContextLoss, with a blank terminal; draw with the DOM meanwhile.
+      const canvas = this.host.querySelector("canvas");
+      if (canvas)
+        canvas.addEventListener(
+          "webglcontextlost",
+          () => {
+            if (this.webgl !== gl) return;
+            this.webgl = null;
+            gl.dispose();
+            clearTimeout(this.webglRetry);
+            this.webglRetry = setTimeout(() => !this.disposed && !this.webgl && this.useWebgl(), 1000);
+          },
+          { once: true },
+        );
     } catch {
       this.webgl = null;
     }
@@ -431,7 +539,7 @@ export class TerminalView {
   // read the image itself.
   paste() {
     const passOn = () => window.jagents.pty.write(this.pane.id, "\x16");
-    navigator.clipboard.readText().then((t) => (t ? this.term.paste(t) : passOn()), passOn);
+    navigator.clipboard.readText().then((t) => (t ? this.term.paste(cleanPaste(t)) : passOn()), passOn);
   }
 
   // Ctrl+Shift+F: a find bar over the top right corner. Enter and Shift+Enter
@@ -549,7 +657,7 @@ export class TerminalView {
       this.el.classList.remove("drop-files");
       const paths = Array.from(e.dataTransfer.files).map((f) => window.jagents.pathForFile(f)).filter(Boolean);
       if (!paths.length) return;
-      this.term.paste(paths.map(quotePath).join(" "));
+      this.term.paste(cleanPaste(paths.map(quotePath).join(" ")));
       this.term.focus();
     });
   }
@@ -636,25 +744,59 @@ export class TerminalView {
     if (!this.attached) return;
     // The agent redraws for the new size; that is not work.
     this.quietUntil = Date.now() + 1200;
-    window.jagents.pty.resize(this.pane.id, s.cols, s.rows);
+    // Dragging a split or the window edge changes the size many times a
+    // second; the process (and its full redraw) only gets where it ends up.
+    clearTimeout(this.resizeTimer);
+    this.resizeTimer = setTimeout(() => {
+      const now = this.size();
+      if (this.disposed || (this.sentSize && this.sentSize.cols === now.cols && this.sentSize.rows === now.rows)) return;
+      this.sentSize = now;
+      window.jagents.pty.resize(this.pane.id, now.cols, now.rows);
+    }, 80);
+  }
+
+  // Waits until the pane's size has stopped changing (the layout and fonts
+  // settle over the first frames), so the process gets one size, not two.
+  async settled() {
+    let last = "";
+    for (let i = 0; i < 16; i++) {
+      await new Promise((r) => setTimeout(r, 25));
+      const now = this.host.offsetWidth + "x" + this.host.offsetHeight;
+      if (now === last) return;
+      last = now;
+    }
   }
 
   async attach() {
-    // A timer, not requestAnimationFrame: rAF never fires while the window is
+    // Timers, not requestAnimationFrame: rAF never fires while the window is
     // hidden or covered, and the process must start regardless.
-    await new Promise((r) => setTimeout(r, 30));
-    try {
-      this.fit.fit();
-    } catch {
-      /* not laid out yet */
+    await this.settled();
+    if (this.disposed) return;
+    // A view in a hidden tab has no size to give; it reports none and the
+    // process keeps its own until the tab is shown (refit). Sending xterm's
+    // 80x24 default squeezed every background agent on each reload.
+    let shown = this.host.offsetWidth > 0 && this.host.offsetHeight > 0;
+    if (shown) {
+      try {
+        this.fit.fit();
+      } catch {
+        shown = false;
+      }
     }
     try {
-      const snap = await window.jagents.pty.attach(this.pane.id, this.size());
+      const size = shown ? this.size() : null;
+      const snap = await window.jagents.pty.attach(this.pane.id, size);
+      if (this.disposed) return;
       this.attached = true;
-      this.lastSize = this.size();
+      if (size) this.lastSize = this.sentSize = size;
+      else if (snap && snap.cols && snap.rows) this.term.resize(snap.cols, snap.rows);
       if (snap && snap.data) this.term.write(snap.data);
+      this.live = true;
       if (snap && snap.exited) this.showExit(snap.exitCode);
+      // The pane may have come into view while the snapshot was on its way.
+      if (!size) this.queueRefit();
     } catch (error) {
+      this.live = true;
       this.term.write("\r\n\x1b[31m" + String(error.message || error).replace(/^Error invoking remote method '[^']+': (Error: )?/, "") + "\x1b[0m\r\n");
     }
   }
@@ -664,7 +806,8 @@ export class TerminalView {
     this.term.reset();
     try {
       this.quietUntil = Date.now() + 3000;
-      await window.jagents.pty.restart(this.pane.id, this.size());
+      this.sentSize = this.size();
+      await window.jagents.pty.restart(this.pane.id, this.sentSize);
       fire("terminal-restarted", this.pane.id);
     } catch (error) {
       this.term.write("\r\n\x1b[31m" + String(error.message || error) + "\x1b[0m\r\n");
@@ -684,6 +827,7 @@ export class TerminalView {
     this.disposed = true;
     clearTimeout(this.refitTimer);
     clearTimeout(this.refitLate);
+    clearTimeout(this.resizeTimer);
     clearTimeout(this.webglRetry);
     clearTimeout(this.idleTimer);
     clearTimeout(this.hintTimer);

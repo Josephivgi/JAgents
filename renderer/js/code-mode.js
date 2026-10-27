@@ -13,7 +13,7 @@
 import { esc, toast, errorText } from "./util.js";
 import { icon, harnessIcon } from "./icons.js";
 import { store, fire, on } from "./store.js";
-import { TerminalView, terminalBusy } from "./terminal-view.js";
+import { TerminalView, terminalBusy, terminalSizeHint } from "./terminal-view.js";
 import { ChatView } from "./chat-view.js";
 import { openHandoff, dropdown } from "./dialogs.js";
 import { PluginPaneView, pluginKindIcon, openPluginsFromPane, openPluginPane } from "./plugins.js";
@@ -595,7 +595,8 @@ function intoGroup(groupId) {
 
 export async function addTerminal(provider) {
   try {
-    const pane = await window.jagents.panes.addTerminal({ provider, cwd: store.info.cwd || undefined });
+    // Started at the size it will have, so its first screen is not redrawn.
+    const pane = await window.jagents.panes.addTerminal({ provider, cwd: store.info.cwd || undefined, size: terminalSizeHint() });
     setTimeout(() => focusAgent(pane.id), 150);
   } catch (error) {
     toast(errorText(error));
