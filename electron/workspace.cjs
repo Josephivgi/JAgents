@@ -357,6 +357,16 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
     return pane;
   }
 
+  // A terminal or plugin tab's own name; an empty one goes back to the
+  // agent's name. Chats take theirs from the conversation.
+  function renamePane(id, title) {
+    const pane = panes.find((p) => p.id === id && (p.kind === "terminal" || p.kind === "plugin"));
+    if (!pane) throw new Error("This tab can't be renamed.");
+    pane.title = String(title == null ? "" : title).replace(/\s+/g, " ").trim().slice(0, 60) || pane.name;
+    save();
+    return pane;
+  }
+
   function removePane(id, options) {
     const pane = panes.find((p) => p.id === id);
     if (!pane) return false;
@@ -414,7 +424,7 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
     return panes.find((p) => p.kind === "chat" && p.chatId === chatId) || null;
   }
 
-  return { list, agents, findAgent, addTerminal, ensureTerminal, restartTerminal, launchRestored, addChatPane, addPluginPane, updatePluginPane, newChat, removePane, reorder, paneForChat, cwdDefault, projects, addProject, removeProject, renameProject, setActiveProject, hubOn, mcpEntry, mcpEntries, claudeDisallowed, systemNote, toolsNote };
+  return { list, agents, findAgent, addTerminal, ensureTerminal, restartTerminal, launchRestored, addChatPane, addPluginPane, updatePluginPane, renamePane, newChat, removePane, reorder, paneForChat, cwdDefault, projects, addProject, removeProject, renameProject, setActiveProject, hubOn, mcpEntry, mcpEntries, claudeDisallowed, systemNote, toolsNote };
 }
 
 module.exports = { createWorkspace };

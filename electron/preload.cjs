@@ -51,6 +51,7 @@ contextBridge.exposeInMainWorld("jagents", {
     reorder: call("pane-reorder"),
     addPlugin: call("pane-add-plugin"),
     updatePlugin: call("pane-plugin-update"),
+    rename: call("pane-rename"),
   },
   plugins: {
     list: call("plugins-list"),

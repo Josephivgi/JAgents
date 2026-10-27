@@ -37,6 +37,8 @@ const VENDOR = {
   "addon-fit.js": path.join(APP_ROOT, "node_modules", "@xterm", "addon-fit", "lib", "addon-fit.js"),
   "addon-webgl.js": path.join(APP_ROOT, "node_modules", "@xterm", "addon-webgl", "lib", "addon-webgl.js"),
   "addon-unicode11.js": path.join(APP_ROOT, "node_modules", "@xterm", "addon-unicode11", "lib", "addon-unicode11.js"),
+  "addon-search.js": path.join(APP_ROOT, "node_modules", "@xterm", "addon-search", "lib", "addon-search.js"),
+  "addon-web-links.js": path.join(APP_ROOT, "node_modules", "@xterm", "addon-web-links", "lib", "addon-web-links.js"),
   // Chat markdown: parser, sanitizer, code highlighting (ES modules).
   "marked.js": path.join(APP_ROOT, "node_modules", "marked", "lib", "marked.esm.js"),
   "purify.js": path.join(APP_ROOT, "node_modules", "dompurify", "dist", "purify.es.mjs"),
@@ -274,7 +276,8 @@ function registerIpc() {
   });
   handle("open-path", (p) => shell.openPath(String(p)));
   handle("open-url", (url) => {
-    if (!/^https:\/\//.test(String(url))) throw new Error("Only https links open.");
+    // http too: terminals print local dev servers (http://localhost:5173).
+    if (!/^https?:\/\//i.test(String(url))) throw new Error("Only web links open.");
     return shell.openExternal(String(url));
   });
 
@@ -422,6 +425,7 @@ function registerIpc() {
   });
   handle("pane-add-plugin", (opts) => workspace.addPluginPane(opts));
   handle("pane-plugin-update", (id, patch) => workspace.updatePluginPane(id, patch));
+  handle("pane-rename", (id, title) => workspace.renamePane(id, title));
 
   handle("mcp-status", () => mcpInstall.status(hub.files.script));
   handle("mcp-install", (id) => mcpInstall.install(id, hub.files.script));

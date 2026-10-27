@@ -165,10 +165,70 @@ function tabIcon(p, size) {
 }
 
 // A terminal tab reads "Claude Code  claude-1": the agent, then its handle
-// (what other agents call it) in a quieter style. A renamed one shows its name.
+// (what other agents call it) in a quieter style. A renamed one shows its name
+// and keeps the handle.
 function tabParts(p, entry) {
-  if (p.kind === "terminal" && !(p.title && p.title !== p.name)) return { name: p.name, sub: p.handle || "" };
+  if (p.kind === "terminal") return { name: p.title || p.name, sub: p.handle || "" };
   return { name: tabTitle(p, entry), sub: "" };
+}
+
+// Double-click, F2 or the tab menu: the name turns into a text box. Enter or
+// clicking away saves, Esc cancels, and an empty name goes back to the agent's.
+function canRename(entry) {
+  return Boolean(entry) && (entry.pane.kind === "terminal" || entry.pane.kind === "plugin");
+}
+
+function startRename(tabEl) {
+  const id = tabEl && tabEl.dataset.tab;
+  const entry = panes.get(id);
+  const titleEl = tabEl && tabEl.querySelector(".tab-title");
+  if (!canRename(entry) || !titleEl) return;
+  const p = entry.pane;
+  const input = document.createElement("input");
+  input.className = "tab-rename";
+  input.value = p.title || p.name;
+  input.placeholder = p.name;
+  input.maxLength = 60;
+  input.spellcheck = false;
+  input.setAttribute("aria-label", "Tab name");
+  tabEl.draggable = false;
+  tabEl.classList.add("renaming");
+  titleEl.replaceWith(input);
+  input.focus();
+  input.select();
+  let finished = false;
+  const finish = async (keep) => {
+    if (finished) return;
+    finished = true;
+    const name = input.value.trim();
+    const strip = tabEl.closest(".tabstrip");
+    if (strip) strip._html = "";
+    if (keep && name !== (p.title || p.name)) {
+      try {
+        await window.jagents.panes.rename(id, name);
+      } catch (error) {
+        toast(errorText(error));
+      }
+    }
+    render();
+    if (entry.view && entry.view.focus && !entry.el.hidden) entry.view.focus();
+  };
+  input.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") {
+      e.preventDefault();
+      finish(true);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      finish(false);
+    }
+  });
+  input.addEventListener("blur", () => finish(true));
+}
+
+function renameTab(id) {
+  const tab = groupsEl.querySelector('[data-tab="' + CSS.escape(id) + '"]');
+  if (tab) startRename(tab);
 }
 
 function tabMarkup(id, g) {
@@ -179,7 +239,7 @@ function tabMarkup(id, g) {
   const label = sub ? name + " · " + sub : name;
   const on = g.active === id;
   return (
-    '<div class="tab' + (on ? " on" : "") + (p.kind === "terminal" ? " term" : "") + '" role="tab" aria-selected="' + on + '" tabindex="' + (on ? 0 : -1) + '" draggable="true" data-tab="' + esc(id) + '">' +
+    '<div class="tab' + (on ? " on" : "") + (p.kind === "terminal" ? " term" : "") + (p.kind === "terminal" && p.title && p.title !== p.name ? " named" : "") + '" role="tab" aria-selected="' + on + '" tabindex="' + (on ? 0 : -1) + '" draggable="true" data-tab="' + esc(id) + '">' +
     '<span class="tab-ic">' + tabIcon(p, 15) + "</span>" +
     '<span class="tab-title"><span class="tab-name">' + esc(name) + "</span>" + (sub ? '<span class="tab-sub">' + esc(sub) + "</span>" : "") + "</span>" +
     '<span class="tab-end"><span class="tab-state"></span>' +
@@ -591,6 +651,7 @@ function moreMenu(anchor, groupId, atTab) {
   if (entry) {
     const p = entry.pane;
     items.push({ section: tabTitle(p, entry) });
+    if (canRename(entry)) items.push({ label: "Rename", desc: "Give this tab its own name (F2)", icon: '<span class="menu-ic">' + icon("pencil", 16) + "</span>", onPick: () => renameTab(p.id) });
     if (p.kind !== "plugin") items.push({ label: "Hand off context…", desc: "Pass this agent's work to another agent", icon: '<span class="menu-ic">' + icon("handoff", 16) + "</span>", onPick: () => openHandoff(agentFor(entry), (res) => res && res.started && setTimeout(() => focusAgent(res.to), 300)) });
     if (p.kind === "terminal") items.push({ label: "Restart", desc: "Start " + p.name + " again in this tab", icon: '<span class="menu-ic">' + icon("restart", 16) + "</span>", onPick: () => entry.view.restart && entry.view.restart() });
     if (g.tabs.length > 1) {
@@ -697,12 +758,16 @@ export function renderCodeMode(el) {
 
   el.addEventListener("click", (e) => {
     const t = e.target;
+    if (t.closest(".tab-rename")) return;
     const x = t.closest("[data-tab-close]");
     if (x) {
       e.stopPropagation();
       return closePane(x.dataset.tabClose);
     }
     const tab = t.closest("[data-tab]");
+    // A double-click renames. Its first click may have rebuilt the strip (a
+    // tab that was not open), so the click count is used, not dblclick.
+    if (tab && e.detail === 2) return startRename(tab);
     if (tab) return activate(tab.dataset.tab, true);
     const add = t.closest("[data-group-add]");
     if (add) return addFromPicker(add, add.dataset.groupAdd);
@@ -754,6 +819,10 @@ export function renderCodeMode(el) {
       const next = e.key === "Home" ? all[0] : e.key === "End" ? all[all.length - 1] : all[i + (e.key === "ArrowRight" ? 1 : -1)];
       if (next) next.focus();
     } else if (e.key === "Delete") closePane(tab.dataset.tab);
+    else if (e.key === "F2") {
+      e.preventDefault();
+      startRename(tab);
+    }
   });
   el.addEventListener("mousedown", (e) => {
     const sp = e.target.closest("[data-split]");

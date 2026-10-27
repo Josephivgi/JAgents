@@ -117,6 +117,11 @@ body.settings-on .main::before { display: none; }
 .group-split::after { content: ""; position: absolute; inset: 0 -3px; }
 .groups[data-dir="column"] > .group-split::after { inset: -3px 0; }
 .group-split:hover { background: var(--accent); }
+/* Split up, the terminals outside the focused group dim a little, as Orca's
+   inactive panes do, so the one you type into stands out. */
+.groups .xterm-host { transition: opacity 0.15s ease; }
+.groups:has(.group-split) .group:not(.focused) .xterm-host { opacity: 0.9; }
+@media (prefers-reduced-motion: reduce) { .groups .xterm-host { transition: none; } }
 
 /* A strip of rounded tabs. The open tab takes its pane's color (the terminal
    theme's background for terminals) and joins the pane below it; the others
@@ -142,11 +147,15 @@ body.settings-on .main::before { display: none; }
 .tab.on .tab-ic, .tab:hover .tab-ic { opacity: 1; }
 .tab-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab.on .tab-title { font-weight: 500; }
-/* A narrow tab keeps the handle (shell-7), which tells same-agent tabs apart. */
+/* A narrow tab keeps the handle (shell-7), which tells same-agent tabs apart,
+   or the name you gave it. */
 @container (max-width: 150px) {
-  .tab-title:has(.tab-sub) .tab-name { display: none; }
-  .tab-title .tab-sub { margin-left: 0; color: inherit; opacity: 1; font-size: 11.5px; }
+  .tab:not(.named) .tab-title:has(.tab-sub) .tab-name { display: none; }
+  .tab:not(.named) .tab-title .tab-sub { margin-left: 0; color: inherit; opacity: 1; font-size: 11.5px; }
+  .tab.named .tab-sub { display: none; }
 }
+.tab-rename { flex: 1 1 auto; min-width: 0; height: 22px; margin-left: -5px; padding: 0 5px; border: 1px solid color-mix(in oklch, var(--accent) 60%, var(--line)); border-radius: 6px; outline: none; background: var(--canvas); color: var(--ink); font: inherit; font-weight: 500; }
+.tab.renaming .tab-end { visibility: hidden; }
 .tab-sub { margin-left: 7px; font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--muted); opacity: 0.85; }
 /* The right end holds the state (spinner, dot) and the close button, which
    takes its place on hover, like an editor's unsaved dot. */
