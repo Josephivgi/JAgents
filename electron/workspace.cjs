@@ -28,8 +28,11 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
   let panes = (db.getSetting("panes", []) || []).filter((p) => p && p.id && p.kind);
   const counters = db.getSetting("handle-counters", {}) || {};
   const DEFAULT_WS = "default";
-  // Panes from before workspaces belong to each project's Default workspace.
-  for (const p of panes) if (!p.workspace) p.workspace = DEFAULT_WS;
+  // Panes from before workspaces move into their project's Default workspace.
+  if (panes.some((p) => !p.workspace)) {
+    for (const p of panes) if (!p.workspace) p.workspace = DEFAULT_WS;
+    db.setSetting("panes", panes);
+  }
 
   function save() {
     db.setSetting("panes", panes);
