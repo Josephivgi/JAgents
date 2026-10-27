@@ -1,6 +1,6 @@
 {
   "name": "Subagents",
   "description": "Agents start their own subagents through the subagents MCP server. The Subagents page (in Help's place) lists them by parent and has Settings for on/off and each provider's model and effort.",
-  "version": "0.6.2",
+  "version": "0.6.5",
   "disableTools": ["jagents.spawn_subagent", "Agent", "Task"]
 }
