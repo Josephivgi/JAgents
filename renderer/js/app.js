@@ -63,11 +63,12 @@ function fitModes() {
     if (!t.getAttribute("role")) t.setAttribute("role", "tab");
     if (t.tagName === "BUTTON" && !t.getAttribute("type")) t.setAttribute("type", "button");
   }
-  const shown = Array.from(seg.children).filter((t) => !t.hidden && t.getAttribute("role") === "tab").length;
+  const tabs = Array.from(seg.children).filter((t) => !t.hidden && t.getAttribute("role") === "tab");
   if (seg.style.getPropertyValue("--page-tabs") !== String(pageTabs())) seg.style.setProperty("--page-tabs", String(pageTabs()));
-  seg.classList.toggle("scroll-x", shown > pageTabs());
-  // Four or more tabs side by side leave no room for icons.
-  seg.classList.toggle("tight", Math.min(shown, pageTabs()) > 3);
+  // Tabs keep their icon and full name: when those do not fit side by side
+  // (a narrow sidebar, or a plugin page with a long name), the strip scrolls.
+  const need = tabs.reduce((w, t) => w + t.scrollWidth, 0) + (tabs.length - 1) * 2 + 4;
+  seg.classList.toggle("scroll-x", tabs.length > pageTabs() || need > seg.clientWidth + 1);
   const on = seg.querySelector('[role="tab"].on');
   if (on && seg.classList.contains("scroll-x")) {
     const a = on.offsetLeft - seg.scrollLeft;
@@ -84,6 +85,8 @@ const queueFit = () => {
 function watchModes() {
   const seg = app.querySelector(".mode-seg");
   new MutationObserver(queueFit).observe(seg, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "hidden"] });
+  // Resizing the sidebar can make the names fit, or stop fitting.
+  new ResizeObserver(queueFit).observe(seg);
   // The mouse wheel scrolls the tabs sideways.
   seg.addEventListener(
     "wheel",
