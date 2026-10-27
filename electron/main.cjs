@@ -11,7 +11,7 @@ for (const arg of process.argv) {
 const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
-const { app, BrowserWindow, ipcMain, protocol, shell, dialog, Notification } = require("electron");
+const { app, BrowserWindow, ipcMain, protocol, shell, dialog, Notification, nativeTheme } = require("electron");
 const { openDb } = require("../lib/db");
 const { listAcpAgents, listTerminalAgents, setExtraAgents } = require("../lib/agents");
 const marketplace = require("../lib/acp-marketplace");
@@ -173,6 +173,10 @@ function theme() {
 const TITLEBAR_H = 38;
 
 function createWindow() {
+  // Windows draws a 1px frame line around the window in the system's light
+  // or dark color; it follows the app's theme instead, or a light app showed
+  // a dark line along its top.
+  nativeTheme.themeSource = theme();
   started = true;
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -241,6 +245,11 @@ function registerIpc() {
     if (!mainWindow || !colors || process.platform === "darwin") return false;
     try {
       mainWindow.setTitleBarOverlay({ color: String(colors.color), symbolColor: String(colors.symbolColor), height: TITLEBAR_H });
+      const rgb = /^#([0-9a-f]{6})$/i.exec(String(colors.color));
+      if (rgb) {
+        const n = parseInt(rgb[1], 16);
+        nativeTheme.themeSource = 0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255) > 128 ? "light" : "dark";
+      }
     } catch {
       return false;
     }

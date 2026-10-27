@@ -109,8 +109,11 @@ export function themeName(s = termSettings()) {
 }
 
 // The scrollbar is drawn by xterm; a neutral gray reads on every theme.
+// The scrollbar column draws a line down its left side; in the background
+// color it disappears ("transparent" came out white).
 function xtermTheme(s) {
-  return Object.assign({ scrollbarSliderBackground: "rgba(180, 180, 185, 0.4)", scrollbarSliderHoverBackground: "rgba(180, 180, 185, 0.6)", scrollbarSliderActiveBackground: "rgba(180, 180, 185, 0.8)", overviewRulerBorder: "transparent" }, THEMES[themeName(s)]);
+  const t = THEMES[themeName(s)];
+  return Object.assign({ scrollbarSliderBackground: "rgba(180, 180, 185, 0.4)", scrollbarSliderHoverBackground: "rgba(180, 180, 185, 0.6)", scrollbarSliderActiveBackground: "rgba(180, 180, 185, 0.8)", overviewRulerBorder: t.background }, t);
 }
 
 // Agent CLIs print dim grays meant for one background; xterm brightens text
