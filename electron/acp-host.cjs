@@ -76,6 +76,40 @@ function writeDevinMcpConfig(cwd, entries) {
   const tmp = file + "." + randomUUID() + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(Object.assign({}, current, { mcpServers: servers }), null, 2));
   fs.renameSync(tmp, file);
+  excludeFromGit(file);
+}
+
+// The Devin config holds plugin MCP env values, which can be API keys. When the
+// working folder is a git repo, list the file in .git/info/exclude so it is
+// never committed. Best effort: no git, or not a repo, leaves it as is.
+function excludeFromGit(file) {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const { execFileSync } = require("node:child_process");
+  const dir = path.dirname(file);
+  let out;
+  try {
+    out = execFileSync("git", ["-C", dir, "rev-parse", "--show-toplevel", "--git-path", "info/exclude"], { encoding: "utf8", windowsHide: true, timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
+  } catch {
+    return;
+  }
+  const [top, excludeRel] = out.split(/\r?\n/);
+  if (!top || !excludeRel) return;
+  const rel = path.relative(top, file).split(path.sep).join("/");
+  if (!rel || rel.startsWith("..")) return;
+  const exclude = path.resolve(dir, excludeRel);
+  const line = "/" + rel;
+  let text = "";
+  try {
+    text = fs.readFileSync(exclude, "utf8");
+  } catch (error) {
+    if (error.code !== "ENOENT") return;
+  }
+  if (text.split(/\r?\n/).includes(line)) return;
+  try {
+    fs.mkdirSync(path.dirname(exclude), { recursive: true });
+    fs.appendFileSync(exclude, (text && !text.endsWith("\n") ? "\n" : "") + line + "\n");
+  } catch {}
 }
 
 function createAcpHost(options) {
