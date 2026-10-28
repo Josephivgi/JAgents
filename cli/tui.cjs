@@ -13,6 +13,7 @@ const APP_ROOT = path.join(__dirname, "..");
 const pkg = require(path.join(APP_ROOT, "package.json"));
 const { listTerminalAgents, terminalSpawnSpec } = require(path.join(APP_ROOT, "lib", "agents"));
 const desk = require("./desktop.cjs");
+const jmcp = require("./jmcp.cjs");
 
 const PREFIX = "\x02"; // Ctrl+B, as in tmux
 const ESC = "\x1b";
@@ -43,8 +44,9 @@ let quitting = false;
 
 // ---- panes and layout -----------------------------------------------------
 
+// agent.spec runs a program of ours (the JMCP view) instead of an agent.
 function newPane(agent, cols, rows, name, folder = cwd) {
-  const base = terminalSpawnSpec(agent.id);
+  const base = agent.spec || terminalSpawnSpec(agent.id);
   const paneId = ++seq;
   const spec = host.runtime ? host.runtime.paneSpec(agent.id, base, paneId) : base;
   const term = new Terminal({ cols, rows, scrollback: 5000, allowProposedApi: true });
@@ -497,6 +499,122 @@ function desktopInstalled() {
   return desktopState().value;
 }
 
+// ---- JMCP -------------------------------------------------------------------
+// JMCP gives the agents in panes MCP servers, and this window its subagents.
+// Not installed: the sidebar and Ctrl+B j offer to install it.
+
+// The JMCP install in progress, {step, pct}, or null. Kept in host.state.
+let jmcpInstalling = null;
+let jmcpSeen = { at: 0, s: null };
+let jmcpTimer = null;
+
+function pluginsDir() {
+  return host && host.runtime ? host.runtime.plugins.dir : "";
+}
+
+// Read from disk at most every 3 seconds (the tick below refreshes it).
+function jmcpState(force) {
+  const now = Date.now();
+  if (force || !jmcpSeen.s || now - jmcpSeen.at > 3000) jmcpSeen = { at: now, s: jmcp.status(pluginsDir(), 40) };
+  return jmcpSeen.s;
+}
+
+// Redraws when the sidebar's JMCP line would change, and always while the
+// JMCP card is open.
+function jmcpTick() {
+  const before = jmcpSeen.s;
+  const s = jmcpState(true);
+  if (overlay?.kind === "jmcp" || !before || before.installed !== s.installed || before.connected !== s.connected || before.working !== s.working) schedule();
+}
+
+// False once "Don't ask again" was picked on the install card.
+function askJmcp() {
+  return host.runtime ? host.runtime.pref("jmcpAsk") !== false : true;
+}
+
+function openJmcp() {
+  const o = { kind: "jmcp", latest: null, error: "", busy: "" };
+  overlay = o;
+  if (!jmcpState(true).installed && !jmcpInstalling) {
+    jmcp.latestRelease((err, release) => {
+      if (err) o.error = String(err.message || err);
+      else o.latest = release;
+      ui().schedule();
+    });
+  }
+  schedule();
+}
+
+// The live JMCP view in its own tab, next to your terminals.
+function openJmcpTab() {
+  overlay = null;
+  const agent = { id: "jmcp", name: "JMCP", spec: { command: process.execPath, args: [path.join(__dirname, "jmcp.cjs"), "watch", pluginsDir()], env: {} } };
+  try {
+    addTab(agent, defaultName(agent));
+  } catch (error) {
+    flash(String(error.message || error), "danger");
+  }
+  schedule();
+}
+
+function connectJmcp(o) {
+  o.busy = "Connecting…";
+  jmcp.connect((err) => {
+    o.busy = "";
+    jmcpSeen.at = 0;
+    ui().flash(err ? "JMCP: " + (err.message || err) : "JMCP is connected. Its plugin loads in this window now.", err ? "danger" : "ok");
+  });
+  schedule();
+}
+
+function openJmcpApp() {
+  overlay = null;
+  jmcp.openApp((err) => ui().flash(err || "JMCP is open.", err ? "danger" : "ok"));
+  schedule();
+}
+
+function dontAskJmcp() {
+  host.runtime?.pref("jmcpAsk", false);
+  overlay = null;
+  flash("JAgents Terminal will not ask again. Ctrl+B j still installs JMCP.", "ok");
+}
+
+// Progress shows in the status line and on the sidebar's JMCP line.
+function runJmcpInstall() {
+  overlay = null;
+  jmcpInstalling = { step: "Starting…", pct: -1 };
+  host.state.jmcpInstalling = jmcpInstalling;
+  const status = jmcpInstalling;
+  jmcp.install(
+    (step, pct) => {
+      status.step = step;
+      status.pct = pct;
+      ui().flash(step, "accent");
+    },
+    (err, done) => {
+      const now = ui();
+      now.jmcpInstallDone();
+      if (err) return now.flash("JMCP install failed: " + (err.message || err), "danger");
+      now.flash("JMCP " + ((done && (done.version || done.tag)) || "") + " is installed. Open it to add its servers to your agents.", "ok");
+    },
+  );
+  schedule();
+}
+
+function jmcpInstallDone() {
+  jmcpInstalling = null;
+  if (host) host.state.jmcpInstalling = null;
+  jmcpSeen.at = 0;
+  schedule();
+}
+
+function jmcpLabel() {
+  if (jmcpInstalling) return "↓  JMCP " + (jmcpInstalling.pct >= 0 ? jmcpInstalling.pct + "%" : "…");
+  const s = jmcpState();
+  if (!s.installed) return "↓  Install JMCP";
+  return "⇄  JMCP" + (s.working ? "  " + s.working + " working" : " subagents");
+}
+
 function toggleSidebar() {
   sidebar = !sidebar;
   host.runtime?.settings({ sidebar });
@@ -505,13 +623,13 @@ function toggleSidebar() {
   schedule();
 }
 
-function flash(text, tone) {
+function flash(text, tone, ms) {
   note = { text, tone: tone || "warn" };
   clearTimeout(noteTimer);
   noteTimer = setTimeout(() => {
     note = null;
     schedule();
-  }, 5000);
+  }, ms || 5000);
   schedule();
 }
 
@@ -539,6 +657,7 @@ const KEYS = [
   ["x", "Close terminal"],
   ["s", "Show or hide the sidebar"],
   ["e", "Plugins and plugin commands"],
+  ["j", "JMCP subagents, or install JMCP"],
   ["d", "Open JAgents Desktop"],
   ["i", "Install or reinstall JAgents Desktop"],
   ["q", "Quit"],
@@ -547,7 +666,8 @@ const KEYS = [
 
 // ---- drawing --------------------------------------------------------------
 
-// The desktop app's dark theme (renderer/styles.css), as RGB.
+// JAgents Terminal's own theme, as RGB: the desktop app's dark neutrals
+// (renderer/styles.css) with a teal accent, so the two apps look apart.
 const T = {
   canvas: "14;15;19",
   surface: "21;23;27",
@@ -556,9 +676,9 @@ const T = {
   ink: "230;232;237",
   muted: "155;158;166",
   faint: "105;108;118",
-  accent: "151;146;236",
-  accentInk: "17;16;26",
-  accentSoft: "43;42;70",
+  accent: "92;198;186",
+  accentInk: "9;27;25",
+  accentSoft: "24;54;52",
   ok: "102;193;137",
   warn: "235;178;95",
   danger: "233;120;113",
@@ -710,7 +830,7 @@ function installLabel() {
 function drawTabBar(f) {
   const bar = style("muted", "canvas");
   fill(f, 0, 0, f.w, bar);
-  let x = put(f, 0, 0, " JAgents ", style("ink", "canvas", true));
+  let x = put(f, 0, 0, " JAgents Terminal ", style("ink", "canvas", true));
   x = put(f, x, 0, " ", bar);
 
   const have = desktopInstalled();
@@ -771,10 +891,10 @@ function drawSidebar(f) {
       put(f, 0, y, on ? "▌" : " ", style("accent", b));
       let x = 2;
       if (sub) x = put(f, x, y, "└ ", style("faint", b));
-      x = put(f, x, y, p.exited === null ? "●" : "○", style(p.exited === null ? "ok" : "faint", b));
-      const id = clip(p.agent.id, 10);
-      const nameW = w - x - 2 - id.length - 1;
-      put(f, x + 1, y, clip(p.name, nameW), style(on ? "ink" : "muted", b, on));
+      // Running panes show the agent; a finished one says so in words.
+      const id = clip(p.exited === null ? p.agent.id : "exited", 10);
+      const nameW = w - x - 1 - id.length - 1;
+      put(f, x, y, clip(p.name, nameW), style(on ? "ink" : p.exited === null ? "muted" : "faint", b, on));
       put(f, w - 1 - id.length, y, id, style("faint", b));
       hits.push({ x0: 0, x1: w, y, run: () => focusPane(p) });
       y++;
@@ -782,15 +902,17 @@ function drawSidebar(f) {
   });
 
   y++;
-  const action = (label, run) => {
+  const action = (label, run, tone) => {
     if (y >= bottom) return;
     const hover = hovered(0, w, y);
     fill(f, 0, y, w, style(null, hover ? "surface" : "canvas"));
-    put(f, 2, y, label, style(hover ? "ink" : "muted", hover ? "surface" : "canvas"));
+    put(f, 2, y, clip(label, w - 3), style(hover ? "ink" : tone || "muted", hover ? "surface" : "canvas", Boolean(tone)));
     hits.push({ x0: 0, x1: w, y, run });
     y++;
   };
   action("◇  Plugins", openPlugins);
+  const js = jmcpState();
+  action(jmcpLabel(), openJmcp, jmcpInstalling || (!js.installed && askJmcp()) || js.working ? "accent" : null);
   action("+  New terminal", () => openPicker("tab"));
   if (tab()) {
     action("→  Split right", () => openPicker("right"));
@@ -840,6 +962,7 @@ function drawStatus(f) {
     key(" % ", "split right");
     key(' " ', "split down");
     key(" x ", "close");
+    key(" j ", "jmcp");
     key(" d ", "desktop");
     key(" i ", "install");
     key(" ? ", "all keys");
@@ -913,9 +1036,10 @@ function drawOverlay(f) {
     } else button(f, b.x, by, " Close ", style("ink", "well"), style("ink", "line"), () => closeInstall(o));
     return hint(b, o.latest ? "Enter installs.  Esc cancels." : "Esc closes.");
   }
+  if (o.kind === "jmcp") return drawJmcp(f, o, hint);
   if (o.kind === "confirm") {
     const n = allPanes().length;
-    const b = drawCard(f, 46, 7, "Quit JAgents?");
+    const b = drawCard(f, 46, 7, "Quit JAgents Terminal?");
     put(f, b.x, b.y, n + " terminal" + (n === 1 ? "" : "s") + " will close.", style("muted", "surface"));
     return hint(b, "Enter quits.  Esc stays.");
   }
@@ -962,9 +1086,64 @@ function drawOverlay(f) {
   hint(b, "↑↓ Enter to pick." + (o.required ? "  Ctrl+C quits." : "  Esc closes."));
 }
 
+// The JMCP card. Not installed: what JMCP adds and an Install button.
+// Installed: its servers, whether this window is connected, and the
+// subagents agents started through jmcp-subagents, refreshed every 3s.
+function drawJmcp(f, o, hint) {
+  const s = jmcpState();
+  const lines = [];
+  const buttons = [];
+  let title;
+  let sub;
+  if (!s.installed) {
+    title = "Install JMCP?";
+    sub = "MCP servers for your agents";
+    lines.push(["JMCP installs MCP servers into the agents you run here:", "muted"]);
+    lines.push(["subagents, memory, rules, skills, health and a browser.", "muted"]);
+    lines.push(["Then Ctrl+B j lists the subagents your agents start.", "muted"]);
+    lines.push(["", "muted"]);
+    lines.push(["The jagents-terminal MCP works without JMCP.", "faint"]);
+    if (jmcpInstalling) lines.push([jmcpInstalling.step, "accent"]);
+    else if (o.error) lines.push([o.error, "danger"]);
+    else if (!o.latest) lines.push(["Checking GitHub for the latest JMCP release…", "faint"]);
+    if (o.latest && !jmcpInstalling) buttons.push([" Install JMCP " + o.latest.tag + " ", true, runJmcpInstall]);
+    buttons.push([" Not now ", false, () => (overlay = null)]);
+    if (askJmcp()) buttons.push([" Don't ask again ", false, dontAskJmcp]);
+  } else {
+    title = "JMCP";
+    sub = (s.version ? "v" + s.version.replace(/^v/i, "") + "  " : "") + s.servers.length + " servers";
+    lines.push(["Servers: " + (s.servers.map((x) => x.id).join(", ") || "none yet. Install them in the JMCP app."), "muted"]);
+    if (s.connected) lines.push(["Connected: panes get the jmcp MCP tools, Ctrl+B e its commands.", "ok"]);
+    else if (s.canConnect) lines.push(["Connect to give panes the jmcp MCP tools.", "muted"]);
+    if (o.busy) lines.push([o.busy, "accent"]);
+    lines.push(["", "muted"]);
+    lines.push(["SUBAGENTS  " + s.working + " working, " + s.subagents.length + " recent", "faint"]);
+    if (s.error) lines.push([s.error, "danger"]);
+    else if (!s.subagents.length) lines.push(["None yet. Agents start them with jmcp-subagents.", "muted"]);
+    const room = Math.max(1, f.h - 10 - lines.length);
+    for (const x of s.subagents.slice(0, room)) lines.push([jmcp.subagentLine(x, Math.min(f.w - 10, 100)), jmcp.WORKING.has(x.status) ? "accent" : x.status === "error" ? "danger" : "muted", true]);
+    buttons.push([" Open in a tab ", true, openJmcpTab]);
+    if (s.canConnect && !o.busy) buttons.push([" Connect ", false, () => connectJmcp(o)]);
+    if (s.app) buttons.push([" Open JMCP app ", false, openJmcpApp]);
+    buttons.push([" Close ", false, () => (overlay = null)]);
+  }
+  const b = drawCard(f, s.installed ? 106 : 64, lines.length + 7, title, sub);
+  lines.forEach(([text, tone, row], i) => put(f, b.x, b.y + i, clip(text, b.w), style(tone, "surface", !row && (tone === "ok" || tone === "danger"))));
+  let x = b.x;
+  const by = b.y0 + b.h - 3;
+  for (const [label, main, run] of buttons) {
+    x = button(f, x, by, label, main ? style("accentInk", "accent", true) : style("ink", "well"), main ? style("accentInk", "ink", true) : style("ink", "line"), () => {
+      run();
+      schedule();
+    });
+    x += 2;
+  }
+  hint(b, s.installed ? "t opens a tab.  Esc closes.  Refreshes every 3s." : o.latest && !jmcpInstalling ? "Enter installs.  Esc closes." : "Esc closes.");
+}
+
 function drawEmpty(f) {
   const r = contentRect();
-  const lines = ["JAgents " + pkg.version, cwd];
+  const lines = ["JAgents Terminal " + pkg.version, cwd];
   lines.forEach((l, i) => put(f, r.x + Math.max(0, Math.floor((r.w - l.length) / 2)), r.y + 2 + i, l, style(i ? "faint" : "muted")));
 }
 
@@ -1112,6 +1291,7 @@ function onPrefixKey(k) {
   if (k === ",") return t && renamePane(t.focus);
   if (k === "s") return toggleSidebar();
   if (k === "e") return openPlugins();
+  if (k === "j") return openJmcp();
   if (k === "q") {
     overlay = { kind: "confirm" };
     return schedule();
@@ -1187,6 +1367,16 @@ function overlayKey(k) {
   if (o.kind === "help") {
     overlay = null;
     return schedule();
+  }
+  if (o.kind === "jmcp") {
+    const s = jmcpState();
+    if (k === "\r" && !s.installed && o.latest && !jmcpInstalling) return runJmcpInstall();
+    if (k === "t" && s.installed) return openJmcpTab();
+    if (k === ESC || k === "\x03" || k === "\r" || k === PREFIX || k === "q") {
+      overlay = null;
+      schedule();
+    }
+    return;
   }
   if (o.kind === "install") {
     if (k === "\r" && o.latest) return runInstall();
@@ -1271,21 +1461,26 @@ function start(h) {
     sidebar = settings.sidebar !== false;
   }
   const s = h.state;
+  jmcpTimer = setInterval(jmcpTick, 3000);
+  jmcpTimer.unref?.();
   if (s.tabs) {
     tabs = s.tabs;
     active = s.active;
     sidebar = s.sidebar;
     seq = s.seq;
     installing = s.installing || null;
+    jmcpInstalling = s.jmcpInstalling || null;
     modes = s.modes || modes;
     for (const p of allPanes()) wire(p);
     h.runtime?.activate();
     prevRows = [];
     relayout();
     if (!tabs.length) openPicker("tab", true);
-    if (h.reloaded) flash("JAgents reloaded with the new code (" + pkg.version + "). Your terminals kept running.", "ok");
+    if (h.reloaded) flash("JAgents Terminal reloaded with the new code (" + pkg.version + "). Your terminals kept running.", "ok");
     return schedule();
   }
+  // Each launch, until JMCP is installed or you say not to ask again.
+  if (!jmcpState(true).installed && askJmcp()) flash("Install JMCP to give the agents here MCP servers and subagents: Ctrl+B j", "accent", 15000);
   h.runtime?.activate();
   const argv = h.argv || [];
   const first = argv[0] && listTerminalAgents().find((a) => a.id === argv[0] || a.name.toLowerCase() === argv.join(" ").toLowerCase());
@@ -1302,8 +1497,9 @@ function stop() {
   clearTimeout(renderTimer);
   renderTimer = null;
   clearTimeout(noteTimer);
+  clearInterval(jmcpTimer);
   for (const p of allPanes()) unwire(p);
-  Object.assign(host.state, { tabs, active, sidebar, seq, installing, modes });
+  Object.assign(host.state, { tabs, active, sidebar, seq, installing, jmcpInstalling, modes });
 }
 
-module.exports = { start, stop, onInput, onResize, flash, schedule, installDone, control, applySettings, pluginsChanged };
+module.exports = { start, stop, onInput, onResize, flash, schedule, installDone, jmcpInstallDone, control, applySettings, pluginsChanged };

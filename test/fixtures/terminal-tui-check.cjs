@@ -100,7 +100,7 @@ async function verify(t) {
   assert.equal((await call("list_terminals"))[0].name, "Plugin shell");
   child.write("\x1b");
   await call("reload_terminal");
-  await until(() => raw.includes("JAgents reloaded with the new code"));
+  await until(() => raw.includes("JAgents Terminal reloaded with the new code"));
   const after = (await call("list_terminals"))[0];
   assert.equal(after.id, original.id);
   assert.equal(after.pid, original.pid);

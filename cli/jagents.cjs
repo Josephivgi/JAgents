@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 "use strict";
 
-// JAgents in a terminal: one process that runs many named terminals (Claude
-// Code, Codex, a shell, and the rest JAgents finds) in one window. Tabs on top,
-// a sidebar listing every terminal, splits right or down. The Desktop button
-// opens the JAgents app on the same folder, which does much more with agents;
-// the Install button installs that app from the latest GitHub release.
+// JAgents Terminal: one process that runs many named terminals (Claude Code,
+// Codex, a shell, and the rest JAgents finds) in one window. Tabs on top, a
+// sidebar listing every terminal, splits right or down. It is its own app,
+// separate from JAgents Desktop: its own look, data, plugins and MCP
+// (jagents-terminal). Subagents come from JMCP (Ctrl+B j), which it offers to
+// install. The Desktop button opens the desktop app on the same folder.
 //   jagents              open the multiplexer
 //   jagents <agent>      open it with that agent in the first tab (jagents claude)
 //   jagents desktop      open the desktop app and return
+//   jagents jmcp         JMCP status and subagents (watch, install, connect)
 //   jagents install-desktop   download the desktop setup from GitHub and run it
 //   jagents update       reinstall this app from the latest GitHub release
 //   jagents --version    this app's version, and the desktop app's
@@ -47,6 +49,10 @@ if (argv[0] === "mcp-config") {
   process.stdout.write(JSON.stringify(require("./terminal-runtime.cjs").mcpConfig(), null, 2) + "\n");
   return;
 }
+if (argv[0] === "jmcp") {
+  jmcpCommand(argv[1] || "");
+  return;
+}
 if (argv[0] === "plugins") {
   if (argv[1] === "docs") {
     process.stdout.write(require("./plugin-docs.cjs"));
@@ -65,7 +71,7 @@ if (argv[0] === "plugins") {
 if (argv.includes("--help") || argv.includes("-h")) {
   process.stdout.write(
     [
-      "JAgents " + pkg.version + " in a terminal",
+      "JAgents Terminal " + pkg.version,
       "",
       "  jagents              open named terminals in this folder",
       "  jagents <agent>      start with that agent (claude, codex, shell, omp, ...)",
@@ -81,11 +87,16 @@ if (argv.includes("--help") || argv.includes("-h")) {
       "  jagents plugins      list terminal plugins (plugins docs prints the API)",
       "  jagents mcp          dedicated terminal MCP server over stdio",
       "  jagents mcp-config   print an MCP client connection entry",
+      "  jagents jmcp         JMCP status and recent subagents",
+      "  jagents jmcp watch   the same, live (q closes)",
+      "  jagents jmcp install install JMCP from its latest GitHub release",
+      "  jagents jmcp connect connect JMCP to this app (jmcp tools in panes)",
       "",
       "Inside: click tabs, the sidebar and buttons, or press Ctrl+B then a key.",
       "Ctrl+B ? lists the keys.",
       "Ctrl+B e opens Plugins. Claude Code and Codex panes get terminal MCP tools.",
-      "For chats and ACP subagents, use the desktop app.",
+      "Ctrl+B j shows JMCP subagents, or offers to install JMCP for MCP servers.",
+      "The jagents-terminal MCP works without JMCP.",
       "",
     ].join("\n"),
   );
@@ -95,7 +106,7 @@ if (argv.includes("--version") || argv.includes("-v") || argv[0] === "version") 
   const version = desk.desktopVersion();
   process.stdout.write(
     [
-      "JAgents terminal " + pkg.version,
+      "JAgents Terminal " + pkg.version,
       "  at " + APP_ROOT,
       version ? "JAgents Desktop " + version : "JAgents Desktop not installed (jagents install-desktop)",
       "",
@@ -153,6 +164,47 @@ function runInstallDesktop() {
       });
     },
   );
+}
+
+// jagents jmcp [watch | install | connect]
+function jmcpCommand(sub) {
+  const jmcp = require("./jmcp.cjs");
+  const plugins = path.join(require("./terminal-runtime.cjs").DATA, "plugins");
+  if (!sub) {
+    process.stdout.write(jmcp.report(plugins, process.stdout.columns, process.stdout.rows) + "\n");
+    return;
+  }
+  if (sub === "watch") return jmcp.watch(plugins);
+  if (sub === "connect") {
+    jmcp.connect((err) => {
+      if (err) {
+        process.stderr.write(String(err.message || err) + "\n");
+        process.exit(1);
+      }
+      process.stdout.write("JMCP is connected. Open JAgents Terminal windows load the jmcp plugin now.\n");
+    });
+    return;
+  }
+  if (sub === "install") {
+    if (jmcp.status(plugins).app && !argv.includes("--yes") && !argv.includes("-y")) {
+      process.stdout.write("JMCP is already installed. jagents jmcp install --yes reinstalls the latest release.\n");
+      return;
+    }
+    jmcp.install(
+      (step) => process.stdout.write("\r" + step.padEnd(64)),
+      (err, done) => {
+        process.stdout.write("\n");
+        if (err) {
+          process.stderr.write(String(err.message || err) + "\n");
+          process.exit(1);
+        }
+        process.stdout.write("JMCP " + ((done && (done.version || done.tag)) || "") + " is installed. Open it to install its servers into your agents.\n");
+      },
+    );
+    return;
+  }
+  process.stderr.write("Use jagents jmcp, jagents jmcp watch, jagents jmcp install or jagents jmcp connect.\n");
+  process.exitCode = 1;
 }
 
 if (argv[0] === "pin") {
@@ -325,7 +377,7 @@ if (fs.existsSync(CURRENT)) {
     } catch {
       /* unknown */
     }
-    reload(next, "Updated to JAgents " + version + ". Your terminals kept running.");
+    reload(next, "Updated to JAgents Terminal " + version + ". Your terminals kept running.");
   });
 }
 
@@ -340,7 +392,7 @@ process.on("uncaughtException", (error) => {
 });
 
 // 1003: report motion too, so buttons light up under the mouse.
-out.write(CSI + "?1049h" + ESC + "]0;JAgents" + "\x07" + CSI + "2J" + CSI + "?1003h" + CSI + "?1006h");
+out.write(CSI + "?1049h" + ESC + "]0;JAgents Terminal" + "\x07" + CSI + "2J" + CSI + "?1003h" + CSI + "?1006h");
 process.stdin.setRawMode(true);
 process.stdin.resume();
 process.stdin.on("data", (chunk) => ui?.onInput(chunk));

@@ -188,4 +188,4 @@ function sameVersion(a, b) {
   return Boolean(a && b) && clean(a) === clean(b);
 }
 
-module.exports = { REPO, desktopCommand, openDesktop, desktopVersion, desktopSetupInstalled, latestRelease, installDesktop, sameVersion };
+module.exports = { REPO, desktopCommand, openDesktop, desktopVersion, desktopSetupInstalled, latestRelease, installDesktop, sameVersion, get, download };

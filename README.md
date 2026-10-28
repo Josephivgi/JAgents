@@ -18,13 +18,34 @@ $env:JSYSTEMS_APPS='all'; irm https://raw.githubusercontent.com/Josephivgi/JAgen
 
 ## Terminal app
 
-JAgents also runs in a terminal: many agent terminals (Claude Code, Codex, a shell and the rest JAgents finds) in one window, with tabs, a sidebar and splits. The installer above also installs it when Node.js 22 or newer is on your computer. To install only the terminal app:
+JAgents Terminal is a separate app from JAgents Desktop, with its own look (a teal accent), data, plugins and MCP server. It runs many agent terminals (Claude Code, Codex, a shell and the rest JAgents finds) in one window, with tabs, a sidebar and splits. The installer above also installs it when Node.js 22 or newer is on your computer. To install only the terminal app:
 
 ```powershell
 irm https://raw.githubusercontent.com/Josephivgi/JAgents/main/install-terminal.ps1 | iex
 ```
 
 Then run `jagents`, or `jagents claude` to open with Claude Code in the first tab. `jagents --list` shows the agents it found, and `jagents update` updates it.
+
+### JMCP and subagents
+
+JAgents Terminal gets subagents and shared MCP servers from
+[JMCP](https://github.com/Josephivgi/JMCP). JMCP installs its servers
+(subagents, memory, rules, skills, health, a browser) into the agents on your
+computer, so the agents in terminal panes get them too.
+
+- Press **Ctrl+B, then j** or click **JMCP** in the sidebar to see JMCP's
+  servers and the subagents your agents started, refreshed every 3 seconds.
+  **Open in a tab** keeps that view open next to your terminals.
+- Without JMCP, the sidebar shows **Install JMCP** and each launch asks once in
+  the status line. The card installs the latest JMCP release from GitHub (per
+  user, no admin). **Don't ask again** stops the launch reminder.
+- When your JMCP can connect apps, **Connect** adds JMCP's `jmcp` plugin to the
+  window: its commands in Plugins and a `jmcp` MCP server in every pane.
+- From a shell: `jagents jmcp` prints the same status, `jagents jmcp watch`
+  keeps it open, `jagents jmcp install` installs JMCP and `jagents jmcp connect`
+  connects it.
+
+The terminal's own `jagents-terminal` MCP below needs no JMCP setup.
 
 ### Terminal plugins and MCP
 
@@ -43,7 +64,7 @@ Plugins can also add their own MCP servers and tools.
 
 Claude Code and Codex panes connect automatically at launch. For other MCP
 clients, merge the output of `jagents mcp-config` into their MCP configuration.
-`jagents mcp` runs the stdio server directly. Keep a JAgents terminal window open.
+`jagents mcp` runs the stdio server directly. Keep a JAgents Terminal window open.
 Externally configured clients use the most recently opened window; panes
 launched inside JAgents always use their own window.
 

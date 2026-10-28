@@ -94,6 +94,14 @@ function createRuntime(host, options = {}) {
     return next;
   }
 
+  // Small saved choices of the terminal app itself, such as jmcpAsk.
+  function pref(key, value) {
+    if (!/^[a-zA-Z]{1,40}$/.test(key)) throw new Error("Invalid preference: " + key);
+    if (value === undefined) return db.getSetting("terminal.pref." + key, null);
+    db.setSetting("terminal.pref." + key, value);
+    return value;
+  }
+
   const plugins = createPluginManager({
     dataRoot, db, docs, renderer: false, retire: false, reservedServers: [SERVER],
     emit: (type) => {
@@ -281,7 +289,7 @@ function createRuntime(host, options = {}) {
     db.close();
   }
 
-  return { start, activate, stop, plugins, settings, call, tools, emit, paneSpec, commands: commandList, hubFile, dataRoot };
+  return { start, activate, stop, plugins, settings, pref, call, tools, emit, paneSpec, commands: commandList, hubFile, dataRoot };
 }
 
 module.exports = { createRuntime, mcpConfig, DATA, HOME, SERVER };
