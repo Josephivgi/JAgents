@@ -562,7 +562,11 @@ const T = {
   ok: "102;193;137",
   warn: "235;178;95",
   danger: "233;120;113",
+  // Pane colors. Empty keeps the outer terminal's own default and palette.
+  paneFg: "",
+  paneBg: "",
 };
+for (let i = 0; i < 16; i++) T["ansi" + i] = "";
 const DEFAULT_THEME = { ...T };
 
 function applySettings(settings) {
@@ -604,14 +608,18 @@ function cellSgr(c) {
     s += ";38;2;" + ((v >> 16) & 255) + ";" + ((v >> 8) & 255) + ";" + (v & 255);
   } else if (c.isFgPalette()) {
     const v = c.getFgColor();
-    s += v < 8 ? ";" + (30 + v) : v < 16 ? ";" + (90 + v - 8) : ";38;5;" + v;
+    s += v < 16 && T["ansi" + v] ? ";38;2;" + T["ansi" + v] : v < 8 ? ";" + (30 + v) : v < 16 ? ";" + (90 + v - 8) : ";38;5;" + v;
+  } else if (T.paneFg) {
+    s += ";38;2;" + T.paneFg;
   }
   if (c.isBgRGB()) {
     const v = c.getBgColor();
     s += ";48;2;" + ((v >> 16) & 255) + ";" + ((v >> 8) & 255) + ";" + (v & 255);
   } else if (c.isBgPalette()) {
     const v = c.getBgColor();
-    s += v < 8 ? ";" + (40 + v) : v < 16 ? ";" + (100 + v - 8) : ";48;5;" + v;
+    s += v < 16 && T["ansi" + v] ? ";48;2;" + T["ansi" + v] : v < 8 ? ";" + (40 + v) : v < 16 ? ";" + (100 + v - 8) : ";48;5;" + v;
+  } else if (T.paneBg) {
+    s += ";48;2;" + T.paneBg;
   }
   return s;
 }

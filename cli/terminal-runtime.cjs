@@ -81,7 +81,8 @@ function createRuntime(host, options = {}) {
       next.sidebar = patch.sidebar;
     }
     if ("theme" in patch) {
-      const allowed = ["canvas", "surface", "well", "line", "ink", "muted", "faint", "accent", "accentInk", "accentSoft", "ok", "warn", "danger"];
+      const allowed = ["canvas", "surface", "well", "line", "ink", "muted", "faint", "accent", "accentInk", "accentSoft", "ok", "warn", "danger", "paneFg", "paneBg"];
+      for (let i = 0; i < 16; i++) allowed.push("ansi" + i);
       if (!patch.theme || typeof patch.theme !== "object" || Array.isArray(patch.theme)) throw new Error("theme must be an object.");
       for (const [key, rgb] of Object.entries(patch.theme)) {
         if (!allowed.includes(key) || typeof rgb !== "string" || !/^\d{1,3};\d{1,3};\d{1,3}$/.test(rgb) || rgb.split(";").some((v) => Number(v) > 255)) throw new Error("Invalid RGB theme token: " + key);

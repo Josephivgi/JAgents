@@ -47,7 +47,8 @@ uses disabled_tools. Restart panes to pick up new server configuration.
 - ctx.terminal.settings({sidebar:true, theme:{accent:"151;146;236"}}):
   persist sidebar and RGB theme tokens; omit arguments to read settings.
   Tokens: canvas, surface, well, line, ink, muted, faint, accent, accentInk,
-  accentSoft, ok, warn, danger. Empty theme resets defaults.
+  accentSoft, ok, warn, danger. Pane colors: paneFg, paneBg, ansi0-ansi15
+  (unset keeps the outer terminal's colors). Empty theme resets defaults.
 - ctx.terminal.on(event, callback): terminal-opened, terminal-closed,
   terminal-renamed, terminal-data {id,data}, terminal-exit {id,exitCode}.
   Returns unsubscribe; also removed automatically on plugin unload.
