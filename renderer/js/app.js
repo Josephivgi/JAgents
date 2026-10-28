@@ -66,13 +66,29 @@ function fitModes() {
   const shown = Array.from(seg.children).filter((t) => !t.hidden && t.getAttribute("role") === "tab").length;
   if (seg.style.getPropertyValue("--page-tabs") !== String(pageTabs())) seg.style.setProperty("--page-tabs", String(pageTabs()));
   seg.classList.toggle("scroll-x", shown > pageTabs());
-  // Four or more tabs side by side leave no room for icons.
-  seg.classList.toggle("tight", Math.min(shown, pageTabs()) > 3);
+  // Four or more tabs side by side, or tabs too wide for a narrow sidebar,
+  // leave no room for icons.
+  const tight = Math.min(shown, pageTabs()) > 3 || (!seg.classList.contains("scroll-x") && !tabsFitWithIcons(seg));
+  if (seg.classList.contains("tight") !== tight) seg.classList.toggle("tight", tight);
   const on = seg.querySelector('[role="tab"].on');
   if (on && seg.classList.contains("scroll-x")) {
     const a = on.offsetLeft - seg.scrollLeft;
     if (a < 0 || a + on.offsetWidth > seg.clientWidth) seg.scrollTo({ left: on.offsetLeft - 2 });
   }
+}
+
+// Measures the tabs at full size (icon and name) on a hidden copy beside the
+// strip, so the strip itself never changes while it is measured.
+function tabsFitWithIcons(seg) {
+  const probe = seg.cloneNode(true);
+  probe.classList.remove("tight", "scroll-x");
+  probe.removeAttribute("id");
+  probe.setAttribute("aria-hidden", "true");
+  probe.style.cssText += ";position:absolute;visibility:hidden;pointer-events:none;width:auto;";
+  seg.after(probe);
+  const fits = probe.offsetWidth <= seg.offsetWidth;
+  probe.remove();
+  return fits;
 }
 
 const queueFit = () => {
@@ -84,6 +100,8 @@ const queueFit = () => {
 function watchModes() {
   const seg = app.querySelector(".mode-seg");
   new MutationObserver(queueFit).observe(seg, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "hidden"] });
+  // Dragging the sidebar wider or narrower shows or hides the tab icons.
+  new ResizeObserver(queueFit).observe(seg);
   // The mouse wheel scrolls the tabs sideways.
   seg.addEventListener(
     "wheel",
@@ -469,7 +487,7 @@ on("set-mode", (m) => setMode(m));
 on("project-counts", () => paintProjects());
 
 function sidebarWidth(px) {
-  const w = Math.min(420, Math.max(200, Math.round(px)));
+  const w = Math.min(420, Math.max(170, Math.round(px)));
   document.documentElement.style.setProperty("--side-w", w + "px");
   return w;
 }
