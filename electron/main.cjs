@@ -55,7 +55,8 @@ if (SMOKE) {
   };
   process.on("uncaughtException", crash);
   process.on("unhandledRejection", crash);
-  setTimeout(() => crash(new Error("The smoke run took over 2 minutes.")), 120000);
+  const limit = process.env.JAGENTS_SMOKE_EXTRA ? 5 : 2;
+  setTimeout(() => crash(new Error("The smoke run took over " + limit + " minutes.")), limit * 60000);
 }
 
 app.setName("JAgents");

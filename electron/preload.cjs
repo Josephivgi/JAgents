@@ -7,6 +7,7 @@ const call = (channel) => (...args) => ipcRenderer.invoke(channel, ...args);
 contextBridge.exposeInMainWorld("jagents", {
   appInfo: call("app-info"),
   setSetting: call("set-setting"),
+  jworkspaceStatus: call("jworkspace-status"),
   pickFolder: call("pick-folder"),
   titlebarColors: call("titlebar-colors"),
   projects: {

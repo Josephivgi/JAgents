@@ -53,6 +53,9 @@ async function run({ win, backend, dataRoot, dialogs }) {
     await within(new Promise((resolve) => ipcMain.once("app-ready", resolve)), 30000, "The page reporting ready");
     const script = fs.readFileSync(path.join(__dirname, "..", "test", "fixtures", "page-check.js"), "utf8");
     const page = await within(win.webContents.executeJavaScript(script, true), LIMIT_MS, "The page check");
+    // JAGENTS_SMOKE_EXTRA: a second page script (a file whose value is a promise)
+    // for one-off checks, such as a real agent calling an MCP tool. Its result is out.extra.
+    if (process.env.JAGENTS_SMOKE_EXTRA) out.extra = await within(win.webContents.executeJavaScript(fs.readFileSync(process.env.JAGENTS_SMOKE_EXTRA, "utf8"), true), 240000, "The extra page check");
     // The built-in browser keeps its cookies in <data folder>\Partitions\jagents-browser.
     await win.webContents.executeJavaScript('window.jagents.plugins.invoke("browser", "attach", { pane: "smoke-browser", url: "about:blank" })', true);
     const view = webContents.getAllWebContents().find((w) => w !== win.webContents && /jagents-browser$/i.test(w.session.storagePath || ""));

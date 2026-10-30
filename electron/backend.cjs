@@ -43,6 +43,7 @@ const { setChildEnv } = require("../lib/child-env");
 const { connectPtyHost } = require("./pty-client.cjs");
 const { createAcpHost } = require("./acp-host.cjs");
 const { createWorkspace } = require("./workspace.cjs");
+const jworkspaceLink = require("./jworkspace-link.cjs");
 const { createHub } = require("./hub.cjs");
 const { createPluginManager } = require("./plugins.cjs");
 const { createUsage } = require("./usage.cjs");
@@ -116,6 +117,13 @@ function createBackend(opts) {
   let started = false;
   let starting = null;
   let stopped = false;
+
+  // JWorkspace's jworkspace MCP server, for every agent JAgents starts, when
+  // JWorkspace is on this computer (electron/jworkspace-link.cjs). On unless
+  // turned off in Settings > JWorkspace.
+  const jwEnv = () => Object.assign({}, process.env, opts.env || {});
+  const jworkspaceOn = () => db.getSetting("jworkspace.connect", true) !== false;
+  const jworkspaceStatus = () => Object.assign(jworkspaceLink.detect({ env: jwEnv() }), { connect: jworkspaceOn() });
   let stopping = null;
   const timers = new Set();
   const pages = new Set(); // page watchers to undo on stop
@@ -256,7 +264,8 @@ function createBackend(opts) {
       }
       return settled;
     }
-    handle("app-info", () => ({ host, dataRoot: DATA_ROOT, hubDir: HOME_DIR, theme: theme(), cwd: workspace.cwdDefault(), hubAttach: workspace.hubOn(), hubChosen: db.getSetting("hub.chosen", false), mode: db.getSetting("mode", "code"), version: updater.state().current, mcpAutoUpdate: db.getSetting("mcp.autoUpdate", true), mcpAutoInstall: db.getSetting("mcp.autoInstall", false), layout: db.getSetting("layout", "grid"), threadCurrent: db.getSetting("thread.current", ""), threadSettled: settledThreads(), threadSettledFolded: Boolean(db.getSetting("thread.settledFolded", false)), platform: process.platform, osBuild: osBuild(), updateAuto: db.getSetting("update.auto", true) !== false, updateSnooze: db.getSetting("update.snooze", null), groups: db.getSetting("ui.groups", null), pageTabs: db.getSetting("ui.pageTabs", 3), sidebarWidth: db.getSetting("ui.sidebarWidth", 0), sidebarHidden: Boolean(db.getSetting("ui.sidebarHidden", false)), terminal: db.getSetting("terminal", null), projects: workspace.projects() }));
+    handle("app-info", () => ({ host, dataRoot: DATA_ROOT, hubDir: HOME_DIR, theme: theme(), cwd: workspace.cwdDefault(), hubAttach: workspace.hubOn(), hubChosen: db.getSetting("hub.chosen", false), mode: db.getSetting("mode", "code"), version: updater.state().current, mcpAutoUpdate: db.getSetting("mcp.autoUpdate", true), mcpAutoInstall: db.getSetting("mcp.autoInstall", false), layout: db.getSetting("layout", "grid"), threadCurrent: db.getSetting("thread.current", ""), threadSettled: settledThreads(), threadSettledFolded: Boolean(db.getSetting("thread.settledFolded", false)), platform: process.platform, osBuild: osBuild(), updateAuto: db.getSetting("update.auto", true) !== false, updateSnooze: db.getSetting("update.snooze", null), groups: db.getSetting("ui.groups", null), pageTabs: db.getSetting("ui.pageTabs", 3), sidebarWidth: db.getSetting("ui.sidebarWidth", 0), sidebarHidden: Boolean(db.getSetting("ui.sidebarHidden", false)), terminal: db.getSetting("terminal", null), projects: workspace.projects(), jworkspace: jworkspaceStatus() }));
+    handle("jworkspace-status", () => jworkspaceStatus());
     // The page sends its colors so the window buttons match the theme. Inside
     // another app there are no window buttons, and its theme is its own.
     handle("titlebar-colors", (colors) => {
@@ -275,7 +284,7 @@ function createBackend(opts) {
       return true;
     });
     handle("set-setting", (key, value) => {
-      const allowed = ["update.auto", "update.snooze", "ui.sidebarWidth", "ui.groups", "ui.pageTabs", "ui.sidebarHidden", "theme", "mode", "layout", "hub.attach", "hub.chosen", "thread.current", "thread.settled", "thread.settledFolded", "ui.sidebar", "mcp.autoUpdate", "mcp.autoInstall", "help.section", "terminal"];
+      const allowed = ["update.auto", "update.snooze", "ui.sidebarWidth", "ui.groups", "ui.pageTabs", "ui.sidebarHidden", "theme", "mode", "layout", "hub.attach", "hub.chosen", "thread.current", "thread.settled", "thread.settledFolded", "ui.sidebar", "mcp.autoUpdate", "mcp.autoInstall", "help.section", "terminal", "jworkspace.connect"];
       if (!allowed.includes(key)) throw new Error("Unknown setting " + key);
       db.setSetting(key, value);
       return true;
@@ -578,7 +587,7 @@ function createBackend(opts) {
         return base + sub + tools;
       },
     });
-    ws = createWorkspace({ db, dataRoot: DATA_ROOT, ptyHost, acpHost: acp, emit: broadcast, hubFiles, pluginMcp: () => plugins.agentMcp() });
+    ws = createWorkspace({ db, dataRoot: DATA_ROOT, ptyHost, acpHost: acp, emit: broadcast, hubFiles, pluginMcp: () => plugins.agentMcp(), jworkspaceMcp: () => (jworkspaceOn() ? jworkspaceLink.mcpEntry({ env: jwEnv() }) : null) });
     workspace = ws;
     openProject(opts.argv);
     hub = createHub({ workspace, ptyHost, acpHost: acp, plugins, dataRoot: DATA_ROOT, emit: broadcast, notify, restartApp, homeDir: HOME_DIR });

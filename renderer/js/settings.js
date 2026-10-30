@@ -19,6 +19,7 @@ const SECTIONS = [
   { id: "projects", label: "Projects", icon: "folder" },
   { id: "agents", label: "Agents", icon: "store" },
   { id: "hub", label: "MCP hub", icon: "hub" },
+  { id: "jworkspace", label: "JWorkspace", icon: "grid" },
   { id: "updates", label: "Updates", icon: "update" },
   { id: "plugins", label: "Plugins", icon: "puzzle" },
   { id: "usage", label: "Usage", icon: "usage" },
@@ -215,6 +216,32 @@ function updatesHead() {
   );
 }
 
+// JWorkspace's jworkspace MCP server, given to agents when JWorkspace is on
+// this computer (electron/jworkspace-link.cjs).
+function jworkspaceHtml() {
+  const s = store.info.jworkspace || {};
+  const ver = s.version ? " " + esc(s.version) : "";
+  let status;
+  if (!s.found) {
+    status =
+      row("Not found on this computer", "JWorkspace is a new JSystems app that holds your JSystems apps in one window, and agents can build plugins for it. It may not be out yet. JAgents is ready for it: once JWorkspace is installed and opened once, JAgents finds it by itself and gives your agents its MCP server. There is nothing to set up.", '<button type="button" class="btn sm secondary" data-jw-check>' + icon("retry", 14) + "Check again</button>") +
+      row("Where JAgents looks", "", '<span class="mono small set-path" title="' + esc(s.home || "") + '">' + esc(s.home || "") + "</span>");
+  } else {
+    const use = s.connect ? "Agents you start get the jworkspace MCP server: tools to make, load and test JWorkspace plugins." : "Off. Agents do not get the jworkspace MCP server.";
+    const open = s.running ? "JWorkspace is open." : "JWorkspace is closed. Tools that need the open app, like loading a plugin or taking a screenshot, ask you to open it.";
+    status =
+      row((s.connect ? "Connected to JWorkspace" : "JWorkspace found") + ver, use + " " + open, '<button type="button" class="btn sm secondary" data-jw-check>' + icon("retry", 14) + "Check again</button>") +
+      row("JWorkspace folder", "", '<button type="button" class="btn sm ghost" data-set-reveal="' + esc(s.home || "") + '">' + icon("external", 14) + "Show</button>");
+  }
+  return (
+    '<h2 class="set-h">JWorkspace</h2><p class="muted set-lead">JWorkspace runs JSystems apps and agent-made plugins in one window. JAgents connects to it through its MCP server when it is on this computer.</p>' +
+    '<div class="set-card">' + status + "</div>" +
+    '<div class="set-card">' +
+    row("Give agents the jworkspace server", "On by default. New chats and terminals, and terminals you restart, get the change.", toggle("data-jw-connect", s.connect !== false, "Give agents the jworkspace server")) +
+    "</div>"
+  );
+}
+
 function guideHtml() {
   return (
     '<h2 class="set-h">Guide</h2>' +
@@ -264,6 +291,10 @@ async function show(id) {
     }
     else if (id === "projects") body.innerHTML = projectsHtml();
     else if (id === "guide") body.innerHTML = guideHtml();
+    else if (id === "jworkspace") {
+      store.info.jworkspace = await window.jagents.jworkspaceStatus();
+      if (current === "jworkspace") body.innerHTML = jworkspaceHtml();
+    }
     else if (id === "about") body.innerHTML = aboutHtml();
     // The panels bring their own heading.
     else if (id === "updates") {
@@ -332,6 +363,13 @@ async function onClick(e) {
     fire("hub", store.info);
     if (next) toast("New agents get the jagents MCP server. Restart open terminals to connect them.");
     return show("general");
+  }
+  if (t.closest("[data-jw-check]")) return show("jworkspace");
+  if (t.closest("[data-jw-connect]")) {
+    const next = !(store.info.jworkspace && store.info.jworkspace.connect !== false);
+    await window.jagents.setSetting("jworkspace.connect", next);
+    toast(next ? "New agents get the jworkspace MCP server. Restart open terminals to connect them." : "New agents no longer get the jworkspace MCP server.");
+    return show("jworkspace");
   }
   const au = t.closest("[data-set-autoupdate]");
   if (au) {

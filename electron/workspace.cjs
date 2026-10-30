@@ -24,7 +24,7 @@ function claudeToolName(name) {
   return dot > 0 ? "mcp__" + name.slice(0, dot) + "__" + name.slice(dot + 1) : name;
 }
 
-function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, pluginMcp }) {
+function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, pluginMcp, jworkspaceMcp }) {
   let panes = (db.getSetting("panes", []) || []).filter((p) => p && p.id && p.kind);
   const counters = db.getSetting("handle-counters", {}) || {};
   const DEFAULT_WS = "default";
@@ -241,11 +241,19 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
     }
   }
 
-  // Every MCP server an agent gets: jagents (when the hub is attached), servers
-  // plugins run inside JAgents (through jagents-plugin-mcp.cjs), and outside
-  // servers plugins list in plugin.json. ACP's {name, command, args, env[]} shape.
+  // Every MCP server an agent gets: jagents (when the hub is attached),
+  // jworkspace (when JWorkspace is on this computer, electron/jworkspace-link.cjs),
+  // servers plugins run inside JAgents (through jagents-plugin-mcp.cjs), and
+  // outside servers plugins list in plugin.json. ACP's {name, command, args, env[]} shape.
   function mcpEntries(paneId, withHub) {
     const out = withHub ? [mcpEntry(paneId)] : [];
+    let jw = null;
+    try {
+      jw = jworkspaceMcp ? jworkspaceMcp() : null;
+    } catch {
+      jw = null;
+    }
+    if (jw) out.push(jw);
     const p = plugged();
     const node = nodePath();
     for (const srv of p.inApp) {
@@ -258,7 +266,9 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
       out.push({ name: srv.name, command: node || process.execPath, args: [hubFiles.pluginScript], env });
     }
     for (const srv of p.external) out.push({ name: srv.name, command: srv.command, args: srv.args, env: Object.entries(srv.env || {}).map(([name, value]) => ({ name, value: String(value) })) });
-    return out;
+    // One server per name: the first one listed wins.
+    const seen = new Set();
+    return out.filter((e) => !seen.has(e.name) && seen.add(e.name));
   }
 
   // Tools plugins turned off. jagents and in-app servers drop them in the hub;
