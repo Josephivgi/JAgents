@@ -371,7 +371,7 @@ export async function openUpdatesPanel(checkNow) {
     (u.applied
       ? '<p class="update-ok">' + icon("check", 15) + "Installed " + esc(u.applied) + ". Restart JAgents to run it.</p>"
       : u.available
-        ? '<p class="update-ok">' + icon("update", 15) + esc(u.latest) + (u.applying ? ": " + esc(u.step || "Installing") + "…" : u.asset ? " is ready. Install downloads it from the GitHub release." : " is ready to install.") + "</p>"
+        ? '<p class="update-ok">' + icon("update", 15) + esc(u.latest) + (u.applying ? ": " + esc(u.step || "Installing") + "…" : store.info && store.info.updaterApply === false ? " is out. JWorkspace runs JAgents from its folder; update that folder to get it." : u.asset ? " is ready. Install downloads it from the GitHub release." : " is ready to install.") + "</p>"
         : u.latest && !u.checking && !u.error
           ? '<p class="muted small">You are on the latest version.</p>'
           : "") +
@@ -383,7 +383,7 @@ export async function openUpdatesPanel(checkNow) {
     '<button class="btn secondary" data-u="check"' + (u.checking || u.applying ? " disabled" : "") + ">" + (u.checking ? '<span class="spinner"></span>Checking…' : icon("restart", 15) + "Check now") + "</button>" +
     (u.applied
       ? '<button class="btn primary" data-u="restart">' + icon("restart", 15) + "Restart JAgents</button>"
-      : u.available
+      : u.available && !(store.info && store.info.updaterApply === false)
         ? '<button class="btn primary" data-u="apply"' + (u.applying ? " disabled" : "") + ">" + (u.applying ? '<span class="spinner"></span>' + esc(u.step || "Installing") + "…" : icon("update", 15) + "Install " + esc(u.latest)) + "</button>"
         : "") +
     "</footer>";

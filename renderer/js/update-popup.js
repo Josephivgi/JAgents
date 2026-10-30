@@ -11,6 +11,12 @@ let el = null;
 let last = null;
 let timer = 0;
 
+// Inside JWorkspace updates come from the folder it loads, so there is no
+// Install button here.
+function canApply() {
+  return !store.info || store.info.updaterApply !== false;
+}
+
 function snoozed(u) {
   const s = store.info && store.info.updateSnooze;
   const key = u.applied ? "restart:" + u.applied : u.latest;
@@ -59,7 +65,8 @@ function cardHtml(u) {
     '<p class="muted small">You have v' + esc(u.current) + ".</p>" +
     (lines.length ? '<ul class="upd-notes">' + lines.map((l) => "<li>" + esc(l) + "</li>").join("") + "</ul>" : "") +
     (u.error ? '<p class="err-row small">' + esc(u.error) + "</p>" : "") +
-    '<div class="upd-actions"><button type="button" class="btn sm ghost" data-upd="notes">What\'s new</button><button type="button" class="btn sm ghost" data-upd="later">Later</button><button type="button" class="btn sm primary" data-upd="apply">Install</button></div>'
+    '<div class="upd-actions"><button type="button" class="btn sm ghost" data-upd="notes">What\'s new</button><button type="button" class="btn sm ghost" data-upd="later">Later</button>' + (canApply() ? '<button type="button" class="btn sm primary" data-upd="apply">Install</button>' : "") + "</div>" +
+    (canApply() ? "" : '<p class="muted small">JWorkspace runs JAgents from its folder. Update that folder to get it.</p>')
   );
 }
 

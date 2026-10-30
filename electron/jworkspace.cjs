@@ -116,7 +116,7 @@ async function activate(ctx) {
   const { dataRoot, homeDir, legacy } = folders(ctx);
   const page = ctx.surface().webContents;
   if (!page) throw new Error("JAgents Desktop's page closed while it was starting.");
-  const state = { ctx, page, dataRoot, key: claimKey(dataRoot), backend: null, claim: null, listeners: [], gpuGone: null, stopped: false, done: null };
+  const state = { ctx, page, dataRoot, homeDir, key: claimKey(dataRoot), backend: null, claim: null, listeners: [], gpuGone: null, stopped: false, done: null };
   current = state;
   // A deactivate while this runs (JWorkspace closed or reloaded it) stops here.
   const still = () => {
@@ -217,4 +217,10 @@ function cleanup(state, detach) {
   return state.done;
 }
 
-module.exports = { activate, deactivate };
+// The running start's hub.json (port, token, pid), or "" when none runs.
+// JWorkspace's native Agent calls the hub's tools through it.
+function hubFile() {
+  return current && current.homeDir ? path.join(current.homeDir, "hub.json") : "";
+}
+
+module.exports = { activate, deactivate, hubFile };
