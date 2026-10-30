@@ -406,7 +406,19 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
     if (!pane || !(cols > 0 && rows > 0)) return;
     pane.size = { cols: Math.floor(cols), rows: Math.floor(rows) };
     clearTimeout(sizeTimer);
-    sizeTimer = setTimeout(() => db.setSetting("panes", panes), 2000);
+    sizeTimer = setTimeout(() => {
+      sizeTimer = null;
+      db.setSetting("panes", panes);
+    }, 2000);
+  }
+
+  // A size save still waiting goes out now; the app is stopping. save false:
+  // it is dropped, because another JAgents has the data now.
+  function flush(save) {
+    if (!sizeTimer) return;
+    clearTimeout(sizeTimer);
+    sizeTimer = null;
+    if (save !== false) db.setSetting("panes", panes);
   }
 
   // Terminal panes from the last run start with the app, so agents are reachable
@@ -546,7 +558,7 @@ function createWorkspace({ db, dataRoot, ptyHost, acpHost, emit, hubFiles, plugi
     return panes.find((p) => p.kind === "chat" && p.chatId === chatId) || null;
   }
 
-  return { list, agents, findAgent, addTerminal, ensureTerminal, resizeTerminal, restartTerminal, launchRestored, addChatPane, addPluginPane, updatePluginPane, renamePane, addWorkspace, setActiveWorkspace, renameWorkspace, removeWorkspace, newChat, removePane, reorder, paneForChat, cwdDefault, projects, addProject, removeProject, renameProject, setActiveProject, hubOn, mcpEntry, mcpEntries, claudeDisallowed, systemNote, toolsNote };
+  return { list, agents, findAgent, addTerminal, ensureTerminal, resizeTerminal, restartTerminal, launchRestored, flush, addChatPane, addPluginPane, updatePluginPane, renamePane, addWorkspace, setActiveWorkspace, renameWorkspace, removeWorkspace, newChat, removePane, reorder, paneForChat, cwdDefault, projects, addProject, removeProject, renameProject, setActiveProject, hubOn, mcpEntry, mcpEntries, claudeDisallowed, systemNote, toolsNote };
 }
 
 module.exports = { createWorkspace };

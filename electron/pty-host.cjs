@@ -296,7 +296,17 @@ function createPtyHost({ emit, spawn }) {
     for (const id of Array.from(terms.keys())) kill(id);
   }
 
-  return { create, adopt, flushAll, write, resize, sendInput, blockingMenu, text, snapshot, status, waitIdle, pid, kill, killAll, has: (id) => terms.has(id), ids: () => Array.from(terms.keys()), pids: () => Array.from(terms.values()).map((t) => ({ id: t.id, pid: t.proc.pid })) };
+  // The app is done with its terminals (the daemon keeps or closes them):
+  // drops every mirror without touching the processes.
+  function disposeAll() {
+    for (const t of terms.values()) {
+      clearTimeout(t.flushTimer);
+      t.mirror.dispose();
+    }
+    terms.clear();
+  }
+
+  return { create, adopt, flushAll, write, resize, sendInput, blockingMenu, text, snapshot, status, waitIdle, pid, kill, killAll, disposeAll, has: (id) => terms.has(id), ids: () => Array.from(terms.keys()), pids: () => Array.from(terms.values()).map((t) => ({ id: t.id, pid: t.proc.pid })) };
 }
 
 module.exports = { createPtyHost };

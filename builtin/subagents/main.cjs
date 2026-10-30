@@ -63,7 +63,9 @@ exports.activate = (ctx) => {
     }
   }
 
-  const HOME_DIR = process.env.JAGENTS_HOME ? path.resolve(process.env.JAGENTS_HOME) : path.join(os.homedir(), ".jagents");
+  // The hub of the JAgents this runs in (inside JWorkspace it need not be
+  // ~/.jagents); apps from before ctx.hubDir fall back to the old lookup.
+  const HOME_DIR = ctx.hubDir || (process.env.JAGENTS_HOME ? path.resolve(process.env.JAGENTS_HOME) : path.join(os.homedir(), ".jagents"));
   const DEAD_HUB = path.join(ctx.dataDir, "no-hub-for-subagents.json");
 
   // ---- Storage ----

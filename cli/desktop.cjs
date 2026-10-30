@@ -34,9 +34,38 @@ function desktopCommand(cwd) {
   return null;
 }
 
+// The data folder the desktop app opens (electron/main.cjs).
+function desktopDataRoot() {
+  if (process.env.JAGENTS_DATA_ROOT) return path.resolve(process.env.JAGENTS_DATA_ROOT);
+  return path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "JAgents");
+}
+
+// A JAgents that has the data folder open (the desktop app, or JAgents
+// Desktop inside JWorkspace) is asked to show itself on cwd: done(true,
+// message) when one answered ("" when it came forward), done(false) when
+// none holds the owner lock (electron/owner-lock.cjs). A desktop build from
+// before the lock does not ask by itself, so this keeps it from starting on
+// data JWorkspace has open.
+function askOwner(dataRoot, cwd, done) {
+  let lock = null;
+  try {
+    lock = require(path.join(APP_ROOT, "electron", "owner-lock.cjs"));
+  } catch {
+    return done(false);
+  }
+  lock.ask(lock.lockPath(dataRoot), { op: "show", argv: ["--project=" + cwd] }).then(
+    (reply) => done(true, reply && reply.ok ? "" : String((reply && reply.error) || "JAgents did not come forward.")),
+    (error) => (error.code === "ENOENT" || error.code === "ECONNREFUSED" ? done(false) : done(true, String(error.message || error))),
+  );
+}
+
 // Calls done("") once the app is up (or was already running and took the
 // request), or done(message) when it could not start.
 function openDesktop(cwd, done) {
+  askOwner(desktopDataRoot(), cwd, (answered, message) => (answered ? done(message || "") : launch(cwd, done)));
+}
+
+function launch(cwd, done) {
   const cmd = desktopCommand(cwd);
   if (!cmd) return done("JAgents Desktop is not installed. Run jagents install-desktop.");
   const env = Object.assign({}, process.env);
@@ -188,4 +217,4 @@ function sameVersion(a, b) {
   return Boolean(a && b) && clean(a) === clean(b);
 }
 
-module.exports = { REPO, desktopCommand, openDesktop, desktopVersion, desktopSetupInstalled, latestRelease, installDesktop, sameVersion };
+module.exports = { REPO, desktopCommand, desktopDataRoot, askOwner, openDesktop, desktopVersion, desktopSetupInstalled, latestRelease, installDesktop, sameVersion };

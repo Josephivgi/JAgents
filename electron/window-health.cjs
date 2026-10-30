@@ -12,9 +12,11 @@ const fs = require("node:fs");
 const LOG_MAX = 1024 * 1024;
 const RELOADS_PER_MINUTE = 3;
 
-function createLog(file) {
+// print: where each line also goes (console.log unless given; null for none).
+function createLog(file, print) {
+  const echo = print === undefined ? (text) => console.log(text) : print;
   return (text) => {
-    console.log(text);
+    if (echo) echo(text);
     try {
       if (fs.existsSync(file) && fs.statSync(file).size > LOG_MAX) fs.renameSync(file, file + ".old");
       fs.appendFileSync(file, new Date().toISOString() + " [" + process.pid + "] " + text + "\n");
@@ -25,19 +27,23 @@ function createLog(file) {
 }
 
 // readyMs: how long the page may take from starting to load until it reports
-// ready (window.jagents.ready()) before it counts as stuck.
-function watchWindow(win, { log, readyMs }) {
-  const wc = win.webContents;
+// ready (window.jagents.ready()) before it counts as stuck. target is the
+// window or the page's webContents (a view inside another app's window).
+// dispose() stops watching.
+function watchWindow(target, { log, readyMs }) {
+  const wc = target.webContents || target;
   const limit = readyMs || 20000;
   let reloads = [];
   let ready = false;
   let timer = null;
+  let killTimer = null;
+  let failTimer = null;
   let killing = false;
 
   // hard: the page is frozen and cannot let a reload through, so its process
   // is ended first and the reload starts a new one.
   function recover(reason, hard) {
-    if (win.isDestroyed()) return;
+    if (wc.isDestroyed()) return;
     const now = Date.now();
     reloads = reloads.filter((t) => now - t < 60000);
     if (reloads.length >= RELOADS_PER_MINUTE) {
@@ -52,35 +58,44 @@ function watchWindow(win, { log, readyMs }) {
     // dying is dropped and leaves the window with no page at all.
     killing = true;
     wc.forcefullyCrashRenderer();
-    setTimeout(() => {
-      if (!killing || win.isDestroyed()) return;
+    killTimer = setTimeout(() => {
+      if (!killing || wc.isDestroyed()) return;
       killing = false;
       wc.reload();
     }, 3000);
   }
 
-  wc.on("render-process-gone", (_event, details) => {
-    if (killing) {
-      killing = false;
-      wc.reload();
-      return;
-    }
-    recover("page process gone (" + details.reason + (details.exitCode ? ", code " + details.exitCode : "") + ")");
-  });
-  wc.on("did-fail-load", (_event, code, description, url, isMainFrame) => {
-    // -3 is an aborted load (a reload replacing it), not a failure.
-    if (isMainFrame && code !== -3) setTimeout(() => recover("load failed (" + description + ", " + url + ")"), 1000);
-  });
-  wc.on("unresponsive", () => log("window: page not responding"));
-  wc.on("responsive", () => log("window: page responding again"));
-  wc.on("did-start-loading", () => {
-    ready = false;
-    clearTimeout(timer);
-    timer = setTimeout(() => {
-      if (!ready) recover("page did not finish starting within " + Math.round(limit / 1000) + "s", true);
-    }, limit);
-  });
-  win.on("closed", () => clearTimeout(timer));
+  const on = {
+    "render-process-gone": (_event, details) => {
+      if (killing) {
+        killing = false;
+        wc.reload();
+        return;
+      }
+      recover("page process gone (" + details.reason + (details.exitCode ? ", code " + details.exitCode : "") + ")");
+    },
+    "did-fail-load": (_event, code, description, url, isMainFrame) => {
+      // -3 is an aborted load (a reload replacing it), not a failure.
+      if (isMainFrame && code !== -3) failTimer = setTimeout(() => recover("load failed (" + description + ", " + url + ")"), 1000);
+    },
+    unresponsive: () => log("window: page not responding"),
+    responsive: () => log("window: page responding again"),
+    "did-start-loading": () => {
+      ready = false;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (!ready) recover("page did not finish starting within " + Math.round(limit / 1000) + "s", true);
+      }, limit);
+    },
+    destroyed: () => dispose(),
+  };
+  for (const [name, fn] of Object.entries(on)) wc.on(name, fn);
+
+  function dispose() {
+    for (const t of [timer, killTimer, failTimer]) clearTimeout(t);
+    killing = false;
+    if (!wc.isDestroyed()) for (const [name, fn] of Object.entries(on)) wc.removeListener(name, fn);
+  }
 
   return {
     ready() {
@@ -88,6 +103,7 @@ function watchWindow(win, { log, readyMs }) {
       clearTimeout(timer);
     },
     recover,
+    dispose,
   };
 }
 

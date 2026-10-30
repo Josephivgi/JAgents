@@ -5,7 +5,8 @@
 // every agent open pages, read them, take screenshots, click and type in the
 // same browser the user sees.
 
-const { WebContentsView, shell } = require("electron");
+const path = require("node:path");
+const { WebContentsView, shell, app, session } = require("electron");
 
 const HOME = "https://duckduckgo.com/";
 const LOAD_MS = 20000;
@@ -19,8 +20,31 @@ function normalizeUrl(input) {
   return "https://duckduckgo.com/?q=" + encodeURIComponent(v);
 }
 
+// Cookies and sign-ins live in the JAgents data folder (Partitions\jagents-browser).
+// The desktop app's userData is that folder, so a partition finds it. Inside
+// another app (JWorkspace) userData is that app's, so the same folder is
+// opened by path; one JAgents owns a data folder at a time.
+function browserSession(ctx) {
+  const dataRoot = path.resolve(ctx.dataDir, "..", "..");
+  const own = path.resolve(app.getPath("userData")).toLowerCase() === dataRoot.toLowerCase();
+  if (own || typeof session.fromPath !== "function") return { partition: "persist:jagents-browser" };
+  return { session: session.fromPath(path.join(dataRoot, "Partitions", "jagents-browser")) };
+}
+
+// Electron cannot close a session, so once a page has used the shared
+// folder this process keeps it open until it exits. jworkspace.cjs keeps the
+// data folder's owner lock until then, so the desktop app does not open the
+// same storage meanwhile (two at once lose each other's cookies). Kept on
+// the process, not this module: a reload forgets the module.
+function markShared(dataRoot) {
+  const key = Symbol.for("jagents.sharedBrowser");
+  if (!globalThis[key]) globalThis[key] = new Set();
+  globalThis[key].add(dataRoot.toLowerCase());
+}
+
 exports.activate = (ctx) => {
   const tabs = new Map(); // pane id -> {view, visible}
+  const browserData = browserSession(ctx);
   const attachWaiters = [];
   let active = "";
 
@@ -39,7 +63,8 @@ exports.activate = (ctx) => {
   function ensure(id, url) {
     const existing = tabs.get(id);
     if (existing) return existing;
-    const view = new WebContentsView({ webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, partition: "persist:jagents-browser" } });
+    if (browserData.session) markShared(path.resolve(ctx.dataDir, "..", ".."));
+    const view = new WebContentsView({ webPreferences: Object.assign({ sandbox: true, contextIsolation: true, nodeIntegration: false }, browserData) });
     view.setBackgroundColor("#ffffff");
     view.setVisible(false);
     const t = { id, view, visible: false };

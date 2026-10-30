@@ -1,0 +1,14 @@
+{
+  "id": "jagents-desktop",
+  "name": "JAgents Desktop",
+  "description": "Threads, chats, terminals, the MCP hub, plugins and ACP agents.",
+  "icon": "build/icon.png",
+  "page": "renderer/index.html",
+  "url": "jagents-app://shell/index.html",
+  "preload": "electron/preload.cjs",
+  "main": "electron/jworkspace.cjs",
+  "section": "ade",
+  "autostart": false,
+  "switches": { "max-active-webgl-contexts": 64 },
+  "schemes": [{ "scheme": "jagents-app", "privileges": { "standard": true, "secure": true, "supportFetchAPI": true } }]
+}

@@ -56,3 +56,27 @@ test("only the host that owns the process answers the terminal query", async () 
   assert.deepStrictEqual(proc.written, []);
   host.killAll();
 });
+
+test("disposeAll drops the mirrors and leaves the processes to the daemon", async () => {
+  const procs = [];
+  let killed = 0;
+  const host = createPtyHost({
+    emit: () => {},
+    spawn: () => {
+      const p = fakeProc();
+      p.kill = () => killed++;
+      procs.push(p);
+      return p;
+    },
+  });
+  host.create({ id: "a", cols: 80, rows: 24 });
+  host.create({ id: "b", cols: 80, rows: 24 });
+  host.disposeAll();
+  assert.deepStrictEqual(host.ids(), []);
+  assert.strictEqual(killed, 0);
+  // Late output or an exit from the daemon reaches nothing.
+  procs[0].emit("late");
+  procs[1].exitFns.forEach((fn) => fn({ exitCode: 0 }));
+  await tick();
+  assert.strictEqual(host.has("a"), false);
+});

@@ -35,6 +35,14 @@ npm start
 
 Requires Node.js 22.5 or newer (for `node:sqlite`) and Windows, macOS or Linux.
 
+## Inside JWorkspace
+
+JWorkspace (the JSystems workspace app) can run this folder as **JAgents Desktop**, in its ADE section next to the JAgents terminal app. In JWorkspace, open **Apps**, add this folder, and restart JWorkspace once so it registers the `jagents-app` page scheme. `jworkspace.json` describes the app; `electron/jworkspace.cjs` starts the same backend the desktop app runs (`electron/backend.cjs`).
+
+- It uses the desktop app's data (`%APPDATA%\JAgents`, `~/.jagents`, or `JAGENTS_DATA_ROOT` and `JAGENTS_HOME`): the same threads, terminals, plugins, hub and browser sign-ins. Only one JAgents can have that data open. While the desktop app is open, JWorkspace shows "JAgents Desktop is open in its own window. Close it, then press Reload." Opening the desktop app (this version or later) while JWorkspace has the data brings JWorkspace's JAgents Desktop page forward instead. Older desktop builds (0.6.5 and earlier) do not know about this and take the terminal service over; JWorkspace's copy then stops without saving, so it does not overwrite their data. Once JAgents Desktop used its browser inside JWorkspace, the browser data stays open until JWorkspace quits, so the desktop app says to quit JWorkspace first even after a Stop.
+- It does not install updates itself: it runs the folder JWorkspace loaded, so update that folder. **Restart JAgents** reloads it in place; terminals keep running.
+- JWorkspace's hidden test runs (`--smoke`, `--home`) give it scratch data and turn off Auto MCP.
+
 ## Using it
 
 - **Code**: terminals and chats in a split grid.
@@ -57,6 +65,15 @@ JAgents checks the latest release of this repo at startup and every 6 hours. Whe
 - App data: `%APPDATA%\JAgents` (Windows).
 - Coming from Relay: **MCP hub > Legacy (development) > Import from legacy Relay**, then restart. It copies your threads, layout, plugins, and MCP setup. Relay's own files are only read.
 - Hub files: `~/.jagents` (`hub.json`, `jagents-mcp.cjs`).
+- One JAgents per data folder: the app that has it open holds the named pipe `\\.\pipe\jagents-owner-<hash>` (`electron/owner-lock.cjs`).
+
+## Test
+
+```
+npm test
+```
+
+`electron . --smoke` runs the desktop app hidden with scratch data: set `JAGENTS_DATA_ROOT` and `JAGENTS_HOME` to scratch folders first (it refuses to run without them). It loads the page, runs `test/fixtures/page-check.js` in it (app info, a terminal round trip through the pty daemon), prints JSON and quits. `--smoke-hold=<ms>` (at most 60 s) keeps it open that much longer, still owning its data folder, so a test can try a second JAgents on the same data. `electron test/fixtures/jworkspace-host.cjs --scratch=<folder>` loads `electron/jworkspace.cjs` the way JWorkspace does, in a hidden window, and checks the owner guard, start, a close while it starts, reload and stop.
 
 ## License
 

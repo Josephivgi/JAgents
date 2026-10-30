@@ -20,6 +20,7 @@
 // plugin-data/<id>.
 
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
@@ -123,10 +124,14 @@ and do network work in main.cjs.
     handler returns any JSON value or a promise; caller is the agent ({handle, kind, ...}).
 - ctx.handle(channel, fn(payload)): answer jagents.invoke from the renderer.
 - ctx.send(channel, payload): reach jagents.onMessage in the renderer.
-- ctx.window(): the JAgents BrowserWindow. require("electron") works too.
+- ctx.window(): the JAgents BrowserWindow. Inside JWorkspace, a stand-in with
+  contentView (views added there use the page's coordinates), webContents,
+  isDestroyed, isFocused, focus and on("closed"). require("electron") works too.
 - ctx.hub(toolName, args): call a jagents tool as the app (list_agents, send_message, ...).
 - ctx.notify(text): a toast. ctx.log(...): JAgents's log.
 - ctx.dir: this plugin's folder. ctx.dataDir: a folder for its own files.
+- ctx.hubDir: the folder with the hub's files (hub.json, jagents-mcp.cjs,
+  jagents-plugin-mcp.cjs), usually ~/.jagents.
 - ctx.dispose(fn): run fn when the plugin unloads.
 - ctx.permissions.ask({ parent, handle, agentName, harnessId, params }): an agent this
     plugin runs for another agent (parent: that agent's handle) asks to use a tool.
@@ -165,7 +170,8 @@ If a plugin breaks the window, Ctrl+Shift+F12 turns every plugin off (safe mode)
 and reloads; the Plugins panel turns them back on.
 `;
 
-function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, builtinDir, getWindow, permissions }) {
+// hubDir: the hub's folder (ctx.hubDir); ~/.jagents or JAGENTS_HOME when not given.
+function createPluginManager({ dataRoot, hubDir, db, emit, notify, log, bundledDir, builtinDir, getWindow, permissions }) {
   const dir = path.join(dataRoot, "plugins");
   const historyDir = path.join(dir, ".history");
   const trashDir = path.join(dir, ".trash");
@@ -175,6 +181,7 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, buil
   const suppress = new Map(); // id -> ms until which watcher events are ours
   let hubCall = null;
   let watcher = null;
+  const watchTimers = new Map(); // id -> reload waiting for edits to settle
 
   fs.mkdirSync(dir, { recursive: true });
   try {
@@ -459,6 +466,7 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, buil
       id,
       dir: rootOf(id),
       dataDir,
+      hubDir: hubDir || (process.env.JAGENTS_HOME ? path.resolve(process.env.JAGENTS_HOME) : path.join(os.homedir(), ".jagents")),
       log: (...args) => log("[plugin " + id + "] " + args.map(String).join(" ")),
       notify: (text) => notify(String(text)),
       send: (channel, payload) => emit("plugin-message", { id, channel: String(channel), payload }),
@@ -702,7 +710,7 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, buil
 
   // Edits made outside JAgents (an editor, an agent's own file tools) reload too.
   function watch() {
-    const timers = new Map();
+    const timers = watchTimers;
     try {
       watcher = fs.watch(dir, { recursive: true }, (_event, file) => {
         const id = String(file || "").split(/[\\/]/)[0];
@@ -734,6 +742,8 @@ function createPluginManager({ dataRoot, db, emit, notify, log, bundledDir, buil
 
   function stop() {
     if (watcher) watcher.close();
+    for (const t of watchTimers.values()) clearTimeout(t);
+    watchTimers.clear();
     for (const id of Array.from(mains.keys())) unloadMain(id);
   }
 

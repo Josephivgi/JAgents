@@ -6,6 +6,11 @@
 // running from before a restart are adopted with their screens, and new ones
 // are created in the daemon. detach() leaves them running for the next app;
 // shutdown() closes them.
+//
+// The daemon serves one app at a time and drops the one it had when another
+// connects. onLost() runs when the connection ends without detach() or
+// shutdown(): another JAgents took the terminals (a build without the owner
+// lock), or the daemon stopped.
 
 const fs = require("node:fs");
 const os = require("node:os");
@@ -39,21 +44,23 @@ function connectOnce(pipe) {
   });
 }
 
-function startDaemon(pipe, logFile) {
+// env: the base environment for the daemon and so for every terminal it
+// starts (a cleaned copy when JAgents runs inside another app).
+function startDaemon(pipe, logFile, env) {
   const child = spawn(process.execPath, [path.join(__dirname, "pty-daemon.cjs"), pipe, logFile], {
     detached: true,
     stdio: "ignore",
     windowsHide: true,
-    env: Object.assign({}, process.env, { ELECTRON_RUN_AS_NODE: "1" }),
+    env: Object.assign({}, env || process.env, { ELECTRON_RUN_AS_NODE: "1" }),
   });
   child.unref();
 }
 
-async function reach(pipe, logFile) {
+async function reach(pipe, logFile, env) {
   try {
     return await connectOnce(pipe);
   } catch {
-    startDaemon(pipe, logFile);
+    startDaemon(pipe, logFile, env);
   }
   for (let i = 0; i < 60; i++) {
     await new Promise((r) => setTimeout(r, 100));
@@ -66,13 +73,14 @@ async function reach(pipe, logFile) {
   throw new Error("The JAgents terminal service did not start. See " + logFile + ".");
 }
 
-async function connectPtyHost({ emit, dataRoot }) {
+async function connectPtyHost({ emit, dataRoot, env, onLost }) {
   const pipe = pipePath(dataRoot);
   const logFile = path.join(dataRoot, "pty-daemon.log");
   fs.mkdirSync(dataRoot, { recursive: true });
   const procs = new Map(); // id -> proxy for the daemon's process
   let sock = null;
   let hello = null;
+  let leaving = false;
 
   function send(msg) {
     if (sock && !sock.destroyed) sock.write(JSON.stringify(msg) + "\n");
@@ -126,7 +134,7 @@ async function connectPtyHost({ emit, dataRoot }) {
     }
   }
 
-  sock = await reach(pipe, logFile);
+  sock = await reach(pipe, logFile, env);
   const greeting = new Promise((resolve) => (hello = resolve));
   let buf = "";
   sock.setEncoding("utf8");
@@ -144,6 +152,7 @@ async function connectPtyHost({ emit, dataRoot }) {
     // The daemon went away: its terminals are gone with it.
     sock = null;
     for (const id of Array.from(procs.keys())) exitProc(id, null);
+    if (!leaving && onLost) onLost();
   });
 
   const first = await Promise.race([greeting, new Promise((_, reject) => setTimeout(() => reject(new Error("The JAgents terminal service did not answer.")), 5000))]);
@@ -151,12 +160,14 @@ async function connectPtyHost({ emit, dataRoot }) {
   await Promise.all(first.terms.map((snap) => host.adopt(snap, proxy(snap.id, snap.pid))));
 
   // Waits until the message is on its way, so it survives the app exiting.
+  // Then the mirrors go: an app reloaded in the same process keeps nothing.
   function last(op) {
+    leaving = true;
     return new Promise((resolve) => {
       if (!sock || sock.destroyed) return resolve();
       sock.end(JSON.stringify({ op }) + "\n", resolve);
       setTimeout(resolve, 1500);
-    });
+    }).then(() => host.disposeAll());
   }
 
   return Object.assign(host, {

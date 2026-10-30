@@ -121,6 +121,9 @@ function createAcpHost(options) {
   const turnWaiters = new Map(); // chatId -> Set<fn>
   const queues = new Map(); // chatId -> [{id, text, attachments, from}]
   const NO_CAPS = { image: false, audio: false, embeddedContext: false };
+  // stopAll ran: nothing starts, queues, emits or sets a timer after it.
+  let closed = false;
+  let saveAfterStop = true;
 
   // prompt(chatId, "text", {from}) or prompt(chatId, {text, attachments}, {from}).
   // Attachments here are already saved (see saveAttachments).
@@ -558,6 +561,7 @@ function createAcpHost(options) {
 
   function emitState(chatId, now) {
     clearTimeout(emitTimers.get(chatId));
+    if (closed) return;
     const fire = () => {
       emitTimers.delete(chatId);
       const snap = snapshot(chatId);
@@ -575,6 +579,18 @@ function createAcpHost(options) {
       if (!chat) return;
       db.saveChat(Object.assign(chat, { acpSessionId: s.sessionId || chat.acpSessionId, transcript: s.transcript.slice(-TRANSCRIPT_MAX), title: s.title || chat.title }), { forHarness: s.harnessId });
     };
+    // After stopAll no timer is set. A turn it ended still saves its last
+    // rows while the database is open; nothing once another JAgents has it.
+    if (closed) {
+      if (now && saveAfterStop) {
+        try {
+          save();
+        } catch {
+          /* the database closed first */
+        }
+      }
+      return;
+    }
     if (now) save();
     else saveTimers.set(s.chatId, setTimeout(save, 400));
   }
@@ -674,6 +690,7 @@ function createAcpHost(options) {
   }
 
   async function start(chatId) {
+    if (closed) throw new Error("JAgents is stopping.");
     const existing = sessions.get(chatId);
     if (existing && !existing.disposed) {
       if (existing.startPromise) return existing.startPromise;
@@ -834,6 +851,7 @@ function createAcpHost(options) {
   }
 
   async function prompt(chatId, textIn, meta) {
+    if (closed) throw new Error("JAgents is stopping.");
     const arg = promptArg(textIn, meta);
     const userText = arg.text.trim();
     const from = arg.from;
@@ -965,6 +983,7 @@ function createAcpHost(options) {
   }
 
   function drainQueue(chatId) {
+    if (closed) return;
     const q = queues.get(chatId);
     if (!q || !q.length) return;
     const s = sessions.get(chatId);
@@ -1123,7 +1142,15 @@ function createAcpHost(options) {
     return ok;
   }
 
-  function stopAll() {
+  // save: false when another JAgents has the data now; nothing more is written.
+  function stopAll(opts) {
+    // Nothing starts or fires after the app stops: JAgents inside JWorkspace
+    // reloads in the same process and closes the database. Queued messages
+    // are dropped, or a turn ended here would send the next one and start its
+    // agent again in a stopped app. Waiting hub calls end now.
+    closed = true;
+    saveAfterStop = !(opts && opts.save === false);
+    queues.clear();
     for (const s of sessions.values()) {
       persist(s, true);
       dispose(s);
@@ -1131,6 +1158,11 @@ function createAcpHost(options) {
     sessions.clear();
     for (const p of probes.values()) if (p.client) p.client.stop();
     probes.clear();
+    for (const t of emitTimers.values()) clearTimeout(t);
+    emitTimers.clear();
+    for (const t of saveTimers.values()) clearTimeout(t);
+    saveTimers.clear();
+    for (const chatId of Array.from(turnWaiters.keys())) notifyTurn(chatId);
   }
 
   function liveIds() {

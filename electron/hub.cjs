@@ -173,12 +173,15 @@ function processTable() {
   });
 }
 
-function createHub({ workspace, ptyHost, acpHost, plugins, dataRoot, emit, notify, restartApp }) {
+// homeDir: where hub.json and the MCP scripts go (HOME_DIR when not given).
+function createHub({ workspace, ptyHost, acpHost, plugins, dataRoot, emit, notify, restartApp, homeDir }) {
+  const home = homeDir || HOME_DIR;
   const token = randomBytes(24).toString("hex");
-  const files = { dir: HOME_DIR, hub: path.join(HOME_DIR, "hub.json"), script: path.join(HOME_DIR, "jagents-mcp.cjs"), pluginScript: path.join(HOME_DIR, "jagents-plugin-mcp.cjs"), tools: path.join(HOME_DIR, "tools.json") };
+  const files = { dir: home, hub: path.join(home, "hub.json"), script: path.join(home, "jagents-mcp.cjs"), pluginScript: path.join(home, "jagents-plugin-mcp.cjs"), tools: path.join(home, "tools.json") };
   const callerCache = new Map();
   const log = [];
   let server = null;
+  let restartTimer = null;
 
   function record(entry) {
     log.push(Object.assign({ at: Date.now() }, entry));
@@ -207,7 +210,7 @@ function createHub({ workspace, ptyHost, acpHost, plugins, dataRoot, emit, notif
   }
 
   function writeFiles(port) {
-    fs.mkdirSync(HOME_DIR, { recursive: true });
+    fs.mkdirSync(home, { recursive: true });
     // The server reports this build's version to agents.
     const version = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).version;
     fs.writeFileSync(files.script, fs.readFileSync(path.join(__dirname, "..", "mcp", "jagents-mcp.cjs"), "utf8").replaceAll("__JAGENTS_VERSION__", version));
@@ -418,7 +421,7 @@ function createHub({ workspace, ptyHost, acpHost, plugins, dataRoot, emit, notif
         record({ type: "restart", from: author(me), to: "JAgents", text: why });
         if (notify) notify(author(me) + " is restarting JAgents" + (why ? ": " + why : "") + ". Terminals stay open.");
         // Answer first; the restart starts once the reply is on its way.
-        setTimeout(restartApp, 1500);
+        restartTimer = setTimeout(restartApp, 1500);
         return { restarting: true, terminals_kept: workspace.agents().filter((x) => x.kind === "terminal").map((x) => x.handle), note: "JAgents is back in a few seconds. Call whoami to check before using other jagents tools." };
       }
       case "plugin_docs":
@@ -524,8 +527,14 @@ function createHub({ workspace, ptyHost, acpHost, plugins, dataRoot, emit, notif
     });
   }
 
+  // Open requests end too (wait_for_agent can hold one for 15 minutes), so
+  // nothing from this hub outlives an in-process reload.
   function stop() {
-    if (server) server.close();
+    clearTimeout(restartTimer);
+    if (server) {
+      server.close();
+      server.closeAllConnections();
+    }
     try {
       const cur = JSON.parse(fs.readFileSync(files.hub, "utf8"));
       if (cur.pid === process.pid) fs.unlinkSync(files.hub);

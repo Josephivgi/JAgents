@@ -133,6 +133,24 @@ test("messages sent mid-turn queue, can be edited, and go out in order", async (
   host.stopAll();
 });
 
+test("stopping drops queued messages instead of starting the agent again", async () => {
+  const { host } = makeHost();
+  const chat = host.createChat({ harnessId: "fake" });
+  await host.setPermissionMode(chat.chatId, "auto");
+  const first = host.prompt(chat.chatId, "execute 5");
+  await until(() => host.snapshot(chat.chatId).status === "busy");
+  await host.prompt(chat.chatId, "read");
+  assert.equal(host.snapshot(chat.chatId).queued, 1);
+  host.stopAll();
+  await first.catch(() => {});
+  // The ended turn's queue drain would run on the next tick.
+  await new Promise((r) => setTimeout(r, 500));
+  assert.deepEqual(host.liveIds(), []);
+  assert.equal(host.isBusy(chat.chatId), false);
+  assert.deepEqual(host.snapshot(chat.chatId).transcript.filter((r) => r.role === "user").map((r) => r.text), ["execute 5"]);
+  await assert.rejects(host.prompt(chat.chatId, "read"), /stopping/);
+});
+
 test("a subagent asks through its parent's thread, named on the card", async () => {
   const { host } = makeHost();
   const parent = host.createChat({ harnessId: "fake", handle: "fake-1" });
