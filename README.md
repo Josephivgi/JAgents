@@ -43,10 +43,6 @@ JWorkspace (the JSystems workspace app) can run this folder as **JAgents Desktop
 - It does not install updates itself: it runs the folder JWorkspace loaded, so update that folder. **Restart JAgents** reloads it in place; terminals keep running.
 - JWorkspace's hidden test runs (`--smoke`, `--home`) give it scratch data and turn off Auto MCP.
 
-### The jworkspace MCP server
-
-From 0.7, when JWorkspace is on this computer, every agent JAgents starts (chats and terminals, in the desktop app or inside JWorkspace) gets JWorkspace's `jworkspace` MCP server, with tools to make, load and test JWorkspace plugins. JAgents looks for the copy JWorkspace keeps in `%APPDATA%\JWorkspace\mcp` (or `JWORKSPACE_HOME`) each time it starts an agent, so installing JWorkspace later needs no setup. JWorkspace may not be released yet; until it is, nothing changes. **Settings > JWorkspace** shows what JAgents found and has a switch to turn it off. `electron/jworkspace-link.cjs` does the detection.
-
 ## Using it
 
 - **Code**: terminals and chats in a split grid.
