@@ -9,7 +9,7 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { cleanEnv, setChildEnv, childEnv } = require("../lib/child-env");
+const { cleanEnv, regNames, setChildEnv, childEnv } = require("../lib/child-env");
 const { AcpClient } = require("../lib/acp-client");
 
 test("a Claude Code session's markers are dropped from a copy", () => {
@@ -26,9 +26,34 @@ test("without a session marker the Claude variables stay", () => {
 });
 
 test("NO_COLOR goes on Windows unless the user set it there", () => {
-  assert.strictEqual("NO_COLOR" in cleanEnv({ NO_COLOR: "1" }, { platform: "win32", noColorUserSet: () => false }), false);
-  assert.strictEqual(cleanEnv({ NO_COLOR: "1" }, { platform: "win32", noColorUserSet: () => true }).NO_COLOR, "1");
+  assert.strictEqual("NO_COLOR" in cleanEnv({ NO_COLOR: "1" }, { platform: "win32", userSet: () => false }), false);
+  assert.strictEqual(cleanEnv({ NO_COLOR: "1" }, { platform: "win32", userSet: (k) => k === "NO_COLOR" }).NO_COLOR, "1");
   assert.strictEqual(cleanEnv({ NO_COLOR: "1" }, { platform: "linux" }).NO_COLOR, "1");
+});
+
+test("FORCE_COLOR=0 goes on Windows unless the user set it; FORCE_COLOR that turns color on stays", () => {
+  for (const v of ["0", "false", "no"]) assert.strictEqual("FORCE_COLOR" in cleanEnv({ FORCE_COLOR: v }, { platform: "win32", userSet: () => false }), false, v);
+  assert.strictEqual(cleanEnv({ FORCE_COLOR: "0" }, { platform: "win32", userSet: (k) => k === "FORCE_COLOR" }).FORCE_COLOR, "0");
+  assert.strictEqual(cleanEnv({ FORCE_COLOR: "3" }, { platform: "win32", userSet: () => false }).FORCE_COLOR, "3");
+});
+
+test("the agent host's GIT_EDITOR=true and COREPACK_ENABLE_AUTO_PIN=0 are dropped in a session", () => {
+  const out = cleanEnv({ CLAUDECODE: "1", GIT_EDITOR: "true", COREPACK_ENABLE_AUTO_PIN: "0" }, { platform: "win32", userSet: () => false });
+  assert.deepStrictEqual(out, {});
+  assert.strictEqual(cleanEnv({ CLAUDECODE: "1", GIT_EDITOR: "code --wait" }, { platform: "linux" }).GIT_EDITOR, "code --wait");
+  assert.strictEqual(cleanEnv({ GIT_EDITOR: "true" }, { platform: "linux" }).GIT_EDITOR, "true");
+});
+
+test("session keys the user set in Windows stay (gateway, context window)", () => {
+  const mine = ["ANTHROPIC_BASE_URL", "CLAUDE_CODE_MAX_CONTEXT_TOKENS"];
+  const env = { CLAUDECODE: "1", CLAUDE_CODE_SESSION_ID: "s", ANTHROPIC_BASE_URL: "https://gateway", CLAUDE_CODE_MAX_CONTEXT_TOKENS: "400000" };
+  const out = cleanEnv(env, { platform: "win32", userSet: (k) => mine.includes(k) });
+  assert.deepStrictEqual(out, { ANTHROPIC_BASE_URL: "https://gateway", CLAUDE_CODE_MAX_CONTEXT_TOKENS: "400000" });
+});
+
+test("reg query output gives the names the user set", () => {
+  const text = ["", "HKEY_CURRENT_USER\\Environment", "    Path    REG_EXPAND_SZ    C:\\a", "    NO_COLOR    REG_SZ    1", ""].join("\r\n");
+  assert.deepStrictEqual([...regNames(text)].sort(), ["NO_COLOR", "PATH"]);
 });
 
 test("childEnv is process.env until a host sets a cleaned copy", () => {

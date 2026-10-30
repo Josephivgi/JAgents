@@ -32,7 +32,8 @@ const SHELL_URL = "app://shell/index.html";
 const SMOKE = process.argv.includes("--smoke");
 
 // JAgents started from inside a Claude Code session or an agent shell drops
-// that session's markers and NO_COLOR (lib/child-env.js) for everything it starts.
+// that session's markers and colour-off switches (lib/child-env.js) for
+// everything it starts.
 {
   const clean = cleanEnv(process.env);
   for (const key of Object.keys(process.env)) if (!(key in clean)) delete process.env[key];

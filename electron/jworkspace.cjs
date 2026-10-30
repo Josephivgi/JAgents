@@ -20,7 +20,7 @@
 const os = require("node:os");
 const path = require("node:path");
 const { app } = require("electron");
-const { cleanEnv } = require("../lib/child-env");
+const { cleanEnv, loadUserEnv } = require("../lib/child-env");
 const { createBackend } = require("./backend.cjs");
 const ownerLock = require("./owner-lock.cjs");
 
@@ -133,6 +133,9 @@ async function activate(ctx) {
       ctx.log("not starting: " + other.why + " (pid " + other.pid + ") on " + dataRoot);
       throw new Error(OPEN_IN_DESKTOP);
     }
+    // The variables the user set in Windows, read off the main thread
+    // before cleanEnv needs them.
+    await loadUserEnv();
     still();
     state.backend = createBackend({
       dataRoot,
