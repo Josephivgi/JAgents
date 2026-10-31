@@ -7,7 +7,8 @@
 import { esc, toast, errorText } from "./util.js";
 import { icon } from "./icons.js";
 import { store, fire, on } from "./store.js";
-import { modal } from "./dialogs.js";
+import { modal, dropdown, closeMenuOf, holdOverlay } from "./dialogs.js";
+import { sizedSvg, trimRect, splitZone, clipRect } from "./plugin-layout.js";
 
 const loaded = new Map(); // id -> {stamp, cleanups: [fn]}
 const kinds = new Map(); // "plugin:kind" -> {pluginId, def, version}
@@ -40,23 +41,53 @@ function guard(id, fn) {
   };
 }
 
-function iconHtml(name, size) {
-  const n = String(name || "puzzle");
-  return n.trim().startsWith("<svg") ? n : icon(n, size);
+// A plugin's CSS (style.css and jagents.css) goes in a cascade layer under
+// JAgents' own CSS: a plugin's .modal or .dropdown rule styles its own
+// elements and never restyles JAgents' dialogs and menus. Where both set the
+// same property on one element, JAgents wins unless the plugin says
+// !important. Built-in features are part of JAgents and stay unlayered.
+function pluginCss(p, text) {
+  return p.builtin ? text : "@layer jagents-plugins {\n" + text + "\n}";
 }
 
-function paintSections() {
+function iconHtml(name, size) {
+  const n = String(name || "puzzle");
+  return n.trim().startsWith("<svg") ? sizedSvg(n, size) : icon(n, size);
+}
+
+// Sidebar sections keep a fixed order (plugin load order, then the order a
+// plugin added them), so a reloaded plugin's sections come back in place.
+function allSections() {
+  return Array.from(sections.values()).flat();
+}
+
+function sectionBox() {
   const box = document.querySelector("[data-plugin-side]");
+  if (box) box.hidden = allSections().length === 0;
+  return box;
+}
+
+// Draws one section. Others keep their DOM, so typed text, focus and scroll
+// in another plugin's section survive.
+function paintSection(s) {
+  const box = sectionBox();
   if (!box) return;
-  const all = Array.from(sections.values()).flat();
-  box.hidden = all.length === 0;
-  for (const s of all) {
-    if (!s.el.isConnected) box.appendChild(s.el);
-    s.el.querySelector(".nav-label").textContent = s.title;
-    const body = s.el.querySelector(".plugin-section-body");
-    body.innerHTML = "";
-    s.render(body);
+  if (s.el.parentNode !== box) {
+    const all = allSections();
+    const next = all.slice(all.indexOf(s) + 1).find((x) => x.el.parentNode === box);
+    box.insertBefore(s.el, next ? next.el : null);
   }
+  const label = s.el.querySelector(".nav-label");
+  label.textContent = s.title;
+  label.title = s.title;
+  const body = s.el.querySelector(".plugin-section-body");
+  body.innerHTML = "";
+  s.render(body);
+}
+
+function paintSections(id) {
+  for (const s of id ? sections.get(id) || [] : allSections()) paintSection(s);
+  sectionBox();
 }
 
 function apiFor(p, storage, cleanups) {
@@ -73,14 +104,17 @@ function apiFor(p, storage, cleanups) {
     toast: (text) => toast(String(text)),
     modal: (html, opts) => {
       const m = modal(String(html || ""), { wide: Boolean(opts && opts.wide) });
-      if (opts && opts.width) m.el.style.width = Number(opts.width) + "px";
+      // Never wider than the window: the close and action buttons stay on screen.
+      if (opts && opts.width) {
+        m.el.style.setProperty("--modal-w", "min(" + Math.max(0, Number(opts.width) || 0) + "px, 100%)");
+      }
       later(m.close);
       return m;
     },
     css(text) {
       const el = document.createElement("style");
       el.dataset.plugin = id;
-      el.textContent = String(text || "");
+      el.textContent = pluginCss(p, String(text || ""));
       document.head.appendChild(el);
       later(() => el.remove());
       return { remove: () => el.remove() };
@@ -96,6 +130,24 @@ function apiFor(p, storage, cleanups) {
       later(off);
       return off;
     },
+    // Something of the plugin's own (a popover, a floating panel) is over the
+    // panes: native views hide until release() or the plugin unloads.
+    overlay(el) {
+      const release = holdOverlay(el && el.nodeType === 1 ? el : null);
+      later(release);
+      return release;
+    },
+    // A menu drawn by JAgents above everything, next to anchor. Use it for
+    // dropdowns in sidebar sections and panes, which clip their own content.
+    menu(anchor, items, opts) {
+      const list = (Array.isArray(items) ? items : []).map((it) => (it && typeof it.onPick === "function" ? Object.assign({}, it, { onPick: guard(id, it.onPick) }) : it));
+      dropdown(anchor, list, opts);
+      later(() => closeMenuOf(anchor));
+      return { close: () => closeMenuOf(anchor) };
+    },
+    // Where a native view for el (a page's view in main.main) may go: its
+    // rect less the grab zones of the dividers and the sidebar edge.
+    viewRect: (el) => viewRect(el),
     invoke: (channel, payload) => window.jagents.plugins.invoke(id, String(channel), payload),
     dispose: (fn) => later(fn),
     storage: {
@@ -119,11 +171,14 @@ function apiFor(p, storage, cleanups) {
         b.title = String(o.title || o.label || p.name);
         b.setAttribute("aria-label", b.title);
         b.innerHTML = iconHtml(o.icon, 15);
-        if (o.onClick) b.addEventListener("click", guard(id, (e) => o.onClick(e, b)));
+        // A button in the More menu has no box: anchor() is the More button
+        // then, so a popover placed next to it lands by the dock.
+        const anchor = () => (b.classList.contains("dock-over") && document.querySelector("[data-dock-more]")) || b;
+        if (o.onClick) b.addEventListener("click", guard(id, (e) => o.onClick(e, b, anchor())));
         if (host) host.appendChild(b);
         const remove = () => b.remove();
         later(remove);
-        return { el: b, remove };
+        return { el: b, remove, anchor };
       },
     },
     sidebar: {
@@ -137,16 +192,17 @@ function apiFor(p, storage, cleanups) {
         const list = sections.get(id) || [];
         list.push(entry);
         sections.set(id, list);
-        paintSections();
+        paintSection(entry);
         const remove = () => {
           el.remove();
           sections.set(id, (sections.get(id) || []).filter((x) => x !== entry));
-          paintSections();
+          sectionBox();
         };
         later(remove);
-        return { el, remove, refresh: paintSections };
+        return { el, remove, refresh: () => (sections.get(id) || []).includes(entry) && paintSection(entry) };
       },
-      refresh: paintSections,
+      // Draws this plugin's sections again; other plugins' are left alone.
+      refresh: () => paintSections(id),
     },
     panes: {
       register(kind, def) {
@@ -193,7 +249,7 @@ async function load(p) {
       if (!res.ok) throw new Error("style.css could not be read (" + res.status + ")");
       const el = document.createElement("style");
       el.dataset.plugin = p.id;
-      el.textContent = await res.text();
+      el.textContent = pluginCss(p, await res.text());
       document.head.appendChild(el);
       cleanups.push(() => el.remove());
     }
@@ -241,7 +297,67 @@ function paintCard() {
   el.classList.toggle("warn-text", Boolean(st.safeMode || broken));
 }
 
+// Plugin buttons share the dock's icon rows with Activity, Usage and Settings,
+// two rows at most. Buttons that do not fit go in the More button's menu, so
+// the dock never pushes Projects or the usage bars out of the window.
+const DOCK_ROWS = 2;
+
+function fitDock() {
+  const row = document.querySelector(".dock-icons");
+  const host = document.querySelector("[data-plugin-top]");
+  const more = document.querySelector("[data-dock-more]");
+  if (!row || !host || !more) return;
+  const btns = Array.from(host.children);
+  // Hiding More to measure would drop its focus: note who has it first.
+  const focused = btns.includes(document.activeElement) || document.activeElement === more ? document.activeElement : null;
+  for (const b of btns) if (b.classList.contains("dock-over")) b.classList.remove("dock-over");
+  if (!more.hidden) more.hidden = true;
+  const first = row.firstElementChild;
+  const shown = btns.filter((b) => b.offsetHeight > 0);
+  if (!shown.length || !first || !first.offsetHeight) return;
+  const pitch = first.offsetHeight + (parseFloat(getComputedStyle(row).rowGap) || 0);
+  const rowOf = (el) => Math.round((el.offsetTop - first.offsetTop) / pitch);
+  let cut = shown.findIndex((b) => rowOf(b) >= DOCK_ROWS);
+  if (cut < 0) {
+    if (focused === more) shown[shown.length - 1].focus({ preventScroll: true });
+    return;
+  }
+  more.hidden = false;
+  for (const b of shown.slice(cut)) b.classList.add("dock-over");
+  // The More button takes a slot too.
+  while (cut > 0 && rowOf(more) >= DOCK_ROWS) shown[--cut].classList.add("dock-over");
+  // A focused button that moved into More hands the focus to More, so a
+  // keyboard user keeps their place in the dock.
+  if (focused && (focused === more || focused.classList.contains("dock-over")) && document.activeElement !== more) more.focus({ preventScroll: true });
+}
+
+function moreMenu(anchor) {
+  const over = Array.from(document.querySelectorAll("[data-plugin-top] > .dock-over"));
+  dropdown(
+    anchor,
+    over.map((b) => {
+      const svg = b.querySelector("svg");
+      return { label: b.title || b.getAttribute("aria-label") || "Plugin", icon: svg ? '<span class="dock-more-ic">' + svg.outerHTML + "</span>" : "", onPick: () => b.click() };
+    }),
+    { up: true },
+  );
+}
+
+function watchDock() {
+  const host = document.querySelector("[data-plugin-top]");
+  const row = document.querySelector(".dock-icons");
+  const more = document.querySelector("[data-dock-more]");
+  if (!host || !row || !more) return;
+  // Fitted in the observers' own callbacks, before the next paint, so an
+  // overfull dock never shows for a frame.
+  new MutationObserver(fitDock).observe(host, { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden", "style"] });
+  new ResizeObserver(fitDock).observe(row);
+  more.addEventListener("click", () => moreMenu(more));
+  fitDock();
+}
+
 export function initPlugins() {
+  watchDock();
   on("plugins", paintCard);
   on("app:plugins-changed", (ev) => sync(ev && ev.id && ev.id !== "*" ? new Set([ev.id]) : null));
   on("app:plugins-state", (state) => {
@@ -271,6 +387,25 @@ export async function openPluginPane(key, opts) {
     toast(errorText(error));
     return null;
   }
+}
+
+// Where a native view for el may go: the part of its rect that shows (inside
+// every box that clips it, such as its pane body, a scrolled plugin pane or
+// main.main, and the window), less the grab zones of the dividers and the
+// sidebar edge next to it (plugin-layout.js clipRect and trimRect). A host
+// wider or taller than its pane never puts the view over a neighbour.
+export function viewRect(el) {
+  const clips = [{ left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight }];
+  for (let a = el.parentElement; a && a !== document.body && a !== document.documentElement; a = a.parentElement) {
+    const cs = getComputedStyle(a);
+    if (cs.overflowX !== "visible" || cs.overflowY !== "visible" || /paint|strict|content/.test(cs.contain)) clips.push(a.getBoundingClientRect());
+  }
+  // A pane's own area and the main area clip the view even where no CSS does.
+  for (const box of [el.closest(".group-body"), el.closest(".main")]) if (box) clips.push(box.getBoundingClientRect());
+  const zones = Array.from(document.querySelectorAll(".group-split"), (s) => splitZone(s.getBoundingClientRect()));
+  const handle = document.querySelector("[data-side-resize]");
+  if (handle && handle.offsetWidth) zones.push(handle.getBoundingClientRect());
+  return trimRect(clipRect(el.getBoundingClientRect(), clips), zones);
 }
 
 export class PluginPaneView {
@@ -311,7 +446,12 @@ export class PluginPaneView {
       setTitle(text) {
         window.jagents.panes.updatePlugin(view.pane.id, { title: String(text || "") }).catch(() => {});
       },
-      visible: () => host.isConnected && !host.closest(".parked,[hidden]") && host.offsetWidth > 0 && host.offsetHeight > 0,
+      // False while parked or hidden, and while a menu, dialog, Settings or a
+      // plugin overlay is over the panes (a native view would cover it).
+      visible: () => host.isConnected && !host.closest(".parked,[hidden]") && host.offsetWidth > 0 && host.offsetHeight > 0 && !store.overlay && !document.body.classList.contains("settings-on"),
+      // Where a native view for el (default: the pane body) may go: its rect
+      // less the grab zones of the dividers and the sidebar edge next to it.
+      viewRect: (el) => viewRect(el || host),
       el: host,
     };
     try {

@@ -1,33 +1,132 @@
 // Dropdown menus, modals, the context-handoff dialog, and the MCP hub panel.
 
-import { esc, toast, errorText } from "./util.js";
+import { esc, toast, errorText, toTopLayer } from "./util.js";
 import { icon, harnessIcon } from "./icons.js";
 import { store, fire, on } from "./store.js";
 
 let openMenuEl = null;
-let overlays = 0;
+let menuRelease = null;
+const holds = new Set();
 
-// Menus and dialogs are DOM; plugin panes that show native views (the browser)
-// hide them while one is open so the view does not cover it.
-function overlay(delta) {
-  overlays = Math.max(0, overlays + delta);
-  fire("app:overlay", { open: overlays > 0 });
+// Menus, dialogs, Settings and plugin popups are DOM; native views (the
+// browser, plugin WebContentsViews) always draw above the page, so panes hide
+// them while anything is over the panes. A hold with an element counts only
+// while that element reaches past the sidebar: a dock menu that stays over
+// the sidebar leaves the panes alone. A held element that is removed, hidden
+// or has no size covers nothing: a plugin popover toggled with hidden (or a
+// menu a plugin's CSS hid) does not keep the views down.
+function coversPanes(el) {
+  if (!el) return true;
+  if (!el.isConnected || !el.getClientRects().length) return false;
+  const side = document.querySelector(".sidebar");
+  if (!side) return true;
+  const r = el.getBoundingClientRect();
+  const s = side.getBoundingClientRect();
+  return !(r.width > 0 && r.height > 0 && r.left >= s.left - 1 && r.right <= s.right + 1);
+}
+
+export function overlayOpen() {
+  for (const h of holds) if (!h.el || coversPanes(h.el)) return true;
+  return false;
+}
+
+function paintOverlay() {
+  store.overlay = overlayOpen();
+  fire("app:overlay", { open: store.overlay });
+}
+
+// A held element that moves or grows (a popover dragged or opened out over
+// the panes) is checked again; the event fires only when the state changes.
+function recheckOverlay() {
+  if (overlayOpen() !== store.overlay) paintOverlay();
+}
+let recheckQueued = false;
+function queueRecheck() {
+  if (recheckQueued) return;
+  recheckQueued = true;
+  requestAnimationFrame(() => {
+    recheckQueued = false;
+    recheckOverlay();
+  });
+}
+// An open menu does not follow its anchor when the window resizes (its top
+// rows could end up above the window): it closes instead.
+window.addEventListener("resize", () => {
+  if (openMenuEl && openMenuEl._size !== window.innerWidth + "x" + window.innerHeight) closeMenu();
+  queueRecheck();
+});
+on("app:layout", queueRecheck);
+
+// The title band (the top --strip-h of the window) belongs to the window
+// buttons and the drag regions: menus that open upward stop under it.
+function stripHeight() {
+  return parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--strip-h")) || 38;
+}
+
+// Hold the overlay state while something covers the panes; returns release.
+// A held element taken out of the page (by it or an ancestor) is noticed by
+// one watcher on the document, kept only while such a hold exists.
+let removals = null;
+function watchRemovals() {
+  const any = Array.from(holds).some((h) => h.el);
+  if (any && !removals) {
+    removals = new MutationObserver((list) => {
+      if (list.some((m) => m.removedNodes.length)) queueRecheck();
+    });
+    removals.observe(document.documentElement, { childList: true, subtree: true });
+  } else if (!any && removals) {
+    removals.disconnect();
+    removals = null;
+  }
+}
+
+export function holdOverlay(el) {
+  const h = { el: el || null };
+  holds.add(h);
+  if (h.el) {
+    h.ro = new ResizeObserver(queueRecheck);
+    h.ro.observe(h.el);
+    h.mo = new MutationObserver(queueRecheck);
+    h.mo.observe(h.el, { attributes: true, attributeFilter: ["style", "class", "hidden"] });
+  }
+  watchRemovals();
+  paintOverlay();
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    holds.delete(h);
+    if (h.ro) h.ro.disconnect();
+    if (h.mo) h.mo.disconnect();
+    watchRemovals();
+    paintOverlay();
+  };
 }
 
 export function closeMenu() {
   if (openMenuEl) {
     openMenuEl.remove();
     openMenuEl = null;
-    overlay(-1);
+    if (menuRelease) menuRelease();
+    menuRelease = null;
   }
 }
 
 document.addEventListener("mousedown", (e) => {
   if (openMenuEl && !openMenuEl.contains(e.target) && !e.target.closest("[data-menu-anchor]")) closeMenu();
 });
+// Escape closes only the menu when one is open, not the dialog or Settings
+// under it.
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") closeMenu();
+  if (e.key !== "Escape" || !openMenuEl) return;
+  closeMenu();
+  e.preventDefault();
 });
+
+// Closes the open menu when it belongs to anchor (a plugin unloading).
+export function closeMenuOf(anchor) {
+  if (openMenuEl && openMenuEl._anchor === anchor) closeMenu();
+}
 
 // items: [{label, desc, icon (html), disabled, badge, onPick} | {section: "Label"} | {divider: true}]
 export function dropdown(anchor, items, opts) {
@@ -49,19 +148,28 @@ export function dropdown(anchor, items, opts) {
     })
     .join("");
   document.body.appendChild(el);
-  const r = anchor.getBoundingClientRect();
+  toTopLayer(el);
+  // An anchor with no box (a dock button moved into the More menu) places
+  // the menu at the nearest element that has one.
+  let box = anchor;
+  while (box && box.parentElement && !box.getClientRects().length) box = box.parentElement;
+  const r = box.getBoundingClientRect();
   const w = Math.max(260, (opts && opts.width) || 300);
   el.style.width = w + "px";
   const left = Math.min(window.innerWidth - w - 8, (opts && opts.alignRight ? r.right - w : r.left));
   el.style.left = Math.max(8, left) + "px";
-  // Opens upward from the bottom of the window (the sidebar dock).
-  const below = window.innerHeight - r.bottom - 20;
-  if ((opts && opts.up) || (below < 240 && r.top > below)) {
+  // Opens upward (the sidebar dock asks for it) only when there is room
+  // above, and never into the title band; else on the side with more room.
+  const below = Math.max(0, window.innerHeight - r.bottom - 20);
+  const above = Math.max(0, r.top - 6 - stripHeight() - 8);
+  const up = opts && opts.up ? above >= Math.min(200, below) : below < 240 && above > below;
+  if (up) {
     el.style.bottom = window.innerHeight - r.top + 6 + "px";
-    el.style.maxHeight = Math.max(200, r.top - 20) + "px";
+    // A tall menu from the dock leaves two lines of toast room above it.
+    el.style.maxHeight = (box.closest && box.closest(".side-dock") && above - 64 >= 200 ? above - 64 : above) + "px";
   } else {
     el.style.top = r.bottom + 6 + "px";
-    el.style.maxHeight = Math.max(200, below) + "px";
+    el.style.maxHeight = below + "px";
   }
   el.addEventListener("click", (e) => {
     const row = e.target.closest("[data-i]");
@@ -71,7 +179,8 @@ export function dropdown(anchor, items, opts) {
     if (it && it.onPick) it.onPick();
   });
   openMenuEl = el;
-  overlay(1);
+  el._size = window.innerWidth + "x" + window.innerHeight;
+  menuRelease = holdOverlay(el);
   const first = el.querySelector(".news-menu-row:not(:disabled)");
   if (first) first.focus();
 }
@@ -112,22 +221,33 @@ export function modal(html, opts) {
     });
     return { el: box, close, embedded: true };
   }
+  // A menu that was open before this dialog (a dock menu) closes; one opened
+  // inside an open dialog stays, for a dialog that dialog opens.
+  if (openMenuEl && !(openMenuEl._anchor && openMenuEl._anchor.closest && openMenuEl._anchor.closest(".modal-back"))) closeMenu();
   const back = document.createElement("div");
   back.className = "modal-back";
   back.innerHTML = '<div class="modal' + (opts && opts.wide ? " wide" : "") + '" role="dialog" aria-modal="true">' + html + "</div>";
   document.body.appendChild(back);
-  overlay(1);
+  toTopLayer(back);
+  const release = holdOverlay();
   let closed = false;
   const close = () => {
     if (closed) return;
     closed = true;
-    overlay(-1);
+    // A menu opened from this dialog goes with it.
+    if (openMenuEl && back.contains(openMenuEl._anchor)) closeMenu();
+    release();
     back.remove();
     document.removeEventListener("keydown", onKey);
     if (opts && opts.onClose) opts.onClose();
   };
+  // Escape closes only the top dialog when several are stacked.
   const onKey = (e) => {
-    if (e.key === "Escape") close();
+    if (e.key !== "Escape" || e.defaultPrevented) return;
+    const backs = document.querySelectorAll("body > .modal-back");
+    if (backs[backs.length - 1] !== back) return;
+    e.preventDefault();
+    close();
   };
   document.addEventListener("keydown", onKey);
   back.addEventListener("mousedown", (e) => {

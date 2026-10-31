@@ -1,3 +1,9 @@
+/* Plugin CSS goes in the jagents-plugins layer (plugins.js). The rules in
+   jagents-locks, at the end of this file, are the layout plugins cannot
+   change: for !important rules an earlier layer wins, so these beat a
+   plugin's !important too. */
+@layer jagents-locks, jagents-plugins;
+
 /* v0.6 shell: no top bar. The sidebar has the mode tabs, Projects and a dock;
    the main area's tab strips are the title bar, with Windows' own window
    buttons drawn over the top-right corner (titleBarOverlay). */
@@ -24,10 +30,20 @@ html[data-theme="dark"] {
 
 /* ---------- Sidebar ---------- */
 .sidebar { position: relative; background: var(--strip-bg); }
+/* The dock pushes itself to the bottom (margin-top: auto, with the update
+   card above it), so a page's own sidebar panel starts right under the tabs
+   on pages with no .side-pane. */
 .side-top { flex: none; height: var(--strip-h); display: flex; align-items: center; padding: 0 8px; -webkit-app-region: drag; }
 .side-top .mode-seg { -webkit-app-region: no-drag; display: flex; gap: 2px; width: 100%; padding: 2px; border-radius: 9px; background: var(--well); }
-.side-top .mode-seg [role="tab"] { flex: 1 1 auto; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 26px; padding: 0 7px; border-radius: 7px; color: var(--muted); font-size: 12.5px; font-weight: 500; white-space: nowrap; overflow: hidden; }
+/* A tab is its own box, like a plugin's dock button: fixed or absolute
+   content in a plugin's tab is placed and clipped inside the tab, never over
+   the window buttons or the sidebar edge. */
+.side-top .mode-seg [role="tab"] { position: relative; contain: layout paint; flex: 1 1 auto; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 26px; padding: 0 5px; border-radius: 7px; color: var(--muted); font-size: 12.5px; font-weight: 500; white-space: nowrap; overflow: hidden; }
 .side-top .mode-seg [role="tab"] svg { flex: none; }
+/* app.js fitModes puts text next to an icon in .mode-label: a long name ends
+   in "…". A tab that is only text ends in "…" by itself. */
+.side-top .mode-seg .mode-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-top .mode-seg [role="tab"]:not(:has(> *)) { display: block; line-height: 26px; text-align: center; text-overflow: ellipsis; }
 .side-top .mode-seg [role="tab"]:hover { color: var(--ink); }
 .side-top .mode-seg [role="tab"].on { background: var(--canvas); color: var(--ink); box-shadow: 0 1px 2px oklch(0 0 0 / 0.18); }
 .side-top .mode-seg [role="tab"][hidden] { display: none; }
@@ -46,7 +62,7 @@ html[data-theme="dark"] {
 [data-code-side] .side-head .nav-label { padding: 0 0 0 4px; }
 .side-add { width: 24px; height: 24px; color: var(--muted); }
 .side-add:hover { color: var(--ink); }
-.project-list { flex: 0 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; padding: 0 6px 8px; }
+.project-list { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; padding: 0 6px 8px; }
 .project { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 46px; padding: 6px 8px; border-radius: 9px; text-align: left; color: var(--ink); }
 .project:hover { background: var(--well); }
 .project.on { background: var(--proj-on); }
@@ -69,7 +85,22 @@ html[data-theme="light"] .project-count { background: oklch(0 0 0 / 0.07); }
 .ws-row .project-count { height: 18px; padding: 0 7px; font-size: 11px; }
 .ws-add { color: var(--muted); font-weight: 400; }
 .ws-rename { flex: 1; font-size: 12.5px; }
-.plugin-side { overflow-y: auto; min-height: 0; }
+/* Projects and the plugin sections share the pane under the heading: each
+   gets what it needs, and when both need more than there is, they split the
+   room evenly and scroll (grid tracks grow evenly up to their content).
+   Projects always keep one row. Each section is its own box: absolute or
+   fixed content is placed and clipped in it, and z-index stays in it. The
+   sections scroll together in .plugin-side, so position: sticky sticks to
+   the top of that area. Popovers belong in jagents.menu or jagents.modal,
+   which draw above everything. */
+[data-code-side] { display: grid; grid-template-rows: auto minmax(54px, auto) minmax(0, auto); align-content: start; }
+[data-code-side]:has(> .project-list:empty) { grid-template-rows: auto minmax(0, auto) minmax(0, auto); }
+/* .plugin-side is the box for the section elements themselves too: a plugin
+   that styles its section (handle.el) fixed or absolute stays in this area. */
+.plugin-side { position: relative; min-height: 0; overflow-x: hidden; overflow-y: auto; contain: layout paint; }
+.plugin-section { position: relative; isolation: isolate; contain: layout paint; min-width: 0; }
+.plugin-section > .nav-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-section-body { position: relative; display: flow-root; min-width: 0; overflow-wrap: anywhere; }
 
 /* Resize handle on the sidebar's right edge. */
 .side-resize { position: absolute; top: 0; right: -3px; bottom: 0; width: 6px; cursor: col-resize; z-index: 5; }
@@ -78,18 +109,31 @@ body.resizing-cols, body.resizing-cols * { cursor: col-resize !important; user-s
 body.resizing-rows, body.resizing-rows * { cursor: row-resize !important; user-select: none !important; }
 
 /* The dock: one rounded card at the bottom of the sidebar. */
-.side-dock { flex: none; margin: 8px; padding: 6px 8px 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--canvas); display: flex; flex-direction: column; gap: 6px; }
-.dock-icons { display: flex; align-items: center; gap: 2px; }
+/* isolation: no z-index from inside the dock reaches above menus, dialogs or
+   toasts. */
+.side-dock { flex: none; isolation: isolate; margin: auto 8px 8px; padding: 6px 8px 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--canvas); display: flex; flex-direction: column; gap: 6px; }
+/* Buttons keep their size and wrap onto a second row when plugins add many;
+   plugins.js fitDock puts the ones past two rows in the More menu. Check
+   usage now keeps its own column at the top right. */
+.dock-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 2px; }
+.dock-icons { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; min-width: 0; }
 .dock-icons .plugin-top { display: contents; }
-.dock-icon { position: relative; display: grid; place-items: center; width: 30px; height: 28px; border-radius: 7px; color: var(--muted); }
+.dock-icon.dock-over { display: none; }
+.dock-more-ic { flex: none; display: inline-grid; place-items: center; width: 18px; color: var(--muted); }
+.dock-more-ic > svg { width: 15px; height: 15px; }
+.dock-icon { flex: none; position: relative; display: grid; place-items: center; width: 30px; height: 28px; border-radius: 7px; color: var(--muted); }
 .dock-icon:hover, .dock-icon.on { background: var(--well); color: var(--ink); }
 .dock-icon:disabled { opacity: 0.5; }
+/* A plugin's button is its own box: nothing in it (fixed or absolute
+   content, or what a plugin adds to btn.el later) paints outside it, and its
+   icon is 15x15 whatever size the svg asks for. */
+.dock-icon.plugin-top-btn { overflow: hidden; contain: layout paint; }
+.dock-icon.plugin-top-btn > svg { flex: none; width: 15px !important; height: 15px !important; }
 .dock-badge { position: absolute; top: 0; right: 0; min-width: 16px; height: 14px; padding: 0 4px; border-radius: 999px; background: var(--badge); color: #fff; font-size: 10px; font-weight: 700; line-height: 14px; text-align: center; }
 .dock-badge[hidden] { display: none; }
 /* A new version is out: a small arrow on the gear's corner. */
 .dock-flag { position: absolute; top: 1px; right: 2px; display: inline-flex; border-radius: 4px; background: var(--canvas); color: var(--warn); }
 .dock-flag[hidden] { display: none; }
-.side-dock .spacer { flex: 1; }
 .dock-usage { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px; }
 .dock-usage .usage-rows { display: flex; flex-direction: column; gap: 8px; width: 100%; padding: 0; text-align: left; background: none; border: 0; }
 .dock-usage .usage-rows:empty { display: none; }
@@ -102,12 +146,20 @@ body.resizing-rows, body.resizing-rows * { cursor: row-resize !important; user-s
 .dock-usage .dock-sub:empty, .dock-usage .dock-sub[hidden] { display: none; }
 .dock-usage .dock-sub:not(.warn-text) { color: var(--muted); }
 
-/* ---------- Main: drag band for pages without a strip ---------- */
+/* ---------- Main: drag band for pages without a strip ----------
+   On plugin pages (and Help) main.main starts under the 38px band and
+   contains its content: absolute and fixed children are placed inside it and
+   painted inside it, so nothing of a page reaches the band or the window
+   buttons. The band itself is drawn by .body. With Settings open main keeps
+   the containment (only the margin goes, Settings draws its own band) and
+   everything in it but Settings is hidden, so no plugin z-index can draw
+   over Settings. */
 .main { position: relative; background: var(--canvas); }
-body:not([data-mode="code"]):not([data-mode="threads"]) .main { padding-top: var(--strip-h); }
-body:not([data-mode="code"]):not([data-mode="threads"]) .main::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: var(--strip-h); background: var(--strip-bg); border-bottom: 1px solid var(--line); -webkit-app-region: drag; }
-body.settings-on .main { padding-top: 0 !important; }
-body.settings-on .main::before { display: none; }
+.body { position: relative; }
+body:not([data-mode="code"]):not([data-mode="threads"]) .main { contain: layout paint; }
+body:not([data-mode="code"]):not([data-mode="threads"]):not(.settings-on) .main { margin-top: var(--strip-h); }
+body.settings-on .main > :not([data-settings-main]) { visibility: hidden; opacity: 0; pointer-events: none; }
+body:not([data-mode="code"]):not([data-mode="threads"]):not(.settings-on) .body::after { content: ""; position: absolute; top: 0; left: var(--side-w); right: 0; height: var(--strip-h); background: var(--strip-bg); border-bottom: 1px solid var(--line); box-sizing: border-box; -webkit-app-region: drag; }
 
 /* Threads: the thread header is the title bar. */
 .thread-head { -webkit-app-region: drag; padding-right: calc(var(--wco-w) + 8px) !important; min-height: var(--strip-h) !important; background: var(--strip-bg) !important; }
@@ -115,7 +167,6 @@ body.settings-on .main::before { display: none; }
 
 /* ---------- Code mode: groups and tab strips ---------- */
 .code-mode { background: var(--canvas); }
-.code-mode .hub-banner { margin: 8px; }
 .code-mode .hub-banner[hidden] { display: none; }
 .groups { flex: 1; min-height: 0; display: flex; flex-direction: row; }
 .groups[data-dir="column"] { flex-direction: column; }
@@ -135,14 +186,16 @@ body.settings-on .main::before { display: none; }
 /* Tabs fill the strip's full height, edge to edge, like editor tabs. The open
    tab takes its pane's color (the terminal theme's background for terminals)
    and joins the pane below it; the others sit on the strip, split by short
-   dividers that hide next to the open or hovered tab. */
+   dividers that hide next to the open or hovered tab. A tab is size
+   contained (container-type), so its width, not its text, is what it asks
+   the strip for: 200px, shrinking to 124px when the strip is full. */
 .tabstrip { flex: none; display: flex; align-items: stretch; height: var(--strip-h); background: var(--strip-bg); box-shadow: inset 0 -1px 0 var(--line); -webkit-app-region: drag; user-select: none; }
 .tabstrip .tabs { display: flex; align-items: stretch; min-width: 0; padding: 0 2px 0 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; scroll-padding-inline: 28px; -webkit-app-region: no-drag; }
 .tabstrip .tabs::-webkit-scrollbar { display: none; }
 .tabstrip .tabs.more-left { -webkit-mask-image: linear-gradient(to right, transparent, #000 28px); }
 .tabstrip .tabs.more-right { -webkit-mask-image: linear-gradient(to left, transparent, #000 28px); }
 .tabstrip .tabs.more-left.more-right { -webkit-mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
-.tab { --tab-surface: var(--canvas); position: relative; flex: 0 1 200px; min-width: 124px; container-type: inline-size; height: var(--strip-h); display: flex; align-items: center; gap: 8px; padding: 0 6px 0 12px; color: var(--muted); font-size: 12.5px; cursor: default; outline: none; transition: background-color 0.12s ease, color 0.12s ease; }
+.tab { --tab-surface: var(--canvas); position: relative; flex: 0 1 200px; width: 200px; min-width: 124px; container-type: inline-size; height: var(--strip-h); display: flex; align-items: center; gap: 8px; padding: 0 6px 0 12px; color: var(--muted); font-size: 12.5px; cursor: default; outline: none; transition: background-color 0.12s ease, color 0.12s ease; }
 .tab.term { --tab-surface: var(--term-bg); }
 .tab::before { content: ""; position: absolute; left: 0; top: 11px; bottom: 11px; width: 1px; background: var(--line); transition: opacity 0.12s ease; }
 .tab:first-child::before, .tab.on::before, .tab:hover::before, .tab.on + .tab::before, .tab:hover + .tab::before { opacity: 0; }
@@ -257,6 +310,7 @@ body.settings-on .main::before { display: none; }
 .set-embed .modal.embedded .modal-body { max-height: none; overflow: visible; }
 
 /* ---------- Update reminder ---------- */
+/* update-popup.js puts it in the sidebar above the dock, in the flow. */
 .update-pop { position: fixed; right: 16px; bottom: 16px; z-index: 60; width: 340px; padding: 14px 14px 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); color: var(--ink); box-shadow: 0 10px 40px oklch(0 0 0 / 0.35); display: flex; flex-direction: column; gap: 6px; animation: upd-in 0.2s ease; }
 .update-pop.leaving { animation: upd-out 0.18s ease forwards; }
 @keyframes upd-in { from { opacity: 0; transform: translateY(8px); } }
@@ -267,11 +321,16 @@ body.settings-on .main::before { display: none; }
 .upd-head b { flex: 1; min-width: 0; }
 .upd-x { width: 24px; height: 24px; margin: -4px -4px 0 0; }
 .upd-notes { margin: 2px 0 2px 18px; padding: 0; font-size: 12.5px; color: var(--ink); display: flex; flex-direction: column; gap: 2px; }
-.upd-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 4px; }
+.upd-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-top: 4px; }
+.sidebar > .update-pop { position: static; flex: none; z-index: auto; width: auto; min-width: 0; margin: auto 8px 0; box-shadow: 0 4px 16px oklch(0 0 0 / 0.18); }
+.sidebar > .update-pop:not([hidden]) + .side-dock { margin-top: 8px; }
 
-/* The hub question floats under the tab strips instead of pushing them down. */
+/* The hub question is a bar above the tab strips, in the flow: the panes
+   start under it, so a browser or plugin view never covers it. While it shows
+   it is the title bar (drag, room for the window buttons). */
 .code-mode { position: relative; }
-.code-mode .hub-banner { position: absolute; z-index: 15; top: calc(var(--strip-h) + 8px); left: 8px; right: 8px; margin: 0; box-shadow: 0 8px 30px oklch(0 0 0 / 0.3); background: var(--surface); }
+.code-mode .hub-banner { flex: none; margin: 0; min-height: var(--strip-h); padding: 6px calc(var(--wco-w) + 12px) 6px 12px; border-width: 0 0 1px; border-radius: 0; -webkit-app-region: drag; }
+.code-mode .hub-banner button { -webkit-app-region: no-drag; }
 .set-embed .modal.embedded { border: 0; background: none; border-radius: 0; }
 .set-embed .modal.embedded > .modal-head { padding: 0 0 12px; border-bottom: 0; }
 .set-embed .modal.embedded > .modal-head h2 { font-size: 19px; }
@@ -299,3 +358,22 @@ body.settings-on .main::before { display: none; }
 .add-menu-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; padding: 6px; }
 .add-menu-empty { margin: 10px 8px; color: var(--muted); font-size: 12.5px; }
 .ai-agent-logo { flex: none; }
+
+/* ---------- Layout plugins cannot change ----------
+   What plugins draw stays in its place: a plugin's dock button keeps its box
+   and its display (the More overflow and el.hidden decide it), a plugin's mode
+   tab and sidebar sections contain what is in them, and JAgents' dialogs,
+   menus and Settings keep their place whatever a plugin's CSS says about
+   .modal, .dropdown or .settings-page. */
+@layer jagents-locks {
+  .dock-icon.plugin-top-btn { position: relative !important; inset: auto !important; transform: none !important; translate: none !important; scale: none !important; rotate: none !important; zoom: 1 !important; margin: 0 !important; padding: 0 !important; width: 30px !important; height: 28px !important; min-width: 0 !important; min-height: 0 !important; max-width: none !important; max-height: none !important; float: none !important; order: 0 !important; flex: none !important; z-index: auto !important; overflow: hidden !important; contain: layout paint !important; visibility: visible !important; }
+  .dock-icon.plugin-top-btn:not(.dock-over):not([hidden]) { display: grid !important; }
+  .dock-icon.dock-over, .dock-icon.plugin-top-btn[hidden] { display: none !important; }
+  .side-top .mode-seg [role="tab"] { position: relative !important; contain: layout paint !important; transform: none !important; translate: none !important; scale: none !important; rotate: none !important; zoom: 1 !important; }
+  .plugin-side { position: relative !important; contain: layout paint !important; }
+  .plugin-section { contain: layout paint !important; }
+  .modal-back { position: fixed !important; inset: 0 !important; margin: 0 !important; display: grid !important; transform: none !important; translate: none !important; scale: none !important; rotate: none !important; zoom: 1 !important; visibility: visible !important; opacity: 1 !important; }
+  .modal-back > .modal { position: relative !important; inset: auto !important; margin: 0 !important; display: flex !important; transform: none !important; translate: none !important; scale: none !important; rotate: none !important; zoom: 1 !important; visibility: visible !important; opacity: 1 !important; width: var(--modal-w, min(520px, 100%)) !important; min-width: 0 !important; max-width: 100% !important; min-height: 0 !important; max-height: calc(100vh - 48px) !important; }
+  .news-menu.dropdown { position: fixed !important; margin: 0 !important; display: flex !important; transform: none !important; translate: none !important; scale: none !important; rotate: none !important; zoom: 1 !important; visibility: visible !important; opacity: 1 !important; }
+  .settings-page:popover-open { position: fixed !important; inset: 0 0 0 var(--side-w) !important; margin: 0 !important; width: auto !important; height: auto !important; display: flex !important; transform: none !important; translate: none !important; scale: none !important; rotate: none !important; zoom: 1 !important; visibility: visible !important; opacity: 1 !important; }
+}

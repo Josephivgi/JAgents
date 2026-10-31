@@ -70,7 +70,11 @@ change reloads live and keeps the previous version so it can be undone.
     the theme: --canvas (page), --surface (panels), --well (inputs, hover), --line,
     --ink (text), --muted, --accent, --accent-ink (text on accent), --accent-soft,
     --ok, --warn, --danger; also --font, --mono and --radius. Use them so the
-    plugin fits dark and light themes.
+    plugin fits dark and light themes. Your CSS (style.css and jagents.css) sits in
+    a cascade layer under JAgents' own CSS: a rule for .modal, .dropdown or .btn
+    styles your elements and never restyles JAgents' dialogs and menus. Where you
+    and JAgents set the same property on one element (also on your dock button and
+    section, which carry JAgents classes), JAgents wins unless you add !important.
 - main.cjs: CommonJS in the Electron main process, with full Node.js and Electron.
     exports.activate = (ctx) => { ...; return () => {} }
 - Any other files (images, data). Renderer code can load them by relative URL.
@@ -86,24 +90,103 @@ cleanup can fight the next copy of the plugin and freeze the window.
     the bottom of the sidebar (JAgents has no top bar since v0.6; the label becomes the
     tooltip). icon is an icon name (plus, chat, terminal, grid, hub, sun, moon, restart,
     handoff, folder, search, close, puzzle, globe, back, next, external, code, undo, gear)
-    or an <svg> string.
+    or an <svg> string. Every icon draws at 15x15, whatever size an <svg> says (give it a
+    viewBox). Only the first <svg> element is used: anything after it is dropped, and
+    size, position and offsets in its style attribute are removed. The button is its own
+    box: nothing in it, also what you add to el later, draws outside it. JAgents owns
+    the button's box and display: you can style its look (color, background,
+    border, opacity), but position, size, margin, transform, z-index and display
+    on el are ignored. To hide it set el.hidden = true (the dock fits again), or
+    call remove(). Buttons keep their size and the dock holds two rows; buttons
+    that do not fit go in its More menu, listed by label, so give every button a
+    clear label. onClick(event, el, anchor): a button in More has no box, so anchor
+    is the More button then (el otherwise). Place a popover next to anchor, or use
+    jagents.menu(anchor, ...). Returns { el, remove, anchor() }.
 - jagents.sidebar.section({ title, render(el) }): a section in the Code mode sidebar,
-    under Projects. jagents.sidebar.refresh() renders again.
+    under Projects. Returns { el, remove, refresh }: refresh() renders that section
+    again; jagents.sidebar.refresh() renders all of this plugin's sections. Other
+    plugins' sections are not touched. Sections keep their order when a plugin
+    reloads. Projects and the sections share the room: each gets what it needs, and
+    when both need more they split it evenly and scroll (Projects always keep one row).
+    The sections scroll together, so position: sticky sticks to the top of their area.
+    A section is its own box: position: absolute or fixed content is placed and
+    clipped in it, and z-index does not reach outside it. The section element (el)
+    itself stays in the sections' area too, whatever position you give it. Text wraps; for wide content
+    (a table) put it in your own element with overflow-x: auto. Long titles end in
+    "...". For dropdowns and popovers use jagents.menu or jagents.modal, since a
+    section clips what sticks out of it.
 - A page of your own: add a tab to the sidebar's mode tabs (.mode-seg, a button with
     role="tab" and data-mode="<your id>") and a view in main.main. JAgents marks the
-    tab .on when it is picked; show your view while it is. The top 38px of the window
-    is the title bar: JAgents keeps that band free above plugin pages.
+    tab .on (and aria-selected) when it is picked; show your view while it is. A tab
+    is its own box: fixed or absolute content in it is placed and clipped inside the
+    tab. A sidebar panel of your own for the page goes before .sidebar-updates; it
+    starts right under the tabs (give it class side-pane to fill the height). The
+    top 38px of the window is the title bar: on plugin pages main.main starts under
+    it and contains its content, so position: absolute (inset: 0) and fixed views are
+    placed and clipped inside main.main and never reach the band or the window
+    buttons. While Settings is open it covers main.main and your view is hidden,
+    whatever its z-index. A long tab label ends in "..." with the full text as its
+    tooltip. When a tab has an icon and text, JAgents puts the text in a
+    <span class="mode-label">, so to update a tab only when it changed, compare with
+    the last value you wrote, not with its innerHTML. A native view for a page goes at
+    jagents.viewRect(el) (el: your view in main.main), which leaves the sidebar's
+    resize edge free; show it only while your tab is .on, Settings is closed
+    (document.body has no .settings-on) and jagents.store.overlay is false, and check
+    again on the overlay and layout events (layout fires when the mode changes, so
+    your view shows and hides with your tab). When your plugin reloads, its page stays
+    open; when it is turned off, JAgents goes back to Code.
 - jagents.panes.register(kind, { title, icon, mount(el, pane) }): a new tab type for
     Code mode, listed in the new tab picker. mount may return a cleanup function.
-    pane.id, pane.state (saved per pane), pane.setState(obj), pane.setTitle(text),
-    pane.visible() (false while the pane is parked or covered by a menu).
+    pane.id, pane.state (saved per pane), pane.setState(obj), pane.setTitle(text).
+    el is a fixed-size box that scrolls when your content is taller: its children keep
+    their height (give one flex: 1 to fill the rest, as a native view's host). It is its own
+    box: absolute and fixed content is placed and clipped inside the pane, and your
+    z-index never lifts anything over the tab strip, menus, dialogs or Settings.
+    pane.visible() is false while the pane is parked or hidden and while a menu,
+    dialog, Settings, a plugin overlay or a tab drag is over the panes; check it again on the
+    layout and overlay events. pane.viewRect(el) gives the rect (x, y, width,
+    height) to give a native view for el (default: the pane body): the part of the
+    element that shows in its pane (an el wider, taller or scrolled past the pane is
+    cut to it, and width or height is 0 when nothing shows), less the grab zones of
+    the dividers and the sidebar edge next to it, so the user can still resize. Your
+    pane's scroll position is kept when the user splits or moves groups. A native view draws above all DOM: show it only
+    while pane.visible() and place it at pane.viewRect(), as builtin/browser does.
 - jagents.panes.open(kind, { title, state }): open a pane of a registered kind.
 - jagents.css(text): add CSS.
 - jagents.on(type, fn): app events: pty-data {id, data}, pty-exit, acp-state,
-    panes-changed, chats-changed, hub-activity, theme, overlay {open} (a menu or
-    dialog opened or closed over the panes), layout (panes moved or resized).
-- jagents.toast(text), jagents.modal(html, { width }) returns { el, close }.
+    panes-changed, chats-changed, hub-activity, theme, overlay {open} (a menu,
+    dialog, Settings, plugin overlay or tab drag started or ended over the panes; a
+    menu that stays over the sidebar does not count), layout (panes moved or resized,
+    or the mode changed).
+    jagents.store.overlay is the current state, for views created while one is open.
+- A floating panel of your own goes in document.body with position: fixed. It
+    always stays under JAgents' dialogs, menus, toasts and Settings, which draw in
+    the browser's top layer whatever z-index you use.
+- jagents.overlay(el): call while your own popover or floating panel is over the
+    panes, so native views (browser panes, plugin views) hide instead of covering
+    it. An el that stays over the sidebar leaves the views up; el is checked again
+    when it moves, grows or the window resizes, and an el that is hidden, has no
+    size or was removed does not count. Returns release(); it is also released
+    when the plugin unloads.
+- jagents.menu(anchor, items, opts): JAgents' own dropdown next to anchor, drawn
+    above everything, dialogs too (native views hide while it is open). Escape
+    closes only the menu. It opens on the side of anchor with room (up only when
+    there is room above) and never into the 38px title band. It closes when the
+    window resizes, when a dialog opens over it, and with the dialog it was opened
+    from. items: { label, desc,
+    icon (html), disabled, badge, onPick } or { section: "Label" } or { divider: true };
+    opts: { width, alignRight, up }. Returns { close }.
+- jagents.toast(text): a short message over the sidebar, above the dock and what
+    sits on it (the update card, a dock menu). Native views never cover it, it takes
+    no clicks, and text past 8 lines ends in "...".
+- jagents.modal(html, { width }) returns { el, close }. width is capped to the
+    window. Escape closes only the top dialog. For a header and buttons that stay
+    put, use <header class="modal-head">, <div class="modal-body"> (scrolls) and
+    <footer class="modal-foot">; html with no .modal-body scrolls as a whole.
 - jagents.icon(name, size), jagents.esc(text) (HTML-escape).
+- jagents.viewRect(el): the rect { x, y, width, height } for a native view over el:
+    the part of el that shows in main.main and the window, less the grab zones of
+    the dividers and the sidebar edge next to it.
 - jagents.storage.get(key, fallback), jagents.storage.set(key, value): saved in jagents.db.
 - jagents.invoke(channel, payload): call ctx.handle(channel) in this plugin's main.cjs.
 - jagents.onMessage(channel, fn): messages from ctx.send in main.cjs.

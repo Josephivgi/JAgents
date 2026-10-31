@@ -53,21 +53,77 @@ on("set-theme", (theme) => {
 // Plugins page) are fitted the same way whenever they arrive.
 const pageTabs = () => Math.min(6, Math.max(1, Math.round(Number(store.info.pageTabs)) || 3));
 let fitQueued = false;
+let tightAt = 0; // strip width at which the labels stopped fitting with icons
+let tightKey = "";
+const BUILTIN_MODES = ["code", "threads", "help"];
+const modeTab = (m) => app.querySelector('.mode-seg [data-mode="' + CSS.escape(m) + '"]');
 
 function fitModes() {
   fitQueued = false;
   const seg = app.querySelector(".mode-seg");
   if (!seg) return;
   // A plugin tab that left out role or type still lines up with the others.
+  // Bare text next to an icon goes in a label span, so a long name ends in an
+  // ellipsis instead of being cut at both ends. A tab that is only text is
+  // left as it is (CSS ellipsizes it), so a plugin that compares its tab's
+  // HTML before writing does not see a change every time.
   for (const t of seg.children) {
     if (!t.getAttribute("role")) t.setAttribute("role", "tab");
     if (t.tagName === "BUTTON" && !t.getAttribute("type")) t.setAttribute("type", "button");
+    if (!t.firstElementChild) continue;
+    for (const n of Array.from(t.childNodes)) {
+      if (n.nodeType !== Node.TEXT_NODE || !n.textContent.trim()) continue;
+      const label = document.createElement("span");
+      label.className = "mode-label";
+      n.replaceWith(label);
+      label.appendChild(n);
+    }
   }
-  const shown = Array.from(seg.children).filter((t) => !t.hidden && t.getAttribute("role") === "tab").length;
+  // A plugin page that reloaded put its tab back: it is still the open page.
+  const cur = modeTab(mode);
+  if (cur && !cur.classList.contains("on")) paintModes();
+  const tabs = Array.from(seg.children).filter((t) => !t.hidden && t.getAttribute("role") === "tab");
+  const isCut = (el) => Boolean(el && el.scrollWidth > el.clientWidth + 1);
+  const labelsOf = (t) => (t.firstElementChild ? Array.from(t.querySelectorAll(".mode-label")) : [t]);
+  const shown = tabs.length;
   if (seg.style.getPropertyValue("--page-tabs") !== String(pageTabs())) seg.style.setProperty("--page-tabs", String(pageTabs()));
   seg.classList.toggle("scroll-x", shown > pageTabs());
-  // Four or more tabs side by side leave no room for icons.
-  seg.classList.toggle("tight", Math.min(shown, pageTabs()) > 3);
+  // Four or more tabs side by side leave no room for icons, and neither do
+  // three in a narrow sidebar: then the icons go and labels end in "…".
+  let tight = Math.min(shown, pageTabs()) > 3;
+  if (!tight && !seg.classList.contains("scroll-x")) {
+    const key = tabs.map((t) => t.textContent).join("|");
+    if (tightAt && key === tightKey && seg.clientWidth <= tightAt) tight = true;
+    else {
+      tightAt = 0;
+      seg.classList.remove("tight");
+      if (tabs.some((t) => labelsOf(t).some(isCut))) {
+        tight = true;
+        tightAt = seg.clientWidth;
+        tightKey = key;
+      }
+    }
+  }
+  seg.classList.toggle("tight", tight);
+  // Screen readers hear which page is open; arrow keys move between tabs.
+  const onTab = tabs.find((t) => t.classList.contains("on")) || tabs[0];
+  for (const t of tabs) {
+    const sel = t.classList.contains("on");
+    if (t.getAttribute("aria-selected") !== String(sel)) t.setAttribute("aria-selected", String(sel));
+    const ti = t === onTab ? "0" : "-1";
+    if (t.getAttribute("tabindex") !== ti) t.setAttribute("tabindex", ti);
+    // A cut label shows in full as the tooltip, and follows the label when
+    // its text changes.
+    const cut = labelsOf(t).some(isCut);
+    const text = t.textContent.trim();
+    if (cut && (!t.title || t.dataset.autoTitle)) {
+      if (t.title !== text) t.title = text;
+      t.dataset.autoTitle = "1";
+    } else if (!cut && t.dataset.autoTitle) {
+      t.removeAttribute("title");
+      delete t.dataset.autoTitle;
+    }
+  }
   const on = seg.querySelector('[role="tab"].on');
   if (on && seg.classList.contains("scroll-x")) {
     const a = on.offsetLeft - seg.scrollLeft;
@@ -83,7 +139,7 @@ const queueFit = () => {
 
 function watchModes() {
   const seg = app.querySelector(".mode-seg");
-  new MutationObserver(queueFit).observe(seg, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "hidden"] });
+  new MutationObserver(queueFit).observe(seg, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["class", "hidden"] });
   // The mouse wheel scrolls the tabs sideways.
   seg.addEventListener(
     "wheel",
@@ -94,12 +150,30 @@ function watchModes() {
     },
     { passive: false },
   );
+  seg.addEventListener("keydown", (e) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
+    const tabs = Array.from(seg.querySelectorAll('[role="tab"]')).filter((t) => !t.hidden);
+    const i = tabs.indexOf(e.target.closest('[role="tab"]'));
+    if (i < 0) return;
+    e.preventDefault();
+    const n = e.key === "Home" ? 0 : e.key === "End" ? tabs.length - 1 : (i + (e.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+    tabs[n].focus();
+    tabs[n].click();
+    tabs[n].scrollIntoView({ block: "nearest", inline: "nearest" });
+  });
   on("page-tabs", queueFit);
+  // A plugin page that was turned off or removed leaves no tab: go back to Code
+  // instead of an empty window.
+  on("plugins", () => {
+    if (!BUILTIN_MODES.includes(mode) && !modeTab(mode)) setMode("code");
+    revealProject();
+  });
   queueFit();
 }
 
 function paintModes() {
   for (const b of app.querySelectorAll(".mode-seg [data-mode]")) b.classList.toggle("on", b.dataset.mode === mode);
+  queueFit();
 }
 
 function setMode(next) {
@@ -116,6 +190,9 @@ function setMode(next) {
   if (next === "help") refreshHelp();
   paintModes();
   if (next === "code") window.dispatchEvent(new Event("resize"));
+  // Pane and page views check again in this same task: a native view never
+  // stays over the page that was just opened, and a page's own view shows at once.
+  fire("app:layout");
 }
 
 // ---- Projects -------------------------------------------------------------
@@ -154,6 +231,20 @@ function paintProjects() {
     box._html = html;
     box.innerHTML = html;
   }
+  if (box._active !== active) revealProject();
+  box._active = active;
+}
+
+// Keep the open project in view in the list (plugin sections below can leave
+// it only a few rows).
+function revealProject() {
+  const box = app.querySelector("[data-projects]");
+  const on = box && box.querySelector(".project.on");
+  if (!on) return;
+  const r = on.getBoundingClientRect();
+  const b = box.getBoundingClientRect();
+  if (r.top < b.top) box.scrollTop -= b.top - r.top;
+  else if (r.bottom > b.bottom) box.scrollTop += Math.min(r.bottom - b.bottom, r.top - b.top);
 }
 
 function countPill(c) {
@@ -507,12 +598,13 @@ async function boot() {
     // The dock: activity, usage, settings and plugin buttons, then usage bars.
     // (.sidebar-updates stays as the hook plugins insert sidebar sections above.)
     '<section class="side-dock sidebar-updates" aria-label="Activity, usage and settings">' +
-    '<div class="dock-icons">' +
+    '<div class="dock-bar"><div class="dock-icons">' +
     '<button type="button" class="dock-icon" data-menu-anchor data-activity title="Agent activity" aria-label="Agent activity">' + icon("tree", 15) + '<span class="dock-badge" data-activity-badge hidden></span></button>' +
     '<button type="button" class="dock-icon" data-usage-open title="Usage for every agent" aria-label="Usage">' + icon("usage", 15) + "</button>" +
     '<button type="button" class="dock-icon" data-settings title="Settings" aria-label="Settings">' + icon("gear", 15) + '<span class="dock-flag" data-settings-badge hidden>' + icon("update", 11) + "</span></button>" +
     '<span class="plugin-top" data-plugin-top></span>' +
-    '<span class="spacer"></span>' +
+    '<button type="button" class="dock-icon dock-more" data-menu-anchor data-dock-more title="More plugin buttons" aria-label="More plugin buttons" hidden>' + icon("more", 15) + "</button></div>" +
+    // Check usage now keeps the top-right corner however many rows the icons take.
     '<button type="button" class="dock-icon" data-usage-refresh title="Check usage now" aria-label="Check usage now">' + icon("restart", 14) + "</button></div>" +
     '<div class="dock-usage" data-usage><button type="button" class="usage-rows" data-usage-open data-usage-rows title="Usage for every agent"></button><p class="dock-sub" data-usage-summary></p></div>' +
     "</section>" +
@@ -537,6 +629,9 @@ async function boot() {
   seenActivity = activity.length;
   setMode(mode);
   paintProjects();
+  // The list gets smaller when plugin sections or the window take room: keep
+  // the open project in view.
+  new ResizeObserver(() => revealProject()).observe(app.querySelector("[data-projects]"));
   paintBanner();
   refreshHubAgents();
   setInterval(refreshHubAgents, 2000);

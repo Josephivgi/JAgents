@@ -1,11 +1,12 @@
 // The "+" menu on a tab strip: the v0.5 add list (terminals, chats, threads,
 // plugin tabs) with each agent's logo. The title and a search box stay pinned
 // at the top while the long list scrolls under them.
-import { esc } from "./util.js";
+import { esc, toTopLayer } from "./util.js";
 import { icon, harnessIcon } from "./icons.js";
 import { store } from "./store.js";
 import { pluginKinds } from "./plugins.js";
 import { openMarketplace } from "./marketplace.js";
+import { holdOverlay } from "./dialogs.js";
 
 let current = null; // {el, anchor, close}
 
@@ -101,6 +102,7 @@ export function openNewTabPicker(anchor, opts) {
     "</div>" +
     '<div class="add-menu-list"></div>';
   document.body.appendChild(el);
+  toTopLayer(el);
   const input = el.querySelector("input");
   const list = el.querySelector(".add-menu-list");
 
@@ -191,7 +193,10 @@ export function openNewTabPicker(anchor, opts) {
     window.removeEventListener("resize", blur);
     anchor.classList.remove("open");
     el.remove();
+    release();
   }
+  // Native views (browser, plugin views) hide while the picker is over them.
+  const release = holdOverlay(el);
   const handle = { el, anchor, close };
   current = handle;
   anchor.classList.add("open");

@@ -21,19 +21,21 @@ export function activate(jagents) {
       const view = el.querySelector(".rb-view");
       const input = el.querySelector(".rb-url");
       const msg = el.querySelector(".rb-msg");
-      let overlay = false;
+      let overlay = Boolean(jagents.store.overlay); // a menu may already be open
+      let failed = false; // the page did not load: its message shows instead of the view
       let dead = false;
       let last = "";
       let title = pane.state.title || "";
 
       const send = () => {
         if (dead) return;
-        const r = view.getBoundingClientRect();
-        const visible = !overlay && pane.visible() && document.visibilityState === "visible";
-        const key = [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height), visible].join(",");
+        // viewRect leaves the divider and sidebar-edge grab zones free.
+        const r = pane.viewRect(view);
+        const visible = !overlay && !failed && pane.visible() && document.visibilityState === "visible";
+        const key = [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height), visible].join(",");
         if (key === last) return;
         last = key;
-        jagents.invoke("bounds", { pane: pane.id, rect: { x: r.left, y: r.top, width: r.width, height: r.height }, visible }).catch(() => {});
+        jagents.invoke("bounds", { pane: pane.id, rect: r, visible }).catch(() => {});
       };
 
       const apply = (s) => {
@@ -46,6 +48,10 @@ export function activate(jagents) {
         el.classList.toggle("rb-loading", Boolean(s.loading));
         msg.hidden = !s.error;
         msg.textContent = s.error ? "Could not load: " + s.error : "";
+        if (failed !== Boolean(s.error)) {
+          failed = Boolean(s.error);
+          send();
+        }
         if (s.url) pane.setState({ url: s.url, title: s.title || "" });
         const next = (s.title || "").slice(0, 60);
         if (next && next !== title) {

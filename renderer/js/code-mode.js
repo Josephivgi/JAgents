@@ -15,7 +15,7 @@ import { icon, harnessIcon } from "./icons.js";
 import { store, fire, on } from "./store.js";
 import { TerminalView, terminalBusy, terminalSizeHint } from "./terminal-view.js";
 import { ChatView } from "./chat-view.js";
-import { openHandoff, dropdown } from "./dialogs.js";
+import { openHandoff, dropdown, holdOverlay } from "./dialogs.js";
 import { PluginPaneView, pluginKindIcon, openPluginsFromPane, openPluginPane } from "./plugins.js";
 import { openNewTabPicker } from "./new-tab-picker.js";
 
@@ -24,6 +24,7 @@ let root = null;
 let groupsEl = null;
 let state = {}; // projectKey -> {dir, focused, groups}
 let dragTab = "";
+let dragRelease = null; // hides native views while a tab is dragged
 let saveTimer = 0;
 
 export const projectKey = (dir) => String(dir || "").replace(/[\\/]+$/, "").replace(/\//g, "\\").toLowerCase();
@@ -408,9 +409,15 @@ function render() {
   const sig = key + "|" + shape(s.tree);
   if (sig !== lastSig) {
     lastSig = sig;
-    // Park every pane, rebuild the groups, then move panes back in.
+    // Park every pane, rebuild the groups, then move panes back in. Moving
+    // an element resets its scroll, so plugin panes note theirs first.
     const park = root.querySelector(".parked");
-    for (const { el } of panes.values()) park.appendChild(el);
+    for (const { el } of panes.values()) {
+      watchScroll(el);
+      noteScroll(el);
+      el._moved = true;
+      park.appendChild(el);
+    }
     groupsEl.innerHTML = s.tree ? nodeHtml(s.tree, "r") : "";
   }
   applySizes(s.tree, "r");
@@ -433,6 +440,7 @@ function render() {
     for (const id of g.tabs) {
       const entry = panes.get(id);
       if (!entry) continue;
+      watchScroll(entry.el);
       if (entry.el.parentNode !== body) body.appendChild(entry.el);
       const on = id === g.active;
       if (entry.el.hidden === on) entry.el.hidden = !on;
@@ -446,9 +454,47 @@ function render() {
   // Panes of other projects wait out of sight.
   const shown = new Set(s.groups.flatMap((g) => g.tabs));
   for (const [id, entry] of panes) if (!shown.has(id) && entry.el.parentNode !== park) park.appendChild(entry.el);
+  for (const { el } of panes.values()) restoreScroll(el);
   paintTabStates();
   fire("app:layout");
   fire("code-tabs");
+}
+
+// Scroll positions in a plugin pane (its body and what scrolls inside it),
+// noted as the user scrolls, since a hidden tab reads 0, and put back once a
+// pane moved by a rebuild of the groups shows again.
+function watchScroll(el) {
+  if (el._scrolls) return;
+  el._scrolls = new Map();
+  el.addEventListener(
+    "scroll",
+    (e) => {
+      const n = e.target;
+      if (n.nodeType === 1 && n.closest(".plugin-pane-body") && n.isConnected && n.getClientRects().length) el._scrolls.set(n, [n.scrollTop, n.scrollLeft]);
+    },
+    { capture: true, passive: true },
+  );
+}
+
+// A pane on screen is read directly too (scroll events come a frame late).
+function noteScroll(el) {
+  if (!el.getClientRects().length) return;
+  for (const body of el.querySelectorAll(".plugin-pane-body")) {
+    for (const n of [body, ...body.querySelectorAll("*")]) if (n.scrollTop || n.scrollLeft || el._scrolls.has(n)) el._scrolls.set(n, [n.scrollTop, n.scrollLeft]);
+  }
+}
+
+function restoreScroll(el) {
+  if (!el._moved || !el._scrolls || !el.getClientRects().length) return;
+  el._moved = false;
+  for (const [n, [top, left]] of el._scrolls) {
+    if (!el.contains(n)) {
+      el._scrolls.delete(n);
+      continue;
+    }
+    if (n.scrollTop !== top) n.scrollTop = top;
+    if (n.scrollLeft !== left) n.scrollLeft = left;
+  }
 }
 
 function groupOf(paneId) {
@@ -736,6 +782,18 @@ function nodeAt(path) {
   return n;
 }
 
+// The smallest a group may get from a divider: one tab at its minimum width
+// plus the + and more buttons, and the window buttons' room for the group in
+// the top-right corner; a strip and some body in height.
+const GROUP_MIN_W = 214;
+const GROUP_MIN_H = 100;
+function minSize(node, col, corner, wco) {
+  if (!node) return 0;
+  if (node.g) return col ? GROUP_MIN_H : GROUP_MIN_W + (node.g === corner ? wco : 0);
+  const sizes = node.kids.map((k) => minSize(k, col, corner, wco));
+  return (node.dir === "column") === col ? sizes.reduce((a, b) => a + b, 0) + node.kids.length - 1 : Math.max(...sizes);
+}
+
 function startResize(e, ref) {
   const [path, idx] = ref.split(":");
   const index = Number(idx);
@@ -751,10 +809,19 @@ function startResize(e, ref) {
   const start = col ? e.clientY : e.clientX;
   const startA = col ? ra.height : ra.width;
   const sum = (node.sizes[index - 1] || 1) + (node.sizes[index] || 1);
+  const corner = topRight(state[activeKey()].tree);
+  const wco = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--wco-w")) || 0;
+  // Each side keeps its minimum. Only when the pair cannot fit both does the
+  // divider stay at their share of the room.
+  const minA = minSize(node.kids[index - 1], col, corner, wco);
+  const minB = minSize(node.kids[index], col, corner, wco);
+  let lo = Math.max(0.1, minA / total);
+  let hi = Math.min(0.9, 1 - minB / total);
+  if (lo > hi) lo = hi = Math.min(0.9, Math.max(0.1, minA + minB > 0 ? minA / (minA + minB) : 0.5));
   document.body.classList.add(col ? "resizing-rows" : "resizing-cols");
   const move = (ev) => {
     const d = (col ? ev.clientY : ev.clientX) - start;
-    const pa = Math.min(0.9, Math.max(0.1, (startA + d) / total));
+    const pa = Math.min(hi, Math.max(lo, (startA + d) / total));
     node.sizes[index - 1] = sum * pa;
     node.sizes[index] = sum * (1 - pa);
     ca.style.flex = node.sizes[index - 1] + " 1 0";
@@ -883,19 +950,38 @@ export function renderCodeMode(el) {
   });
 
   // Tabs drag within a strip, to another group's strip, or onto a group.
+  // The drag ends on the source tab's own dragend: a strip rebuilt during the
+  // drag (a title changed) takes the tab out of the page, and its dragend no
+  // longer reaches the Code mode root.
+  const finishDrag = () => {
+    endDrag();
+    dragTab = "";
+    root.classList.remove("tab-dragging");
+    for (const n of root.querySelectorAll(".dragging, .drop-before, .drop-into")) n.classList.remove("dragging", "drop-before", "drop-into");
+  };
   el.addEventListener("dragstart", (e) => {
     const tab = e.target.closest && e.target.closest("[data-tab]");
     if (!tab) return;
     dragTab = tab.dataset.tab;
+    tab.addEventListener("dragend", finishDrag, { once: true });
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", dragTab);
     tab.classList.add("dragging");
     root.classList.add("tab-dragging");
+    // Native views hide during the drag: drop targets and the drop highlight
+    // are DOM, and drag events over a native view go to its page.
+    if (dragRelease) dragRelease();
+    dragRelease = holdOverlay();
   });
-  el.addEventListener("dragend", () => {
-    dragTab = "";
-    root.classList.remove("tab-dragging");
-    for (const n of root.querySelectorAll(".dragging, .drop-before, .drop-into")) n.classList.remove("dragging", "drop-before", "drop-into");
+  const endDrag = () => {
+    if (dragRelease) dragRelease();
+    dragRelease = null;
+  };
+  el.addEventListener("dragend", finishDrag);
+  // No mouse events come during a drag: one with no button down means the
+  // drag is over, whatever happened to its source.
+  document.addEventListener("mousemove", (e) => {
+    if (dragRelease && !e.buttons) finishDrag();
   });
   el.addEventListener("dragover", (e) => {
     if (!dragTab) return;
@@ -915,6 +1001,9 @@ export function renderCodeMode(el) {
     const tab = e.target.closest("[data-tab]");
     const id = dragTab;
     dragTab = "";
+    // The source tab may be rebuilt by moveTab, so dragend may not come.
+    endDrag();
+    root.classList.remove("tab-dragging");
     moveTab(id, g.dataset.group, tab && tab.dataset.tab !== id ? tab.dataset.tab : "");
   });
 

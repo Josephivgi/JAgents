@@ -52,7 +52,7 @@ exports.activate = (ctx) => {
     const t = tabs.get(id);
     if (!t) return null;
     const wc = t.view.webContents;
-    return { pane: id, url: wc.getURL(), title: wc.getTitle(), loading: wc.isLoading(), canBack: wc.navigationHistory.canGoBack(), canForward: wc.navigationHistory.canGoForward() };
+    return { pane: id, url: wc.getURL(), title: wc.getTitle(), loading: wc.isLoading(), canBack: wc.navigationHistory.canGoBack(), canForward: wc.navigationHistory.canGoForward(), error: t.error || "" };
   }
 
   function push(id) {
@@ -67,7 +67,7 @@ exports.activate = (ctx) => {
     const view = new WebContentsView({ webPreferences: Object.assign({ sandbox: true, contextIsolation: true, nodeIntegration: false }, browserData) });
     view.setBackgroundColor("#ffffff");
     view.setVisible(false);
-    const t = { id, view, visible: false };
+    const t = { id, view, visible: false, error: "" };
     tabs.set(id, t);
     const wc = view.webContents;
     // Pop-ups open in the same pane.
@@ -76,8 +76,20 @@ exports.activate = (ctx) => {
       return { action: "deny" };
     });
     for (const ev of ["did-navigate", "did-navigate-in-page", "page-title-updated", "did-start-loading", "did-stop-loading"]) wc.on(ev, () => push(id));
+    // A failed page keeps its error in every state push until the next
+    // navigation starts, so the pane's message is not cleared by the
+    // did-stop-loading push that follows.
     wc.on("did-fail-load", (_e, code, desc, failedUrl, isMain) => {
-      if (isMain && code !== -3) ctx.send("state", Object.assign(state(id) || {}, { pane: id, error: desc + " (" + failedUrl + ")" }));
+      if (!isMain || code === -3) return;
+      t.error = desc + " (" + failedUrl + ")";
+      push(id);
+    });
+    wc.on("did-start-navigation", (e, url, inPlace, isMain) => {
+      const main = e && typeof e.isMainFrame === "boolean" ? e.isMainFrame : isMain;
+      const same = e && typeof e.isSameDocument === "boolean" ? e.isSameDocument : inPlace;
+      if (!main || same || !t.error) return;
+      t.error = "";
+      push(id);
     });
     wc.on("focus", () => (active = id));
     const win = ctx.window();

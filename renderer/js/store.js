@@ -10,6 +10,7 @@ export const store = {
   chats: [],
   panes: [],
   hubAgents: [],
+  overlay: false, // a menu, dialog, Settings or plugin popup is over the panes (dialogs.js)
 };
 
 const listeners = new Map();

@@ -76,8 +76,12 @@ function show(u) {
     el.className = "update-pop";
     el.setAttribute("role", "status");
     el.addEventListener("click", onClick);
-    document.body.appendChild(el);
   }
+  // In the sidebar above the dock, in the flow: native views never go there
+  // and nothing of the app is covered.
+  const dock = document.querySelector(".sidebar .side-dock");
+  if (dock && el.nextElementSibling !== dock) dock.parentNode.insertBefore(el, dock);
+  else if (!dock && !el.isConnected) document.body.appendChild(el);
   const html = cardHtml(u);
   if (el._html !== html) {
     el._html = html;

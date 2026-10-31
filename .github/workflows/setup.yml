@@ -41,4 +41,10 @@ jobs:
         run: |
           node scripts/pack-setup.cjs $env:TAG
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          gh release upload $env:TAG dist/JAgents-Setup.exe --clobber
+          # SHA-256 next to the setup ("<hash>  JAgents-Setup.exe"), for clients
+          # that do not read the GitHub asset digest. The setup is unsigned for
+          # now, so this hash (and the asset digest) is what gets checked.
+          $hash = (Get-FileHash dist/JAgents-Setup.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText("dist/JAgents-Setup.exe.sha256", "$hash  JAgents-Setup.exe`n")
+          gh release upload $env:TAG dist/JAgents-Setup.exe dist/JAgents-Setup.exe.sha256 --clobber
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }

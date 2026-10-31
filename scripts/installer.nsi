@@ -10,6 +10,13 @@
 ; One archive instead of thousands of files: makensis packed the loose files
 ; on one CPU core for 15+ minutes, and the setup took minutes to write them.
 ; Windows' own tar.exe (Windows 10 1803 and later) unpacks it in seconds.
+;
+; Options:
+;   /S             silent (no window)
+;   /NOLAUNCH      do not start JAgents when setup finishes (the JWorkspace
+;                  Store runs /S /NOLAUNCH)
+;   /TESTDIR=<dir> install into <dir> only: no shortcuts, no uninstall entry,
+;                  no launch
 
 Unicode true
 ; The payload is already gzip-compressed.
@@ -68,6 +75,11 @@ Section "Install"
   IfErrors +3
     StrCpy $INSTDIR $R1
     StrCpy $R2 "1"
+  ClearErrors
+  ${GetOptions} $R0 "/NOLAUNCH" $R4
+  StrCpy $R5 "0"
+  IfErrors +2
+    StrCpy $R5 "1"
 
   ; A running copy holds JAgents.exe open.
   retry:
@@ -128,6 +140,7 @@ Section "Install"
     WriteRegDWORD HKCU "${UNKEY}" "EstimatedSize" ${SIZEKB}
   !endif
 
+  StrCmp $R5 "1" done
   Exec '"$INSTDIR\JAgents.exe"'
   done:
   StrCmp $R3 "" +2

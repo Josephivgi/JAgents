@@ -3,10 +3,10 @@
 // MCP hub, updates, plugins, usage, the guide, and about. The app's existing
 // panels draw on this page (dialogs.embedNextModal) instead of in popups.
 
-import { esc, toast, errorText } from "./util.js";
+import { esc, toast, errorText, toTopLayer, leaveTopLayer } from "./util.js";
 import { icon } from "./icons.js";
 import { store, fire, on } from "./store.js";
-import { embedNextModal, openHubPanel, openUpdatesPanel } from "./dialogs.js";
+import { embedNextModal, openHubPanel, openUpdatesPanel, holdOverlay } from "./dialogs.js";
 import { openPluginsPanel } from "./plugins.js";
 import { openMarketplace } from "./marketplace.js";
 import { openUsagePanel } from "./usage.js";
@@ -29,6 +29,7 @@ const SECTIONS = [
 let page = null;
 let current = "general";
 let dropPreview = null;
+let releaseOverlay = null;
 
 export function settingsOpen() {
   return Boolean(page && !page.hidden);
@@ -36,7 +37,10 @@ export function settingsOpen() {
 
 export function closeSettings() {
   if (!page || page.hidden) return;
+  leaveTopLayer(page);
   page.hidden = true;
+  if (releaseOverlay) releaseOverlay();
+  releaseOverlay = null;
   stopPreview();
   page.querySelector("[data-set-body]").innerHTML = "";
   document.body.classList.remove("settings-on");
@@ -50,7 +54,11 @@ export function openSettings(section) {
   if (!page.dataset.wired) wire();
   if (section) current = section;
   page.hidden = false;
+  // In the top layer, over the main area: no plugin z-index draws over it.
+  if (!page.matches(":popover-open")) toTopLayer(page);
   document.body.classList.add("settings-on");
+  // Settings covers the panes: native views (browser, plugin views) hide.
+  if (!releaseOverlay) releaseOverlay = holdOverlay();
   for (const b of document.querySelectorAll("[data-settings]")) b.classList.add("on");
   show(current);
   fire("app:layout");
@@ -74,7 +82,7 @@ function wire() {
   page.addEventListener("click", onClick);
   page.addEventListener("change", onChange);
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && settingsOpen() && !document.querySelector(".modal-back, .news-menu.dropdown")) closeSettings();
+    if (e.key === "Escape" && !e.defaultPrevented && settingsOpen() && !document.querySelector(".modal-back, .news-menu.dropdown")) closeSettings();
   });
   on("update", paintFlags);
   on("plugins", paintFlags);
