@@ -14,7 +14,8 @@
 
   Beta installer, which also takes pre-releases:
                    irm https://raw.githubusercontent.com/Josephivgi/JAgents/main/install-beta.ps1 | iex
-  It sets $env:JSYSTEMS_BETA='1' and runs this file.
+  It sets $env:JSYSTEMS_BETA='1' and runs this file. It also offers App
+  Launcher, built from the latest commit of its git repo (needs Git and Node.js).
 
   Per user, no admin. Downloads are made with PowerShell, so Windows does
   not mark them as "from the internet" and SmartScreen does not stop them.
@@ -42,7 +43,11 @@ $Apps = @(
   @{ Name = 'JServer';         Repo = 'JServer';         Asset = 'JServer.exe';              Kind = 'exe';   Exe = 'JServer.exe'; About = 'watches the Linux servers in your SSH config' }
   @{ Name = 'JMCP'; Repo = 'JMCP'; Asset = 'JMCP-Setup.exe'; AssetMatch = '^JMCP-Setup-[0-9][0-9A-Za-z.+-]*\.exe$'; Display = '^JMCP( |$)'; Kind = 'setup'; Data = @('%USERPROFILE%\.jmcp', '%APPDATA%\JMCP'); DataSkip = @('servers', 'probe', 'browser'); Exe = 'JMCP.exe'; WriteRatio = 3.2; About = 'gives every AI coding agent the same rules, memory, skills and a browser you can watch' }
   @{ Name = 'JVoice'; Repo = 'JVoice'; Asset = 'JVoice-Setup.exe'; AssetMatch = '^JVoice-Setup-[0-9][0-9A-Za-z.+-]*\.exe$'; Display = '^JVoice( |$)'; Kind = 'setup'; Data = @('%APPDATA%\JVoice'); DataSkip = @('GPUPersistentCache', 'GrShaderCache', 'ShaderCache'); Exe = 'JVoice.exe'; WriteRatio = 3.2; About = 'hold a shortcut, talk, and it types what you said in any app' }
+  @{ Name = 'App Launcher (beta)'; Repo = 'app-launcher'; Kind = 'git'; BetaOnly = $true; Branch = 'master'; Exe = 'electron.exe'; Data = @('%APPDATA%\App Launcher'); About = 'one-click launcher for your apps, websites and commands, built from the latest commit' }
 )
+# Kind 'git' (beta installer only): the branch is cloned into
+# %LOCALAPPDATA%\Programs\JSystems Beta, its exact parts are installed
+# (npm ci), and its own checks run (npm test) before it counts as installed.
 # JMCP's setup has the version in its file name, and its uninstall entry is
 # named "JMCP <version>" (JMCP 0.1.5: 644 MB written from a 206 MB setup).
 # JVoice is the same shape: JVoice-Setup-<version>.exe and "JVoice <version>".
@@ -51,6 +56,7 @@ $Apps = @(
 # (JMCP's servers\ holds copies of its own server code: about 7,500 files that
 # made the backup take minutes).
 $Beta = [bool]$env:JSYSTEMS_BETA
+if (-not $Beta) { $Apps = @($Apps | Where-Object { -not $_.BetaOnly }) }
 # JSYSTEMS_APPS picks apps with no questions; without it the installer asks.
 $Ask = -not $env:JSYSTEMS_APPS
 if (-not $Ask) {
@@ -63,10 +69,53 @@ $NoOpen = [bool]$env:JSYSTEMS_NOOPEN
 # The variables last for the whole PowerShell session; clear them so a later run starts clean.
 Remove-Item Env:JSYSTEMS_APPS, Env:JSYSTEMS_NOPIN, Env:JSYSTEMS_NOTERMINAL, Env:JSYSTEMS_BETA, Env:JSYSTEMS_NOOPEN -ErrorAction SilentlyContinue
 
+# Runs a program and returns its output. Its stderr is kept with the output
+# (Windows PowerShell 5.1 would otherwise stop on it), and a failure shows the
+# last lines it printed.
+function Invoke-Tool($program, [string[]]$arguments, $dir) {
+  $eap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  if ($dir) { Push-Location $dir }
+  try { $out = @(& $program @arguments 2>&1 | ForEach-Object { "$_" }); $code = $LASTEXITCODE }
+  finally { if ($dir) { Pop-Location }; $ErrorActionPreference = $eap }
+  if ($code -ne 0) { throw "$program $($arguments[0]) failed: $(($out | Select-Object -Last 5) -join ' ')" }
+  return $out
+}
+
+# Without a login GitHub allows 60 API requests an hour per connection. When
+# that is used up (403 or 429), ask through the GitHub CLI's login instead.
+function Invoke-GitHubApi($path) {
+  try {
+    return Invoke-RestMethod "https://api.github.com/$path" -Headers @{ 'User-Agent' = 'jsystems-install' }
+  } catch {
+    $code = 0
+    try { $code = [int]$_.Exception.Response.StatusCode } catch {}
+    if ($code -ne 403 -and $code -ne 429) { throw }
+  }
+  $limit = "GitHub's hourly limit for this connection is used up. Try again within an hour"
+  if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw "$limit, or install the GitHub CLI and run 'gh auth login'" }
+  try { $json = Invoke-Tool gh @('api', $path) } catch { throw "$limit, or run 'gh auth login'" }
+  return (($json -join "`n") | ConvertFrom-Json)
+}
+
+function Get-GitDir($app) { Join-Path $Programs "JSystems Beta\$($app.Repo)" }
+
+# A git app's newest commit on its branch (git ls-remote uses no API quota).
+function Get-GitRelease($app) {
+  foreach ($tool in 'git', 'node', 'npm') {
+    if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "it is built from git, so it needs Git and Node.js (https://nodejs.org)" }
+  }
+  $line = Invoke-Tool git @('ls-remote', "https://github.com/$Owner/$($app.Repo).git", "refs/heads/$($app.Branch)") | Select-Object -First 1
+  if (-not $line) { throw "its $($app.Branch) branch was not found" }
+  $sha = ($line -split '\s+')[0]
+  return [pscustomobject]@{ Tag = "$($app.Branch) $($sha.Substring(0, 7))"; Url = $null; Digest = $null; MB = 0; Note = '' }
+}
+
 function Get-Release($app) {
+  if ($app.Kind -eq 'git') { return Get-GitRelease $app }
   # Newest published release that has the file. A brand-new release can be
   # missing it for a few minutes while GitHub Actions builds the setup.
-  $all = Invoke-RestMethod "https://api.github.com/repos/$Owner/$($app.Repo)/releases?per_page=10" -Headers @{ 'User-Agent' = 'jsystems-install' }
+  $all = Invoke-GitHubApi "repos/$Owner/$($app.Repo)/releases?per_page=10"
   # The beta installer also takes pre-releases.
   $all = @($all | Where-Object { -not $_.draft -and ($Beta -or -not $_.prerelease) })
   foreach ($rel in $all) {
@@ -174,6 +223,11 @@ function New-Shortcut($lnk, $target) {
 
 # The installed version, or '' when the app is not installed.
 function Get-InstalledVersion($app) {
+  if ($app.Kind -eq 'git') {
+    $dir = Get-GitDir $app
+    if (-not (Test-Path (Join-Path $dir '.git'))) { return '' }
+    try { return "$($app.Branch) $((Invoke-Tool git @('-C', $dir, 'rev-parse', '--short', 'HEAD')) | Select-Object -First 1)" } catch { return 'yes' }
+  }
   if ($app.Kind -eq 'setup') {
     $entry = Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall -ErrorAction SilentlyContinue |
       Get-ItemProperty -ErrorAction SilentlyContinue |
@@ -189,6 +243,11 @@ function Get-InstalledVersion($app) {
 # Where an installed app's exe is: the setup's install folder (or the exe its
 # uninstall entry shows as its icon), or the folder a portable exe is copied to.
 function Get-AppExe($app) {
+  if ($app.Kind -eq 'git') {
+    $exe = Join-Path (Get-GitDir $app) "node_modules\electron\dist\$($app.Exe)"
+    if (Test-Path $exe) { return $exe }
+    return $null
+  }
   if ($app.Kind -eq 'setup') {
     $entry = Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall -ErrorAction SilentlyContinue |
       Get-ItemProperty -ErrorAction SilentlyContinue |
@@ -216,7 +275,8 @@ function Select-Apps($apps) {
     catch { Write-Host "  $($app.Name): not available right now ($($_.Exception.Message))" -ForegroundColor Yellow; continue }
     $have = Get-InstalledVersion $app
     $status = if (-not $have) { 'not installed' } elseif ($have -eq 'yes') { 'installed' } elseif ($have.TrimStart('v') -eq $app.Release.Tag.TrimStart('v')) { 'installed, up to date' } else { "installed: $have" }
-    Write-Host "  $($app.Name) $($app.Release.Tag), $($app.Release.MB) MB" -ForegroundColor Cyan -NoNewline
+    $size = if ($app.Kind -eq 'git') { 'from git' } else { "$($app.Release.MB) MB" }
+    Write-Host "  $($app.Name) $($app.Release.Tag), $size" -ForegroundColor Cyan -NoNewline
     Write-Host " ($status)"
     Write-Host "    $($app.About)"
     if ($app.Release.Note) { Write-Host "    $($app.Release.Note)" -ForegroundColor Yellow }
@@ -273,7 +333,65 @@ function Restore-MissingData($saved) {
   else { Write-Host '    data checked: nothing was lost' }
 }
 
+# A git app: clone or fast-forward its branch, install its exact parts, run its
+# own checks, and add a Start Menu shortcut. A clone with local changes is
+# never touched. Its data is backed up first, like a setup app's.
+function Install-GitApp($app, $number, $count) {
+  $release = if ($app.Release) { $app.Release } else { Get-Release $app }
+  Write-Host "[$number/$count] $($app.Name) $($release.Tag) (from git)" -ForegroundColor Cyan
+  $clock = [Diagnostics.Stopwatch]::StartNew()
+  $dir = Get-GitDir $app
+  $exe = Join-Path $dir "node_modules\electron\dist\$($app.Exe)"
+  try {
+    $cloned = Test-Path (Join-Path $dir '.git')
+    if ($cloned) {
+      if (@(Invoke-Tool git @('-C', $dir, 'status', '--porcelain')).Count) { throw "$dir has local changes, so it was left as it was" }
+    } elseif (Test-Path $dir) { throw "$dir is not a git folder, so it was left as it was" }
+    $running = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($dir + '\', [StringComparison]::OrdinalIgnoreCase) })
+    if ($running) {
+      Write-Host "    closing $($app.Name)..."
+      $running | Where-Object { $_.MainWindowHandle -ne 0 } | ForEach-Object { [void]$_.CloseMainWindow() }
+      $until = (Get-Date).AddSeconds(5)
+      while ((Get-Date) -lt $until -and @($running | Where-Object { -not $_.HasExited }).Count) { Start-Sleep -Milliseconds 250 }
+      $running | Where-Object { -not $_.HasExited } | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
+    }
+    $saved = @(Backup-AppData $app)
+    if ($cloned) {
+      Write-Host '    updating from git...'
+      [void](Invoke-Tool git @('-C', $dir, 'fetch', '--quiet', 'origin', $app.Branch))
+      [void](Invoke-Tool git @('-C', $dir, 'checkout', '--quiet', $app.Branch))
+      [void](Invoke-Tool git @('-C', $dir, 'merge', '--quiet', '--ff-only', "origin/$($app.Branch)"))
+    } else {
+      Write-Host '    downloading from git...'
+      New-Item -ItemType Directory (Split-Path $dir) -Force | Out-Null
+      [void](Invoke-Tool git @('clone', '--quiet', '--branch', $app.Branch, "https://github.com/$Owner/$($app.Repo).git", $dir))
+    }
+    Write-Host '    installing its parts (npm ci)...'
+    [void](Invoke-Tool npm @('ci', '--no-audit', '--no-fund') $dir)
+    # Electron 44 has no postinstall script, so npm ci does not fetch its binary.
+    if (-not (Test-Path $exe)) { [void](Invoke-Tool node @('node_modules/electron/install.js') $dir) }
+    if (-not (Test-Path $exe)) { throw "Electron did not install in $dir" }
+    Write-Host '    running its checks (npm test)...'
+    [void](Invoke-Tool npm @('test') $dir)
+    $ws = New-Object -ComObject WScript.Shell
+    $sc = $ws.CreateShortcut((Join-Path $StartMenu "$($app.Name).lnk"))
+    $sc.TargetPath = $exe
+    $sc.Arguments = '.'
+    $sc.WorkingDirectory = $dir
+    $sc.IconLocation = Join-Path $dir 'build\icon.ico'
+    $sc.Save()
+    if ($saved) { Restore-MissingData $saved }
+    $commit = (Invoke-Tool git @('-C', $dir, 'rev-parse', '--short', 'HEAD')) | Select-Object -First 1
+    Write-Host "    installed commit $commit in $([int]$clock.Elapsed.TotalSeconds)s (100%)" -ForegroundColor Green
+    return $true
+  } catch {
+    Write-Host "    failed: $($_.Exception.Message)" -ForegroundColor Red
+    return $false
+  }
+}
+
 function Install-App($app, $number, $count) {
+  if ($app.Kind -eq 'git') { return (Install-GitApp $app $number $count) }
   $release = if ($app.Release) { $app.Release } else { Get-Release $app }
   Write-Host "[$number/$count] $($app.Name) $($release.Tag) ($($release.MB) MB)" -ForegroundColor Cyan
   if ($release.Note) { Write-Host "    ($($release.Note))" }
@@ -516,7 +634,11 @@ if ($done -and -not $NoOpen) {
     # A background recorder (--collector) runs the same exe with no window.
     $open = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -eq $exe -and $_.CommandLine -notmatch '--collector' })
     if ($open) { Write-Host "  $name is already open"; continue }
-    try { Start-Process $exe -WorkingDirectory (Split-Path $exe); Write-Host "  opened $name" }
+    try {
+      if ($app.Kind -eq 'git') { Start-Process $exe -ArgumentList '.' -WorkingDirectory (Get-GitDir $app) }
+      else { Start-Process $exe -WorkingDirectory (Split-Path $exe) }
+      Write-Host "  opened $name"
+    }
     catch { Write-Host "  $name`: could not open it ($($_.Exception.Message))" -ForegroundColor Yellow }
   }
 }
