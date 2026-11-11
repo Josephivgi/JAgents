@@ -14,8 +14,7 @@
 
   Beta installer, which also takes pre-releases:
                    irm https://raw.githubusercontent.com/Josephivgi/JAgents/main/install-beta.ps1 | iex
-  It sets $env:JSYSTEMS_BETA='1' and runs this file. It also offers App
-  Launcher, built from the latest commit of its git repo (needs Git and Node.js).
+  It sets $env:JSYSTEMS_BETA='1' and runs this file.
 
   Per user, no admin. Downloads are made with PowerShell, so Windows does
   not mark them as "from the internet" and SmartScreen does not stop them.
@@ -43,8 +42,10 @@ $Apps = @(
   @{ Name = 'JServer';         Repo = 'JServer';         Asset = 'JServer.exe';              Kind = 'exe';   Exe = 'JServer.exe'; About = 'watches the Linux servers in your SSH config' }
   @{ Name = 'JMCP'; Repo = 'JMCP'; Asset = 'JMCP-Setup.exe'; AssetMatch = '^JMCP-Setup-[0-9][0-9A-Za-z.+-]*\.exe$'; Display = '^JMCP( |$)'; Kind = 'setup'; Data = @('%USERPROFILE%\.jmcp', '%APPDATA%\JMCP'); DataSkip = @('servers', 'probe', 'browser'); Exe = 'JMCP.exe'; WriteRatio = 3.2; About = 'gives every AI coding agent the same rules, memory, skills and a browser you can watch' }
   @{ Name = 'JVoice'; Repo = 'JVoice'; Asset = 'JVoice-Setup.exe'; AssetMatch = '^JVoice-Setup-[0-9][0-9A-Za-z.+-]*\.exe$'; Display = '^JVoice( |$)'; Kind = 'setup'; Data = @('%APPDATA%\JVoice'); DataSkip = @('GPUPersistentCache', 'GrShaderCache', 'ShaderCache'); Exe = 'JVoice.exe'; WriteRatio = 3.2; About = 'hold a shortcut, talk, and it types what you said in any app' }
-  @{ Name = 'App Launcher (beta)'; Repo = 'app-launcher'; Kind = 'git'; BetaOnly = $true; Branch = 'master'; Exe = 'electron.exe'; Data = @('%APPDATA%\App Launcher'); About = 'one-click launcher for your apps, websites and commands, built from the latest commit' }
+  @{ Name = 'App Launcher'; Repo = 'app-launcher'; Asset = 'App-Launcher-Setup.exe'; AssetMatch = '^App-Launcher-Setup-[0-9][0-9A-Za-z.+-]*\.exe$'; Display = '^App Launcher( |$)'; Kind = 'setup'; Data = @('%APPDATA%\App Launcher'); DataSkip = @('Cache', 'Code Cache', 'GPUCache', 'GPUPersistentCache', 'GrShaderCache', 'ShaderCache', 'DawnGraphiteCache', 'DawnWebGPUCache', 'updates'); Exe = 'App Launcher.exe'; WriteRatio = 3.2; About = 'one-click launcher for your apps, websites and commands' }
 )
+# App Launcher is the same shape as JVoice: App-Launcher-Setup-<version>.exe
+# and "App Launcher <version>". Its updates\ folder only holds downloaded setups.
 # Kind 'git' (beta installer only): the branch is cloned into
 # %LOCALAPPDATA%\Programs\JSystems Beta, its exact parts are installed
 # (npm ci), and its own checks run (npm test) before it counts as installed.
