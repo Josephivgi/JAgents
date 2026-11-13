@@ -11,6 +11,7 @@
     Skip pinning:  $env:JSYSTEMS_NOPIN='1'
     Skip the JAgents terminal app:  $env:JSYSTEMS_NOTERMINAL='1'
     Leave the apps closed:  $env:JSYSTEMS_NOOPEN='1'
+    From cmd.exe:  powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Josephivgi/JAgents/main/install.ps1 | iex"
 
   Beta installer, which also takes pre-releases:
                    irm https://raw.githubusercontent.com/Josephivgi/JAgents/main/install-beta.ps1 | iex
@@ -43,12 +44,13 @@ $Apps = @(
   @{ Name = 'JMCP'; Repo = 'JMCP'; Asset = 'JMCP-Setup.exe'; AssetMatch = '^JMCP-Setup-[0-9][0-9A-Za-z.+-]*\.exe$'; Display = '^JMCP( |$)'; Kind = 'setup'; Data = @('%USERPROFILE%\.jmcp', '%APPDATA%\JMCP'); DataSkip = @('servers', 'probe', 'browser'); Exe = 'JMCP.exe'; WriteRatio = 3.2; About = 'gives every AI coding agent the same rules, memory, skills and a browser you can watch' }
   @{ Name = 'JVoice'; Repo = 'JVoice'; Asset = 'JVoice-Setup.exe'; AssetMatch = '^JVoice-Setup-[0-9][0-9A-Za-z.+-]*\.exe$'; Display = '^JVoice( |$)'; Kind = 'setup'; Data = @('%APPDATA%\JVoice'); DataSkip = @('GPUPersistentCache', 'GrShaderCache', 'ShaderCache'); Exe = 'JVoice.exe'; WriteRatio = 3.2; About = 'hold a shortcut, talk, and it types what you said in any app' }
   @{ Name = 'App Launcher'; Repo = 'app-launcher'; Asset = 'App-Launcher-Setup.exe'; AssetMatch = '^App-Launcher-Setup-[0-9][0-9A-Za-z.+-]*\.exe$'; Display = '^App Launcher( |$)'; Kind = 'setup'; Data = @('%APPDATA%\App Launcher'); DataSkip = @('Cache', 'Code Cache', 'GPUCache', 'GPUPersistentCache', 'GrShaderCache', 'ShaderCache', 'DawnGraphiteCache', 'DawnWebGPUCache', 'updates'); Exe = 'App Launcher.exe'; WriteRatio = 3.2; About = 'one-click launcher for your apps, websites and commands' }
-  @{ Name = 'JTokens'; Repo = 'jtokens'; Asset = 'JTokens.exe'; Kind = 'exe'; Exe = 'JTokens.exe'; BetaOnly = $true; About = 'shows how many tokens Claude Code and Codex used and what that would cost on the API' }
+  @{ Name = 'JTokens'; Repo = 'jtokens'; Asset = 'JTokens.exe'; Kind = 'exe'; Exe = 'JTokens.exe'; About = 'shows how many tokens Claude Code and Codex used and what that would cost on the API' }
 )
 # App Launcher is the same shape as JVoice: App-Launcher-Setup-<version>.exe
 # and "App Launcher <version>". Its updates\ folder only holds downloaded setups.
-# JTokens (beta installer only): a single portable exe from Josephivgi/jtokens.
-# Its settings live in %LOCALAPPDATA%\JTokens, which replacing the exe never touches.
+# JTokens: a single portable exe from Josephivgi/jtokens. It updates itself
+# from the same releases. Its settings live in %LOCALAPPDATA%\JTokens, which
+# replacing the exe never touches.
 # Kind 'git' (beta installer only): the branch is cloned into
 # %LOCALAPPDATA%\Programs\JSystems Beta, its exact parts are installed
 # (npm ci), and its own checks run (npm test) before it counts as installed.
