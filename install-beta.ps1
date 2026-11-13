@@ -5,6 +5,9 @@
     Ask:           irm https://raw.githubusercontent.com/Josephivgi/JAgents/main/install-beta.ps1 | iex
     No questions:  $env:JSYSTEMS_APPS='all'; irm <same url> | iex
     Some apps:     $env:JSYSTEMS_APPS='JMCP'; irm <same url> | iex
+    From cmd.exe:  powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Josephivgi/JAgents/main/install-beta.ps1 | iex"
+
+  Beta-only apps: JTokens.
 
   It runs install.ps1 from the same place, so both commands install the
   same way. install.ps1 clears JSYSTEMS_BETA when it starts.
