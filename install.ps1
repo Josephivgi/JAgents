@@ -39,14 +39,17 @@ $StartMenu = [Environment]::GetFolderPath('Programs')
 $Apps = @(
   @{ Name = 'Simple Recorder'; Repo = 'simple-recorder'; Asset = 'SimpleRecorder-Setup.exe'; Kind = 'setup'; Exe = 'Simple Recorder.exe'; WriteRatio = 11.9; Data = @('%APPDATA%\Simple Recorder'); About = 'records your screen, a window or an area to MP4' }
   @{ Name = 'JAgents';         Repo = 'JAgents';         Asset = 'JAgents-Setup.exe';        Kind = 'setup'; Exe = 'JAgents.exe'; WriteRatio = 3.5; Data = @('%APPDATA%\JAgents'); About = 'runs coding agents like Claude Code and Codex side by side' }
-  @{ Name = 'JPerformance';    Repo = 'JPerformance';    Asset = 'JPerformance.exe';         Kind = 'exe';   Exe = 'JPerformance.exe'; About = 'tracks CPU, memory, disk and network use over 30 days' }
-  @{ Name = 'JServer';         Repo = 'JServer';         Asset = 'JServer.exe';              Kind = 'exe';   Exe = 'JServer.exe'; About = 'watches the Linux servers in your SSH config' }
+  @{ Name = 'JPerformance';    Repo = 'JPerformance';    Asset = 'JPerformance.exe';         Kind = 'exe';   Exe = 'JPerformance.exe'; Legacy = $true; About = 'tracks CPU, memory, disk and network use over 30 days' }
+  @{ Name = 'JServer';         Repo = 'JServer';         Asset = 'JServer.exe';              Kind = 'exe';   Exe = 'JServer.exe'; Legacy = $true; About = 'watches the Linux servers in your SSH config' }
   @{ Name = 'JMCP'; Repo = 'JMCP'; Asset = 'JMCP-Setup.exe'; AssetMatch = '^JMCP-Setup-[0-9][0-9A-Za-z.+-]*\.exe$'; Display = '^JMCP( |$)'; Kind = 'setup'; Data = @('%USERPROFILE%\.jmcp', '%APPDATA%\JMCP'); DataSkip = @('servers', 'probe', 'browser'); Exe = 'JMCP.exe'; WriteRatio = 3.2; About = 'gives every AI coding agent the same rules, memory, skills and a browser you can watch' }
   @{ Name = 'JVoice'; Repo = 'JVoice'; Asset = 'JVoice-Setup.exe'; AssetMatch = '^JVoice-Setup-[0-9][0-9A-Za-z.+-]*\.exe$'; Display = '^JVoice( |$)'; Kind = 'setup'; Data = @('%APPDATA%\JVoice'); DataSkip = @('GPUPersistentCache', 'GrShaderCache', 'ShaderCache'); Exe = 'JVoice.exe'; WriteRatio = 3.2; About = 'hold a shortcut, talk, and it types what you said in any app' }
   @{ Name = 'App Launcher'; Repo = 'app-launcher'; Asset = 'App-Launcher-Setup.exe'; AssetMatch = '^App-Launcher-Setup-[0-9][0-9A-Za-z.+-]*\.exe$'; Display = '^App Launcher( |$)'; Kind = 'setup'; Data = @('%APPDATA%\App Launcher'); DataSkip = @('Cache', 'Code Cache', 'GPUCache', 'GPUPersistentCache', 'GrShaderCache', 'ShaderCache', 'DawnGraphiteCache', 'DawnWebGPUCache', 'updates'); Exe = 'App Launcher.exe'; WriteRatio = 3.2; About = 'one-click launcher for your apps, websites and commands' }
   @{ Name = 'JTokens'; Repo = 'jtokens'; Asset = 'JTokens.exe'; Kind = 'exe'; Exe = 'JTokens.exe'; About = 'shows how many tokens Claude Code and Codex used and what that would cost on the API' }
   @{ Name = 'JPerformance Unified'; Repo = 'JPerformance-Unified'; Asset = 'JPerformanceUnified.exe'; Kind = 'exe'; Exe = 'JPerformanceUnified.exe'; BetaOnly = $true; About = 'records CPU, memory, disk and network for this PC and your servers, and explains what slowed things down' }
 )
+# Legacy: not in the main list. The installer asks one more question, "Pick
+# legacy apps?", and only then offers them. 'all' skips them; naming one in
+# JSYSTEMS_APPS still installs it.
 # JPerformance Unified: a single portable exe from Josephivgi/JPerformance-Unified,
 # beta installer only for now. Its settings and history live in %APPDATA%\JPerformance Unified,
 # which replacing the exe never touches.
@@ -72,6 +75,7 @@ $Ask = -not $env:JSYSTEMS_APPS
 if (-not $Ask) {
   $want = $env:JSYSTEMS_APPS -split ',' | ForEach-Object { $_.Trim() }
   if ($want -notcontains 'all') { $Apps = @($Apps | Where-Object { $want -contains $_.Name -or $want -contains $_.Repo }) }
+  else { $Apps = @($Apps | Where-Object { -not $_.Legacy }) }
 }
 $NoPin = [bool]$env:JSYSTEMS_NOPIN
 $NoTerminal = [bool]$env:JSYSTEMS_NOTERMINAL
@@ -276,8 +280,8 @@ function Get-AppExe($app) {
 
 # One yes/no question per app. Enter means yes, except for an app that is
 # already up to date: it can be reinstalled, and Enter means no.
-function Select-Apps($apps) {
-  Write-Host 'JSystems apps. Answer y or n for each one.'
+function Select-Apps($apps, $title = 'JSystems apps. Answer y or n for each one.') {
+  Write-Host $title
   Write-Host ''
   $picked = @()
   foreach ($app in $apps) {
@@ -591,7 +595,17 @@ if ($Beta) { Write-Host 'JSystems beta installer: also offers pre-releases.' -Fo
 if ($Ask) {
   # Read-Host fails where nobody can answer (a hidden or -NonInteractive
   # PowerShell); install this repo's own app there, as before.
-  try { $Apps = @(Select-Apps $Apps) }
+  try {
+    $legacy = @($Apps | Where-Object { $_.Legacy })
+    $Apps = @(Select-Apps @($Apps | Where-Object { -not $_.Legacy }))
+    if ($legacy) {
+      $answer = ''
+      do {
+        $answer = (Read-Host "Pick legacy apps ($((($legacy | ForEach-Object Name) -join ', ')))? [y/N]").Trim().ToLower()
+      } until ($answer -in '', 'y', 'yes', 'n', 'no')
+      if ($answer -in 'y', 'yes') { $Apps += @(Select-Apps $legacy 'Legacy apps. Answer y or n for each one.') }
+    }
+  }
   catch {
     Write-Host "No one to answer the questions, so installing $ThisApp only. Set JSYSTEMS_APPS to choose." -ForegroundColor Yellow
     $Apps = @($Apps | Where-Object Name -eq $ThisApp)
