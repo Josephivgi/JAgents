@@ -45,7 +45,11 @@ $Apps = @(
   @{ Name = 'JVoice'; Repo = 'JVoice'; Asset = 'JVoice-Setup.exe'; AssetMatch = '^JVoice-Setup-[0-9][0-9A-Za-z.+-]*\.exe$'; Display = '^JVoice( |$)'; Kind = 'setup'; Data = @('%APPDATA%\JVoice'); DataSkip = @('GPUPersistentCache', 'GrShaderCache', 'ShaderCache'); Exe = 'JVoice.exe'; WriteRatio = 3.2; About = 'hold a shortcut, talk, and it types what you said in any app' }
   @{ Name = 'App Launcher'; Repo = 'app-launcher'; Asset = 'App-Launcher-Setup.exe'; AssetMatch = '^App-Launcher-Setup-[0-9][0-9A-Za-z.+-]*\.exe$'; Display = '^App Launcher( |$)'; Kind = 'setup'; Data = @('%APPDATA%\App Launcher'); DataSkip = @('Cache', 'Code Cache', 'GPUCache', 'GPUPersistentCache', 'GrShaderCache', 'ShaderCache', 'DawnGraphiteCache', 'DawnWebGPUCache', 'updates'); Exe = 'App Launcher.exe'; WriteRatio = 3.2; About = 'one-click launcher for your apps, websites and commands' }
   @{ Name = 'JTokens'; Repo = 'jtokens'; Asset = 'JTokens.exe'; Kind = 'exe'; Exe = 'JTokens.exe'; About = 'shows how many tokens Claude Code and Codex used and what that would cost on the API' }
+  @{ Name = 'JPerformance Unified'; Repo = 'JPerformance-Unified'; Asset = 'JPerformanceUnified.exe'; Kind = 'exe'; Exe = 'JPerformanceUnified.exe'; BetaOnly = $true; About = 'records CPU, memory, disk and network for this PC and your servers, and explains what slowed things down' }
 )
+# JPerformance Unified: a single portable exe from Josephivgi/JPerformance-Unified,
+# beta installer only for now. Its settings and history live in %APPDATA%\JPerformance Unified,
+# which replacing the exe never touches.
 # App Launcher is the same shape as JVoice: App-Launcher-Setup-<version>.exe
 # and "App Launcher <version>". Its updates\ folder only holds downloaded setups.
 # JTokens: a single portable exe from Josephivgi/jtokens. It updates itself
