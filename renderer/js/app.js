@@ -162,10 +162,10 @@ function watchModes() {
     tabs[n].scrollIntoView({ block: "nearest", inline: "nearest" });
   });
   on("page-tabs", queueFit);
-  // A plugin page that was turned off or removed leaves no tab: go back to Code
-  // instead of an empty window.
+  // A plugin page that was turned off or removed leaves no tab: go back to
+  // Threads instead of an empty window.
   on("plugins", () => {
-    if (!BUILTIN_MODES.includes(mode) && !modeTab(mode)) setMode("code");
+    if (!BUILTIN_MODES.includes(mode) && !modeTab(mode)) setMode("threads");
     revealProject();
   });
   queueFit();
@@ -581,14 +581,16 @@ async function boot() {
   store.projects = store.info.projects || [];
   setTheme(store.info.theme);
   await Promise.all([refreshAgents(), refreshChats()]);
-  mode = ["threads", "help"].includes(store.info.mode) ? store.info.mode : "code";
+  // 0.8: the window always opens on Threads. Code (terminals and panes) is one
+  // click away in the mode tabs.
+  mode = "threads";
   if (store.info.sidebarWidth) sidebarWidth(store.info.sidebarWidth);
   app.innerHTML =
     '<div class="body">' +
     '<aside class="sidebar">' +
     '<div class="side-top"><div class="seg mode-seg" role="tablist" aria-label="Mode">' +
-    '<button role="tab" data-mode="code">' + icon("grid", 14) + "Code</button>" +
-    '<button role="tab" data-mode="threads">' + icon("chat", 14) + "Threads</button></div></div>" +
+    '<button role="tab" data-mode="threads">' + icon("chat", 14) + "Threads</button>" +
+    '<button role="tab" data-mode="code">' + icon("grid", 14) + "Code</button></div></div>" +
     '<div data-code-side class="side-pane">' +
     '<div class="side-head"><p class="nav-label">Projects</p><button type="button" class="icon-btn side-add" data-project-add title="Add a project folder" aria-label="Add a project folder">' + icon("plus", 15) + "</button></div>" +
     '<div class="project-list" data-projects role="list"></div>' +
